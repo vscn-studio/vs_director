@@ -142,7 +142,8 @@ internal static partial class DirectorImGuiProbe
             io.NativePtr->IniFilename = null;
             io.ConfigFlags &= ~ImGuiConfigFlags.ViewportsEnable;
             CheckDynamicReplayPanels(assembly, api, system);
-            CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); });
+            CheckExportWorkspaceRecovery(assembly, api);
+            CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckReplayKeyframeWindow(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); });
             bool emptyTimeline = false;
             var panelBounds = new Dictionary<string, (Vector2 Position, Vector2 Size)>();
             Action<string, Vector2, Vector2> boundsChanged = (id, position, size) =>

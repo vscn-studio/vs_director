@@ -9,12 +9,14 @@ internal sealed partial class DirectorWorkspaceHud
     private DirectorImGuiWindow? keyframeRmlWindow;
     private readonly Dictionary<string, string> keyframeRmlValues = new();
     private float keyframeAnchorX, keyframeAnchorY;
+    private bool keyframeAnchorPending;
 
     private void CaptureKeyframeAnchor()
     {
         float scale = (float)Math.Max(.001, GuiElement.scaled(1));
         keyframeAnchorX = capi.Input.MouseX / scale;
         keyframeAnchorY = capi.Input.MouseY / scale;
+        keyframeAnchorPending = true;
     }
 
     private void DisposeKeyframeRml()
@@ -31,6 +33,7 @@ internal sealed partial class DirectorWorkspaceHud
     private void ComposeKeyframeRml(bool replay)
     {
         floatingEditorDialog.RemoveComposer();
+        bool opening = keyframeRmlWindow?.IsOpened != true;
         if (keyframeRmlWindow is null)
         {
             var window = new DirectorImGuiWindow(capi, "keyframe");
@@ -47,7 +50,14 @@ internal sealed partial class DirectorWorkspaceHud
         }
         bool entityPopup = replay && replayFloatingEditorKind == ReplayFloatingEditorKind.EntityPopup;
         bool addMenu = replay ? replayFloatingEditorKind == ReplayFloatingEditorKind.AddElement : pathFloatingEditorKind == PathFloatingEditorKind.AddElement;
-        var form = new DirectorImGuiForm { AutoHeight = true, ClassName = entityPopup || addMenu ? "keyframe-popover entity-popover" : "keyframe-popover" };
+        var form = new DirectorImGuiForm
+        {
+            // A scrolling property body needs a stable height. Auto-fitting a
+            // child that fills the available space feeds its size back into itself.
+            AutoHeight = entityPopup || addMenu,
+            MinimumWidth = entityPopup || addMenu ? 220 : 360,
+            ClassName = entityPopup || addMenu ? "keyframe-popover entity-popover" : "keyframe-popover"
+        };
         if (replay)
         {
             if (entityPopup) RmlReplayEntityPopup(form);
@@ -64,8 +74,12 @@ internal sealed partial class DirectorWorkspaceHud
             else RmlPathElementKeyframe(form);
         }
         keyframeRmlWindow.Render(replay ? ReplayFloatingEditorTitle() : PathFloatingEditorTitle(), form,
-            entityPopup ? 400 : addMenu ? 280 : 360, entityPopup ? 460 : addMenu ? (replay ? 430 : 330) : Math.Clamp(116 + form.FieldCount * 56, 210, 760));
-        keyframeRmlWindow.SetAnchor(keyframeAnchorX, keyframeAnchorY);
+            entityPopup ? 400 : addMenu ? 280 : 440, entityPopup ? 460 : addMenu ? (replay ? 430 : 330) : Math.Clamp(180 + form.FieldCount * 56, 300, 680));
+        if (opening || keyframeAnchorPending)
+        {
+            keyframeRmlWindow.SetAnchor(keyframeAnchorX, keyframeAnchorY);
+            keyframeAnchorPending = false;
+        }
         keyframeRmlWindow.Open();
     }
 

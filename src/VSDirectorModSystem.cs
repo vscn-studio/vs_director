@@ -955,7 +955,7 @@ public sealed class VSDirectorModSystem : ModSystem
 
     private void RestoreWorkspaceAfterReplayExport()
     {
-        if (IsReplayExporting || replayExportWorkspace is not { } previous) return;
+        if (DirectorOffscreenRenderRuntime.IsRendering || IsReplayExporting || replayExportWorkspace is not { } previous) return;
         replayExportWorkspace = null;
         if (ReferenceEquals(previous, workspace) && !IsShuttingDown && IsWorldReady && HasWorkspacePermission && !previous.IsOpened())
             previous.ToggleOpen();
@@ -1401,7 +1401,7 @@ public sealed class VSDirectorModSystem : ModSystem
         replay.PlaybackStateChanged += OnReplayPlaybackStateChanged;
         replay.RecordingSaveCompleted += OnReplayRecordingSaveCompleted;
         DirectorReplayRuntime.Manager = replay;
-        DirectorReplayRuntime.UpdateCameraForRenderFrame = UpdateReplayViewportTimeline;
+        DirectorReplayRuntime.UpdateCameraForRenderFrame = PrepareReplayWorkspaceForRenderFrame;
         liveWorkflowRunner = new DirectorLiveWorkflowRunner(ApplyTimedRecordingTrack);
         DirectorLiveWorkflowRuntime.Runner = liveWorkflowRunner;
         permissionClient = new DirectorPermissionClient(api, OnPermissionSnapshot);
@@ -14376,6 +14376,15 @@ public sealed class VSDirectorModSystem : ModSystem
             showMessage: false,
             out _,
             terminalMessage);
+    }
+
+    private void PrepareReplayWorkspaceForRenderFrame()
+    {
+        // Export completion can happen in a render callback or an asynchronous
+        // finalizer while game ticks are paused. Recover before the next main
+        // camera/UI frame, never while an offscreen export pass is rendering.
+        RestoreWorkspaceAfterReplayExport();
+        UpdateReplayViewportTimeline();
     }
 
     private void UpdateReplayViewportTimeline()

@@ -150,6 +150,14 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
         float preferredHeight = nextSize is { } current ? current.Y / scale : 640;
         var bounds = AnchoredBounds(x, y, preferredWidth, preferredHeight,
             api.Render.FrameWidth / scale, api.Render.FrameHeight / scale);
+        if (form?.AutoHeight != true)
+        {
+            // Property editors can overlap their anchor. Keep their full height
+            // instead of squeezing a long form into half of the screen.
+            float screenHeight = api.Render.FrameHeight / scale;
+            float height = Math.Max(1, Math.Min(preferredHeight, screenHeight - 44));
+            bounds = (bounds.X, Math.Clamp(bounds.Y, 36, Math.Max(36, screenHeight - height - 8)), bounds.Width, height);
+        }
         bool above = bounds.Y < y;
         positionPivot = form?.AutoHeight == true && above ? new Vector2(0, 1) : Vector2.Zero;
         nextPosition = new Vector2(bounds.X * scale, (bounds.Y + bounds.Height * positionPivot.Y) * scale);
@@ -190,12 +198,13 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
         applyBounds = false;
         if (form?.AutoHeight == true) DirectorImGuiLayout.AutoHeight(
             Math.Max(1, Math.Min(640, anchoredMaximumHeight ?? 640)), (nextSize?.X ?? 360) / DirectorImGuiTheme.Scale);
-        else DirectorImGuiLayout.WindowConstraints(new Vector2(220, form?.MinimumHeight ?? 120));
+        else DirectorImGuiLayout.WindowConstraints(new Vector2(form?.MinimumWidth ?? 220, form?.MinimumHeight ?? 120));
 
         bool opened = Opened;
         string displayTitle = string.IsNullOrWhiteSpace(title) ? "VS Director" : title;
         bool visible = ImGui.Begin($"{displayTitle}###vsdirector-{id}", ref opened,
             Flags | (form?.AutoHeight == true ? ImGuiWindowFlags.AlwaysAutoResize : ImGuiWindowFlags.None)
+                | ImGuiWindowFlags.NoCollapse
                 | (form?.HasFooter == true ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None));
         try
         {
@@ -390,6 +399,7 @@ internal sealed class DirectorImGuiForm
     private Func<bool> controlVisibility = static () => true;
     internal bool Docked { get; set; }
     internal bool AutoHeight { get; set; }
+    internal float MinimumWidth { get; set; } = 220;
     internal bool MenuBar { get; set; }
     internal string? Stylesheet { get; set; }
     internal string ClassName { get; set; } = string.Empty;
