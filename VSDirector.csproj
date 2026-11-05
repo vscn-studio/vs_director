@@ -1,0 +1,126 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>VSDirector</AssemblyName>
+    <RootNamespace>VSDirector</RootNamespace>
+    <Version>1.0.4</Version>
+    <Authors>HansJack (VSCN-Studio)</Authors>
+    <Copyright>Copyright (c) 2026 HansJack (VSCN-Studio)</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- Prefer the declared SDK over stale DLLs in test/build output folders. -->
+    <AssemblySearchPaths>{HintPathFromItem};$(AssemblySearchPaths)</AssemblySearchPaths>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\Mods\vsdirector\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="OpenTK.Mathematics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Mathematics.dll" Private="false" />
+    <Reference Include="VSImGui" HintPath="$(VSImGuiPath)\VSImGui.dll" Private="false" />
+    <Reference Include="ImGui.NET" HintPath="$(VSImGuiPath)\ImGui.NET.dll" Private="false" />
+    <Reference Include="ImGuizmo.NET" HintPath="$(VSImGuiPath)\ImGuizmo.NET.dll" Private="false" />
+    <Reference Include="ImNodes.NET" HintPath="$(VSImGuiPath)\ImNodes.NET.dll" Private="false" />
+    <Reference Include="ImPlot.NET" HintPath="$(VSImGuiPath)\ImPlot.NET.dll" Private="false" />
+    <Reference Include="ImGuiController_OpenTK" HintPath="$(VSImGuiPath)\ImGuiController_OpenTK.dll" Private="false" />
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VintageStoryPath)\VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VintageStoryPath)\VintagestoryLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(VintageStoryPath)\Lib\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="protobuf-net">
+      <HintPath>$(VintageStoryPath)\Lib\protobuf-net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="cairo-sharp">
+      <HintPath>$(VintageStoryPath)\Lib\cairo-sharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="src\**\*.cs" />
+    <Content Include="modinfo.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="modicon.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="LICENSE" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="COPYRIGHT.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="licenses\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateVintageStoryPath" BeforeTargets="BeforeBuild">
+    <Error
+      Condition="'$(VintageStoryPath)' == '' or !Exists('$(VintageStoryPath)\VintagestoryAPI.dll') or !Exists('$(VintageStoryPath)\VintagestoryLib.dll')"
+      Text="VS Director build failed: set VINTAGE_STORY (or /p:VintageStoryPath) to the Vintage Story 1.22.3 install directory." />
+    <Error
+      Condition="'$(VSImGuiPath)' == '' or !Exists('$(VSImGuiPath)\VSImGui.dll') or !Exists('$(VSImGuiPath)\ImGui.NET.dll')"
+      Text="VS Director build failed: set VSIMGUI (or /p:VSImGuiPath) to the extracted VSImGui 1.2.7 directory." />
+  </Target>
+
+  <Target Name="PackageMod" AfterTargets="Build" Condition="'$(PackMod)' != 'false' and '$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <ModPackageDirectory>$(IntermediateOutputPath)vsdirector-package</ModPackageDirectory>
+      <ObsSourcePackageDirectory>$(IntermediateOutputPath)vsdirector-obs-source-package</ObsSourcePackageDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <ModAssetFiles Include="$(MSBuildProjectDirectory)\assets\**\*" />
+      <ModLicenseFiles Include="$(MSBuildProjectDirectory)\licenses\**\*" />
+      <ObsRootFiles Include="$(MSBuildProjectDirectory)\obs-plugin\CMakeLists.txt;$(MSBuildProjectDirectory)\obs-plugin\README.md" />
+      <ObsCodeFiles Include="$(MSBuildProjectDirectory)\obs-plugin\src\**\*" />
+      <ObsDataFiles Include="$(MSBuildProjectDirectory)\obs-plugin\data\**\*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(ModPackageDirectory)" />
+    <MakeDir Directories="$(MSBuildProjectDirectory)\artifacts;$(ModPackageDirectory);$(ModPackageDirectory)\licenses" />
+    <Copy
+      SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)\modinfo.json;$(MSBuildProjectDirectory)\modicon.png;$(MSBuildProjectDirectory)\LICENSE;$(MSBuildProjectDirectory)\COPYRIGHT.txt"
+      DestinationFolder="$(ModPackageDirectory)" />
+    <Copy
+      SourceFiles="@(ModLicenseFiles)"
+      DestinationFiles="@(ModLicenseFiles->'$(ModPackageDirectory)\licenses\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy
+      SourceFiles="@(ModAssetFiles)"
+      DestinationFiles="@(ModAssetFiles->'$(ModPackageDirectory)\assets\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <ZipDirectory
+      SourceDirectory="$(ModPackageDirectory)"
+      DestinationFile="$(MSBuildProjectDirectory)\artifacts\vsdirector_$(Version).zip"
+      Overwrite="true" />
+    <RemoveDir Directories="$(ObsSourcePackageDirectory)" />
+    <MakeDir Directories="$(ObsSourcePackageDirectory);$(ObsSourcePackageDirectory)\licenses" />
+    <Copy
+      SourceFiles="@(ObsRootFiles)"
+      DestinationFiles="@(ObsRootFiles->'$(ObsSourcePackageDirectory)\obs-plugin\%(Filename)%(Extension)')" />
+    <Copy
+      SourceFiles="@(ObsCodeFiles)"
+      DestinationFiles="@(ObsCodeFiles->'$(ObsSourcePackageDirectory)\obs-plugin\src\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy
+      SourceFiles="@(ObsDataFiles)"
+      DestinationFiles="@(ObsDataFiles->'$(ObsSourcePackageDirectory)\obs-plugin\data\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy
+      SourceFiles="$(MSBuildProjectDirectory)\LICENSE;$(MSBuildProjectDirectory)\COPYRIGHT.txt"
+      DestinationFolder="$(ObsSourcePackageDirectory)" />
+    <Copy
+      SourceFiles="$(MSBuildProjectDirectory)\licenses\OBS-THIRD-PARTY.txt"
+      DestinationFolder="$(ObsSourcePackageDirectory)\licenses" />
+    <ZipDirectory
+      SourceDirectory="$(ObsSourcePackageDirectory)"
+      DestinationFile="$(MSBuildProjectDirectory)\artifacts\vsdirector_obs_source_$(Version).zip"
+      Overwrite="true" />
+    <MakeDir
+      Condition="'$(ModDeploymentDirectory)' != ''"
+      Directories="$(ModDeploymentDirectory)" />
+    <Copy
+      Condition="'$(ModDeploymentDirectory)' != ''"
+      SourceFiles="$(MSBuildProjectDirectory)\artifacts\vsdirector_$(Version).zip"
+      DestinationFolder="$(ModDeploymentDirectory)" />
+  </Target>
+</Project>

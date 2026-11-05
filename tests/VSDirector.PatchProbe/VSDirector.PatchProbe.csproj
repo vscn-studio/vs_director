@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="OpenTK.Mathematics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Mathematics.dll" />
+    <Reference Include="OpenTK.Graphics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Graphics.dll" />
+    <Reference Include="OpenTK.Windowing.Desktop" HintPath="$(VintageStoryPath)\Lib\OpenTK.Windowing.Desktop.dll" />
+    <Reference Include="OpenTK.Windowing.Common" HintPath="$(VintageStoryPath)\Lib\OpenTK.Windowing.Common.dll" />
+    <Reference Include="OpenTK.Windowing.GraphicsLibraryFramework" HintPath="$(VintageStoryPath)\Lib\OpenTK.Windowing.GraphicsLibraryFramework.dll" />
+    <None Include="$(VintageStoryPath)\Lib\glfw3.dll" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\..\VSDirector.csproj" AdditionalProperties="PackMod=false" />
+    <Reference Include="VSImGui" HintPath="$(VSImGuiPath)\VSImGui.dll" />
+    <Reference Include="ImGui.NET" HintPath="$(VSImGuiPath)\ImGui.NET.dll" />
+    <Reference Include="ImGuizmo.NET" HintPath="$(VSImGuiPath)\ImGuizmo.NET.dll" />
+    <Reference Include="ImNodes.NET" HintPath="$(VSImGuiPath)\ImNodes.NET.dll" />
+    <Reference Include="ImPlot.NET" HintPath="$(VSImGuiPath)\ImPlot.NET.dll" />
+    <Reference Include="ImGuiController_OpenTK" HintPath="$(VSImGuiPath)\ImGuiController_OpenTK.dll" />
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VintageStoryPath)\VintagestoryAPI.dll</HintPath>
+    </Reference>
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VintageStoryPath)\VintagestoryLib.dll</HintPath>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(VintageStoryPath)\Lib\0Harmony.dll</HintPath>
+    </Reference>
+    <Reference Include="protobuf-net">
+      <HintPath>$(VintageStoryPath)\Lib\protobuf-net.dll</HintPath>
+    </Reference>
+    <Reference Include="cairo-sharp">
+      <HintPath>$(VintageStoryPath)\Lib\cairo-sharp.dll</HintPath>
+    </Reference>
+    <Reference Include="VSEssentials">
+      <HintPath>$(VintageStoryPath)\Mods\VSEssentials.dll</HintPath>
+    </Reference>
+    <Reference Include="VSSurvivalMod">
+      <HintPath>$(VintageStoryPath)\Mods\VSSurvivalMod.dll</HintPath>
+    </Reference>
+    <None Include="$(VintageStoryPath)\Lib\Newtonsoft.Json.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VintageStoryPath)\Lib\MonoMod*.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VintageStoryPath)\Lib\OpenTK*.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VintageStoryPath)\Lib\openal32.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VSImGuiPath)\native\win\cimgui.dll" Link="cimgui.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

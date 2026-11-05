@@ -1,0 +1,12 @@
+VS Director OBS source - third-party dependency
+
+OBS Studio / libobs 32.0.4
+Copyright: OBS Project contributors
+License: GNU General Public License, version 2 or later (GPL-2.0-or-later)
+Source: https://github.com/obsproject/obs-studio/tree/32.0.4
+License text: https://github.com/obsproject/obs-studio/blob/32.0.4/COPYING
+
+The VS Director OBS source plugin uses the separately installed libobs runtime.
+OBS Studio and libobs are not bundled in the plugin package. Their respective
+copyrights and licenses are unchanged by the MIT license for VS Director's
+original source code.

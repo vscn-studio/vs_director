@@ -1,0 +1,50 @@
+# .NET build output and test artifacts
+[Bb]in/
+[Oo]bj/
+artifacts/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# CMake and OBS build output
+build/
+build_*/
+cmake-build*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+compile_commands.json
+/obs-studio/
+
+# IDE and machine-specific settings
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+Directory.Build.local.props
+Directory.Build.local.targets
+
+# Local tools, scratch files, and agent state
+.agents/
+.work/
+.tmp-*
+*.tmp
+*.temp
+*.log
+*.bak
+*.orig
+*.rej
+Support.md
+Support_email.txt
+
+# Operating system files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini

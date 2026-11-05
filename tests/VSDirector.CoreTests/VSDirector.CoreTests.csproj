@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Data\**\*.cs" Link="Data\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\DirectorConfig.cs" Link="DirectorConfig.cs" />
+    <Compile Include="..\..\src\Voice\DirectorVoiceApi.cs" Link="Voice\DirectorVoiceApi.cs" />
+    <Compile Include="..\..\src\Networking\DirectorPermissions.cs" Link="Networking\DirectorPermissions.cs" />
+    <Compile Include="..\..\src\Recording\DirectorLiveWorkflowRunner.cs" Link="Recording\DirectorLiveWorkflowRunner.cs" />
+    <Compile Include="..\..\src\Recording\DirectorFfmpegInputReadiness.cs" Link="Recording\DirectorFfmpegInputReadiness.cs" />
+    <Compile Include="..\..\src\Recording\DirectorFfmpegAudioDevices.cs" Link="Recording\DirectorFfmpegAudioDevices.cs" />
+    <Compile Include="..\..\src\Recording\DirectorFfmpegLocator.cs" Link="Recording\DirectorFfmpegLocator.cs" />
+    <Compile Include="..\..\src\Recording\DirectorRecordingCallbackGuard.cs" Link="Recording\DirectorRecordingCallbackGuard.cs" />
+    <Compile Include="..\..\src\Rendering\DirectorOffscreenContracts.cs" Link="Rendering\DirectorOffscreenContracts.cs" />
+    <Compile Include="..\..\src\Rendering\DirectorWorkflowMultiViewOffscreenAdapter.cs" Link="Rendering\DirectorWorkflowMultiViewOffscreenAdapter.cs" />
+  </ItemGroup>
+</Project>

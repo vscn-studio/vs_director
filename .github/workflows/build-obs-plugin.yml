@@ -1,0 +1,238 @@
+name: Build OBS Plugin
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: obs-plugin-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # OBS Studio 32.0.4. Pinning the commit keeps the plugin ABI reproducible.
+  OBS_REF: dcdbd2e9048ae66237fdab32dbba72b745b1b9c5
+  BUILD_CONFIG: Release
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Check out VS Director
+        uses: actions/checkout@v4
+
+      - name: Check out OBS Studio 32.0.4
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: ${{ env.OBS_REF }}
+          path: obs-studio
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Add VS Director plugin to OBS build
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath obs-plugin -Destination obs-studio/plugins/vsdirector-obs -Recurse
+          Add-Content -LiteralPath obs-studio/plugins/CMakeLists.txt -Value "`nadd_obs_plugin(vsdirector-obs)`n"
+
+      - name: Build against OBS Studio
+        uses: ./obs-studio/.github/actions/build-obs
+        with:
+          target: x64
+          config: ${{ env.BUILD_CONFIG }}
+          workingDirectory: ${{ github.workspace }}/obs-studio
+
+      - name: Package Windows plugin
+        id: package
+        shell: pwsh
+        run: |
+          $Version = (Get-Content -LiteralPath modinfo.json -Raw | ConvertFrom-Json).version
+          $Stage = Join-Path $PWD artifacts/windows
+          $Plugin = Get-ChildItem -LiteralPath obs-studio/build_x64/install -Recurse -File -Filter vsdirector-obs.dll | Select-Object -First 1
+          if ($null -eq $Plugin) { throw 'vsdirector-obs.dll was not installed by the OBS build' }
+
+          New-Item -ItemType Directory -Force -Path "$Stage/obs-plugins/64bit" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$Stage/data/obs-plugins/vsdirector-obs" | Out-Null
+          Copy-Item -LiteralPath $Plugin.FullName -Destination "$Stage/obs-plugins/64bit/vsdirector-obs.dll"
+          Copy-Item -LiteralPath obs-plugin/data/locale -Destination "$Stage/data/obs-plugins/vsdirector-obs/locale" -Recurse
+          Copy-Item -LiteralPath LICENSE,COPYRIGHT.txt,licenses/OBS-THIRD-PARTY.txt -Destination "$Stage/data/obs-plugins/vsdirector-obs"
+
+          $Package = Join-Path $PWD "artifacts/vsdirector_obs_plugin_${Version}_windows_x64.zip"
+          Compress-Archive -Path "$Stage/*" -DestinationPath $Package -CompressionLevel Optimal -Force
+          "package=$Package" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsdirector-obs-package-windows-x64
+          path: ${{ steps.package.outputs.package }}
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out VS Director
+        uses: actions/checkout@v4
+
+      - name: Check out OBS Studio 32.0.4
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: ${{ env.OBS_REF }}
+          path: obs-studio
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Add VS Director plugin to OBS build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -a obs-plugin obs-studio/plugins/vsdirector-obs
+          printf '\nadd_obs_plugin(vsdirector-obs)\n' >> obs-studio/plugins/CMakeLists.txt
+
+      - name: Build against OBS Studio
+        uses: ./obs-studio/.github/actions/build-obs
+        with:
+          target: x86_64
+          config: ${{ env.BUILD_CONFIG }}
+          workingDirectory: ${{ github.workspace }}/obs-studio
+
+      - name: Package Linux plugin
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version modinfo.json)"
+          plugin="$(find obs-studio/build_ubuntu/install -type f -name 'vsdirector-obs.so*' -print -quit)"
+          test -n "${plugin}" || { echo 'vsdirector-obs.so was not installed by the OBS build' >&2; exit 1; }
+
+          stage="${PWD}/artifacts/linux/vsdirector-obs"
+          mkdir -p "${stage}/bin/64bit" "${stage}/data"
+          cp -L "${plugin}" "${stage}/bin/64bit/vsdirector-obs.so"
+          cp -a obs-plugin/data/. "${stage}/data/"
+          cp LICENSE COPYRIGHT.txt licenses/OBS-THIRD-PARTY.txt "${stage}/data/"
+          file "${stage}/bin/64bit/vsdirector-obs.so"
+
+          package="${PWD}/artifacts/vsdirector_obs_plugin_${version}_linux_x86_64.tar.gz"
+          tar -C "${PWD}/artifacts/linux" -czf "${package}" vsdirector-obs
+          echo "package=${package}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsdirector-obs-package-linux-x86_64
+          path: ${{ steps.package.outputs.package }}
+          if-no-files-found: error
+
+  macos-slices:
+    name: macOS ${{ matrix.arch }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+          - x86_64
+    steps:
+      - name: Check out VS Director
+        uses: actions/checkout@v4
+
+      - name: Check out OBS Studio 32.0.4
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: ${{ env.OBS_REF }}
+          path: obs-studio
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Select Xcode 16.4
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Add VS Director plugin to OBS build
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: |
+          cp -a obs-plugin obs-studio/plugins/vsdirector-obs
+          print '\nadd_obs_plugin(vsdirector-obs)\n' >> obs-studio/plugins/CMakeLists.txt
+
+      - name: Build against OBS Studio
+        uses: ./obs-studio/.github/actions/build-obs
+        with:
+          target: ${{ matrix.arch }}
+          config: ${{ env.BUILD_CONFIG }}
+          workingDirectory: ${{ github.workspace }}/obs-studio
+
+      - name: Stage macOS slice
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: |
+          plugin="$(find obs-studio/build_macos/OBS.app -type d -name vsdirector-obs.plugin -print -quit)"
+          if [[ -z "${plugin}" ]]; then
+            print -u2 'vsdirector-obs.plugin was not embedded by the OBS build'
+            exit 1
+          fi
+
+          mkdir -p artifacts/macos-slice
+          ditto "${plugin}" artifacts/macos-slice/vsdirector-obs.plugin
+          mkdir -p artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources
+          cp LICENSE COPYRIGHT.txt licenses/OBS-THIRD-PARTY.txt artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources/
+          lipo -archs artifacts/macos-slice/vsdirector-obs.plugin/Contents/MacOS/vsdirector-obs
+
+      - name: Upload macOS slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsdirector-obs-macos-slice-${{ matrix.arch }}
+          path: artifacts/macos-slice
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: macOS Universal
+    runs-on: macos-15
+    needs: macos-slices
+    steps:
+      - name: Check out VS Director
+        uses: actions/checkout@v4
+
+      - name: Download macOS slices
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vsdirector-obs-macos-slice-*
+          path: artifacts/slices
+
+      - name: Create universal plugin bundle
+        id: package
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: |
+          arm_bundle=artifacts/slices/vsdirector-obs-macos-slice-arm64/vsdirector-obs.plugin
+          intel_bundle=artifacts/slices/vsdirector-obs-macos-slice-x86_64/vsdirector-obs.plugin
+          output_bundle=artifacts/macos/vsdirector-obs.plugin
+          output_binary="${output_bundle}/Contents/MacOS/vsdirector-obs"
+
+          mkdir -p artifacts/macos
+          ditto "${arm_bundle}" "${output_bundle}"
+          lipo -create \
+            "${arm_bundle}/Contents/MacOS/vsdirector-obs" \
+            "${intel_bundle}/Contents/MacOS/vsdirector-obs" \
+            -output "${output_binary}"
+          chmod 755 "${output_binary}"
+          codesign --force --deep --sign - "${output_bundle}"
+          lipo -archs "${output_binary}" | tee /dev/stderr | grep -q arm64
+          lipo -archs "${output_binary}" | grep -q x86_64
+          codesign --verify --deep --strict "${output_bundle}"
+
+          version="$(jq -r .version modinfo.json)"
+          package="${PWD}/artifacts/vsdirector_obs_plugin_${version}_macos_universal.zip"
+          ditto -c -k --sequesterRsrc --keepParent "${output_bundle}" "${package}"
+          print "package=${package}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsdirector-obs-package-macos-universal
+          path: ${{ steps.package.outputs.package }}
+          if-no-files-found: error
