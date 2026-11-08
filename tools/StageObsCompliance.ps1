@@ -4,8 +4,13 @@ $repository = Split-Path -Parent $PSScriptRoot
 $legalDirectory = [System.IO.Path]::GetFullPath($Destination)
 $sourceDirectory = Join-Path $legalDirectory 'corresponding-source'
 New-Item -ItemType Directory -Force -Path $sourceDirectory | Out-Null
-foreach ($name in @('LICENSE', 'COPYRIGHT.txt', 'licenses/OBS-THIRD-PARTY.txt', 'licenses/GPL-2.0.txt')) {
+foreach ($name in @('LICENSE', 'COPYRIGHT.txt')) {
     Copy-Item -LiteralPath (Join-Path $repository $name) -Destination $legalDirectory
+}
+$licenseDirectory = Join-Path $legalDirectory 'licenses'
+New-Item -ItemType Directory -Force -Path $licenseDirectory | Out-Null
+foreach ($name in @('OBS-THIRD-PARTY.txt', 'GPL-2.0.txt')) {
+    Copy-Item -LiteralPath (Join-Path $repository "licenses/$name") -Destination $licenseDirectory
 }
 $pluginSource = Join-Path $sourceDirectory 'obs-plugin'
 New-Item -ItemType Directory -Force -Path $pluginSource | Out-Null
@@ -18,6 +23,7 @@ Copy-Item -LiteralPath (Join-Path $repository '.github/workflows/build-obs-plugi
 $toolDirectory = Join-Path $sourceDirectory 'tools'
 New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
 Copy-Item -LiteralPath $PSCommandPath -Destination $toolDirectory
+Copy-Item -LiteralPath (Join-Path $repository 'modinfo.json') -Destination $sourceDirectory
 # Include the dependency's interface declarations used by the CI build.
 $obsHeaders = Join-Path $repository 'obs-studio/libobs'
 if (Test-Path -LiteralPath $obsHeaders) {
@@ -29,6 +35,7 @@ if (Test-Path -LiteralPath $obsHeaders) {
     }
 }
 Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination $sourceDirectory
+Copy-Item -LiteralPath (Join-Path $repository 'COPYRIGHT.txt') -Destination $sourceDirectory
 New-Item -ItemType Directory -Force -Path (Join-Path $sourceDirectory 'licenses') | Out-Null
 Copy-Item -LiteralPath (Join-Path $repository 'licenses/OBS-THIRD-PARTY.txt') -Destination (Join-Path $sourceDirectory 'licenses')
 Copy-Item -LiteralPath (Join-Path $repository 'licenses/GPL-2.0.txt') -Destination (Join-Path $sourceDirectory 'licenses')

@@ -89,6 +89,32 @@ internal static class DirectorOffscreenPlayerAnimationManagerPatch
     }
 }
 
+// The native visibility buffers belong to the main camera's background chunk
+// culler. A second camera can face chunks hidden in those buffers. Evaluate its
+// own frustum/range without changing the buffers or FrustumVisible, which are
+// still needed by the editor and the next normal frame.
+[HarmonyPatch(typeof(ModelDataPoolLocation), nameof(ModelDataPoolLocation.IsVisible))]
+internal static class DirectorOffscreenTerrainVisibilityPatch
+{
+    [HarmonyPrefix]
+    private static bool Prefix(ModelDataPoolLocation __instance, EnumFrustumCullMode mode,
+        FrustumCulling culler, ref bool __result)
+    {
+        if (DirectorOffscreenRenderRuntime.CurrentView is not { } view) return true;
+        __result = view.RenderTerrain && !__instance.Hide && mode switch
+        {
+            EnumFrustumCullMode.CullNormal => culler.InFrustumAndRange(
+                __instance.FrustumCullSphere, false, __instance.LodLevel),
+            EnumFrustumCullMode.CullInstant => culler.InFrustum(__instance.FrustumCullSphere),
+            EnumFrustumCullMode.CullInstantShadowPassNear => culler.InFrustumShadowPass(__instance.FrustumCullSphere),
+            EnumFrustumCullMode.CullInstantShadowPassFar => __instance.LodLevel >= 1
+                && culler.InFrustumShadowPass(__instance.FrustumCullSphere),
+            _ => true
+        };
+        return false;
+    }
+}
+
 /// <summary>
 /// RenderToDefaultFramebuffer is the first client boundary after the primary
 /// world, post-processing, GUI, and Done stages have completed. Re-entering at

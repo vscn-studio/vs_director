@@ -93,7 +93,17 @@ internal sealed class DirectorReplayExportDialog : DirectorImGuiDialog
     private static void Input(string label, string id, ref string value, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
     {
         if (!BeginField(label, id)) return;
-        try { ImGui.InputText(id, ref value, 2048, flags); }
+        try
+        {
+            if (id is "##output" or "##ffmpeg") ImGui.InputText(id, ref value, 2048, flags);
+            else
+            {
+                bool fractional = id is "##start" or "##end" or "##scale";
+                double number = double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+                if (DirectorImGuiNumeric.Double(id, ref number, fractional ? .05f : 1, format: fractional ? "%.3f" : "%.0f"))
+                    value = N(fractional ? number : Math.Round(number));
+            }
+        }
         finally { ImGui.EndTable(); }
     }
 

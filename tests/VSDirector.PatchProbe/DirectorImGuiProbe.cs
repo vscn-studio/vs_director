@@ -18,6 +18,12 @@ internal static partial class DirectorImGuiProbe
     internal static unsafe void Run()
     {
         var assembly = typeof(VSDirectorModSystem).Assembly;
+        CheckIndependentEditorCamera(assembly);
+        CheckEditorCameraHandoff(assembly);
+        CheckCameraHeadOrientation(assembly);
+        CheckEditorCameraInput(assembly);
+        CheckEditorCameraProjection(assembly);
+        CheckOffscreenCamera(assembly);
         Type Runtime(string name) => assembly.GetType("VSDirector.Gui." + name, true)!;
         object? Call(object instance, string name, params object?[] args)
             => AccessTools.Method(instance.GetType(), name, args.Select(a => a!.GetType()).ToArray()).Invoke(instance, args);
@@ -73,6 +79,7 @@ internal static partial class DirectorImGuiProbe
                     throw new Exception("Merged editor icon missing: " + icon.Key);
             }
             CheckIconQuads(font, icons, atlasWidth, atlasHeight);
+            CheckCameraMoveCones(assembly);
             string playIcon = icons["play"];
             if ((string)AccessTools.Method(Runtime("DirectorImGuiForm"), "Caption").Invoke(null, ["", "play"])! != playIcon)
                 throw new Exception("Icon-only button captions contain horizontal whitespace.");
@@ -89,6 +96,7 @@ internal static partial class DirectorImGuiProbe
             var workspace = Activator.CreateInstance(Runtime("DirectorImGuiWorkspace"), api)!;
             disposables.Add((IDisposable)workspace);
             Call(workspace, "Open");
+            CheckLegacyNumericBinding(assembly, api);
             var hostType = typeof(ImGuiModSystem).Assembly.GetType("VSImGui.VSImGuiDialog", true)!;
             var host = (GuiDialog)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(hostType);
             if (host.DrawOrder <= .34 || host.DrawOrder >= .89)
@@ -112,8 +120,8 @@ internal static partial class DirectorImGuiProbe
             disposables.Add((IDisposable)panel);
             var form = Activator.CreateInstance(Runtime("DirectorImGuiForm"), true)!;
             Call(form, "Note", "导演模组");
-            uint inspectorDock = 0, viewDock = 0;
-            bool inspectorVisible = false, viewVisible = false;
+            uint inspectorDock = 0, viewDock = 0, transformDock = 0;
+            bool inspectorVisible = false, viewVisible = false, transformVisible = false;
             Call(form, "AddControl", (Action)(() => { inspectorDock = ImGui.GetWindowDockID(); inspectorVisible = true; }));
             Call(panel, "Render", "属性", form, 320, 500);
             Call(panel, "Open");
@@ -124,6 +132,12 @@ internal static partial class DirectorImGuiProbe
             Call(viewForm, "AddControl", (Action)(() => { viewDock = ImGui.GetWindowDockID(); viewVisible = true; }));
             Call(view, "Render", "视图", viewForm, 320, 500);
             Call(view, "Open");
+            var transform = Activator.CreateInstance(Runtime("DirectorImGuiWindow"), api, "transform", true, null, false, false, workspace)!;
+            disposables.Add((IDisposable)transform);
+            var transformForm = Activator.CreateInstance(Runtime("DirectorImGuiForm"), true)!;
+            Call(transformForm, "AddControl", (Action)(() => { transformDock = ImGui.GetWindowDockID(); transformVisible = true; }));
+            Call(transform, "Render", "变换", transformForm, 320, 500);
+            Call(transform, "Open");
 
             Vector2 pointerDown = default;
             Action<MouseEvent> mouseDown = e => pointerDown = new Vector2(e.X, e.Y);
@@ -143,7 +157,7 @@ internal static partial class DirectorImGuiProbe
             io.ConfigFlags &= ~ImGuiConfigFlags.ViewportsEnable;
             CheckDynamicReplayPanels(assembly, api, system);
             CheckExportWorkspaceRecovery(assembly, api);
-            CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckReplayKeyframeWindow(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); });
+            CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckReplayKeyframeWindow(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); CheckNumericControls(assembly, capture); CheckTransformNumberControls(assembly, capture); CheckCameraHandles(assembly, capture); });
             bool emptyTimeline = false;
             var panelBounds = new Dictionary<string, (Vector2 Position, Vector2 Size)>();
             Action<string, Vector2, Vector2> boundsChanged = (id, position, size) =>
@@ -164,11 +178,12 @@ internal static partial class DirectorImGuiProbe
             void WorkspaceFrame()
             {
                 ImGui.NewFrame();
-                inspectorVisible = viewVisible = false;
+                inspectorVisible = viewVisible = transformVisible = false;
                 Call(workspace, "Draw", 1f / 60);
                 // VSImGui still dispatches registered dialogs; they must not draw twice.
                 Call(panel, "Draw", 1f / 60);
                 Call(view, "Draw", 1f / 60);
+                Call(transform, "Draw", 1f / 60);
                 Call(timeline, "Draw", 1f / 60);
                 ImGui.Render();
                 if (ImGui.GetPlatformIO().Viewports.Size != 1) throw new Exception("Workspace created a platform window.");
@@ -179,6 +194,7 @@ internal static partial class DirectorImGuiProbe
                 Call(workspace, "ResetLayout");
                 Call(panel, "SetDockBounds", 500d, 28d, 320d, 240d);
                 Call(view, "SetDockBounds", 500d, 28d, 320d, 240d);
+                Call(transform, "SetDockBounds", 500d, 28d, 320d, 240d);
                 for (int frame = 0; frame < 3; frame++) WorkspaceFrame();
                 bool committed = false;
                 Call(panel, "QueueCommit", (Action)(() => committed = true));
@@ -189,6 +205,19 @@ internal static partial class DirectorImGuiProbe
                 WorkspaceFrame(); WorkspaceFrame();
                 if (!inspectorVisible || viewVisible || inspectorDock == 0 || inspectorDock != viewDock)
                     throw new Exception("Properties and View do not switch within the same native dock node.");
+                Call(transform, "FocusNextFrame");
+                WorkspaceFrame(); WorkspaceFrame();
+                if (!transformVisible || inspectorVisible || viewVisible || transformDock != inspectorDock)
+                    throw new Exception("Transform did not share the Properties/View dock at scale " + scale);
+                Call(transform, "Close");
+                WorkspaceFrame(); WorkspaceFrame();
+                Call(transform, "Open");
+                Call(transform, "FocusNextFrame");
+                WorkspaceFrame(); WorkspaceFrame();
+                if (!transformVisible || transformDock != inspectorDock)
+                    throw new Exception("Transform did not reopen in the same dock at scale " + scale);
+                Call(panel, "FocusNextFrame");
+                WorkspaceFrame(); WorkspaceFrame();
                 var preview = panelBounds["preview"];
                 var inspector = panelBounds["inspector"];
                 var time = panelBounds["timeline"];
@@ -253,9 +282,11 @@ internal static partial class DirectorImGuiProbe
                 WorkspaceFrame();
                 if (Math.Abs(panelBounds["preview"].Size.X - preview.Size.X) < 20)
                     throw new Exception("Native dock splitter did not update the game viewport at scale " + scale);
+                CheckCameraPreviewDock(workspace, WorkspaceFrame, panelBounds, scale);
             }
             RuntimeEnv.GUIScale = 1;
-            Console.WriteLine("PASS ImGui native Properties/View title tabs at 100/150/200% and host layering/full viewport patch");
+            Console.WriteLine("PASS camera preview docks beside timeline, follows row height/aspect, closes and reopens at 100/150/200%");
+            Console.WriteLine("PASS ImGui native Properties/View/Transform tabs, Transform close/reopen at 100/150/200% and host layering/full viewport patch");
             Console.WriteLine($"PASS native ImGui Chinese glyphs ({atlasWidth}x{atlasHeight} atlas), centered icon glyphs, single viewport, stable full-width camera/replay bottom pane, left/right Ctrl+wheel direction and single dispatch, timeline coordinates and game mouse passthrough at 100/150/200%; collapsed dialogs balance Begin/End");
         }
         finally
@@ -730,6 +761,8 @@ internal static partial class DirectorImGuiProbe
                 throw new Exception("Native ImGui mouse input depends on the desktop window location.");
         }
         Console.WriteLine("PASS real hidden OpenGL window: ImGui projection, clipping and mouse input stay in client coordinates after moving");
+        CheckCameraPreviewTexture(typeof(VSDirectorModSystem).Assembly, renderer);
+        CheckCameraConeFill(typeof(VSDirectorModSystem).Assembly, renderer);
         checkEditor(Capture);
         Capture("");
         void Capture(string suffix)

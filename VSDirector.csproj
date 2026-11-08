@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>VSDirector</AssemblyName>
     <RootNamespace>VSDirector</RootNamespace>
-    <Version>1.0.4-pre.1</Version>
+    <Version>1.0.4-pre.2</Version>
     <Authors>HansJack (VSCN-Studio)</Authors>
     <Copyright>Copyright (c) 2026 HansJack (VSCN-Studio)</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -95,7 +95,7 @@
       DestinationFile="$(MSBuildProjectDirectory)\artifacts\vsdirector_$(Version).zip"
       Overwrite="true" />
     <RemoveDir Directories="$(ObsSourcePackageDirectory)" />
-    <MakeDir Directories="$(ObsSourcePackageDirectory);$(ObsSourcePackageDirectory)\licenses" />
+    <MakeDir Directories="$(ObsSourcePackageDirectory);$(ObsSourcePackageDirectory)\licenses;$(ObsSourcePackageDirectory)\.github\workflows;$(ObsSourcePackageDirectory)\tools" />
     <Copy
       SourceFiles="@(ObsRootFiles)"
       DestinationFiles="@(ObsRootFiles->'$(ObsSourcePackageDirectory)\obs-plugin\%(Filename)%(Extension)')" />
@@ -111,6 +111,9 @@
     <Copy
       SourceFiles="$(MSBuildProjectDirectory)\licenses\OBS-THIRD-PARTY.txt;$(MSBuildProjectDirectory)\licenses\GPL-2.0.txt"
       DestinationFolder="$(ObsSourcePackageDirectory)\licenses" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\modinfo.json" DestinationFolder="$(ObsSourcePackageDirectory)" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\.github\workflows\build-obs-plugin.yml" DestinationFolder="$(ObsSourcePackageDirectory)\.github\workflows" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\tools\StageObsCompliance.ps1" DestinationFolder="$(ObsSourcePackageDirectory)\tools" />
     <ZipDirectory
       SourceDirectory="$(ObsSourcePackageDirectory)"
       DestinationFile="$(MSBuildProjectDirectory)\artifacts\vsdirector_obs_source_$(Version).zip"

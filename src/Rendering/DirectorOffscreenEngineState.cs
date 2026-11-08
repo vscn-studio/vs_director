@@ -495,25 +495,7 @@ internal sealed class DirectorOffscreenEngineState
         float zNear = Math.Clamp(0.1f - Math.Clamp(pose.Fov, 10f, 170f) / 90f / 25f, 0.025f, 0.1f);
         double absoluteY = pose.Y + pose.Dimension * 32768d;
         Vec3d eye = new(pose.X, absoluteY, pose.Z);
-        Vec3f forward = EntityPos.GetViewVector((float)pitch, (float)yaw);
-        double[] center = { eye.X + forward.X, eye.Y + forward.Y, eye.Z + forward.Z };
-        double[] viewMatrix = Mat4d.Create();
-        Mat4d.LookAt(viewMatrix, eye.ToDoubleArray(), center, new[] { 0d, 1d, 0d });
-        if (Math.Abs(roll) > 0.0000001d)
-        {
-            Mat4d.Rotate(viewMatrix, viewMatrix, roll, new[] { 1d, 0d, 0d });
-        }
-
-        double[] originMatrix = Mat4d.Create();
-        Mat4d.LookAt(
-            originMatrix,
-            new[] { 0d, 0d, 0d },
-            new[] { (double)forward.X, (double)forward.Y, (double)forward.Z },
-            new[] { 0d, 1d, 0d });
-        if (Math.Abs(roll) > 0.0000001d)
-        {
-            Mat4d.Rotate(originMatrix, originMatrix, roll, new[] { 1d, 0d, 0d });
-        }
+        var (viewMatrix, originMatrix, forward) = CameraMatrices(pose);
 
         double[] projection = Mat4d.Create();
         Mat4d.Perspective(projection, fov, view.Width / (double)view.Height, zNear, game.MainCamera.ZFar);
@@ -579,6 +561,30 @@ internal sealed class DirectorOffscreenEngineState
         game.Platform.GlDepthMask(flag: true);
         game.Platform.GlCullFaceBack();
         game.Platform.GlEnableCullFace();
+    }
+
+    internal static (double[] View, double[] Origin, Vec3f Forward) CameraMatrices(DirectorOffscreenCameraPose pose)
+    {
+        double yaw = pose.Yaw * Math.PI / 180d, pitch = pose.Pitch * Math.PI / 180d;
+        double roll = pose.Roll * Math.PI / 180d;
+        double sy = Math.Sin(yaw), cy = Math.Cos(yaw), sp = Math.Sin(pitch), cp = Math.Cos(pitch);
+        double sr = Math.Sin(roll), cr = Math.Cos(roll);
+        // Rows are the camera's right, up and back axes. Building them directly
+        // keeps the heading at vertical pitches; world-up LookAt loses that
+        // heading and flips the image after crossing a pole. Roll rotates the
+        // image plane, never the world X axis or the viewing direction.
+        double[] origin =
+        [
+            cy * cr - sy * sp * sr, cy * sr + sy * sp * cr, sy * cp, 0,
+            -cp * sr, cp * cr, -sp, 0,
+            -sy * cr - cy * sp * sr, -sy * sr + cy * sp * cr, cy * cp, 0,
+            0, 0, 0, 1
+        ];
+        double[] view = (double[])origin.Clone();
+        double y = pose.Y + pose.Dimension * 32768d;
+        for (int row = 0; row < 3; row++)
+            view[12 + row] = -(view[row] * pose.X + view[4 + row] * y + view[8 + row] * pose.Z);
+        return (view, origin, new Vec3f((float)-origin[2], (float)-origin[6], (float)-origin[10]));
     }
 
     internal void Restore()

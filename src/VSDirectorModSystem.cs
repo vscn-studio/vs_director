@@ -22,7 +22,7 @@ using DirectorKeyframe = VSDirector.Data.CameraKeyframe;
 
 namespace VSDirector;
 
-public sealed class VSDirectorModSystem : ModSystem
+public sealed partial class VSDirectorModSystem : ModSystem
 {
     internal const string VanillaPlayerModelCode = "game:player";
     private const string ConfigFileName = "VSDirector.json";
@@ -10755,17 +10755,8 @@ public sealed class VSDirectorModSystem : ModSystem
     internal bool TryToggleReplayPause(out string message)
     {
         bool restartFromEnd = replay?.HasReachedEnd == true;
-        // Manual framing is held while paused; playback resumes under timeline authority.
-        bool returningToTimelineCamera = replay?.IsPlaying == true
-            && replay.IsPaused
-            && replayViewportCameraAuthority == DirectorReplayCameraAuthority.ManualFree;
         if (replay?.IsPlaying == true && replay.TogglePause(out bool pausedPlayback))
         {
-            if (!pausedPlayback && returningToTimelineCamera)
-            {
-                replayViewportCameraAuthority = DirectorReplayCameraAuthority.Timeline;
-                UpdateReplayViewportTimeline();
-            }
             message = Lang.Get(restartFromEnd
                 ? "vsdirector:replay-restarted"
                 : pausedPlayback
@@ -12389,11 +12380,6 @@ public sealed class VSDirectorModSystem : ModSystem
         DirectorReplayActorTrack actor,
         double replayTimeSeconds)
     {
-        if (replayViewportCameraAuthority == DirectorReplayCameraAuthority.ManualFree)
-        {
-            return false;
-        }
-
         foreach (DirectorReplayElementTrack track in timeline.Tracks.Where(track => track.Enabled))
         {
             DirectorReplayElementKeyframe target;
@@ -14401,34 +14387,16 @@ public sealed class VSDirectorModSystem : ModSystem
                 ? !viewportTimeline.DisabledElementTracks.Contains(keyframe.TrackType)
                 : enabledTrackIds.Contains(keyframe.TrackId))
             .ToArray();
-        if (replayViewportCameraAuthority == DirectorReplayCameraAuthority.ManualFree)
-        {
-            pathPreview?.SetCurrentReplayCameraGuide(null);
-            if (visualCamera.OverrideFov)
-            {
-                controller.TrySetReplayFov(visualCamera.Fov, out _);
-                replayElementFovWasApplied = true;
-            }
-            else if (replayElementFovWasApplied)
-            {
-                controller.TrySetReplayFov(
-                    Math.Clamp(
-                        capi.Settings.Int["fieldOfView"],
-                        (int)DirectorReplayElementTimeline.MinFovDegrees,
-                        (int)DirectorReplayElementTimeline.MaxFovDegrees),
-                    out _);
-                replayElementFovWasApplied = false;
-            }
-            UpdateReplayElementEvents(replayTime, elementKeyframes);
-            return;
-        }
+        bool editingFree = replayViewportCameraAuthority == DirectorReplayCameraAuthority.ManualFree;
+        if (replayElementRuntimeReplayId != replay.ActiveReplayId) controller.ResetReplayPreviewFollowState();
         CameraPreset? cameraPose = null;
         bool preserveReplayFollowState = false;
         Entity? clearViewElementTarget = null;
         DirectorReplayCameraGuideTarget? cameraGuideTarget = null;
         Guid activeCameraId = Guid.Empty;
         HashSet<DirectorReplayElementTrackType> appliedCameraTypes = new();
-        float preservedFov = controller.CurrentPose?.Fov ?? 70f;
+        float preservedFov = editingFree ? ReplayCameraGuideFov(viewportTimeline, replayTime)
+            : controller.CurrentPose?.Fov ?? 70f;
         foreach (DirectorReplayElementTrack track in viewportTimeline.Tracks)
         {
             if (!track.Enabled
@@ -14515,7 +14483,7 @@ public sealed class VSDirectorModSystem : ModSystem
                         continue;
                     }
 
-                    replay.SetHiddenTrackedReplayEntity(target.EntityId);
+                    if (!editingFree) replay.SetHiddenTrackedReplayEntity(target.EntityId);
                     cameraPose = ReplayTrackedEntityPose(
                         tracking,
                         targetPose,
@@ -14558,7 +14526,7 @@ public sealed class VSDirectorModSystem : ModSystem
                             followTarget,
                             Math.Max(0d, replayTime - followStart.TimeSeconds),
                             out CameraPreset followedPose,
-                            out _))
+                            out _, applyToMainCamera: !editingFree))
                     {
                         continue;
                     }
@@ -14586,41 +14554,24 @@ public sealed class VSDirectorModSystem : ModSystem
             viewportTimeline,
             DirectorReplayElementTrackType.CameraShake,
             replayTime,
-            out DirectorReplayElementKeyframe shake);
+            out _);
+        replayShootingBasePose = cameraPose?.DeepClone() ?? replayShootingBasePose;
         cameraPose ??= hasShake
             || visualCamera.CameraShake
             || visualCamera.OverrideRoll
-                ? controller.CurrentPose
+                ? (editingFree ? replayShootingBasePose?.DeepClone() : controller.CurrentPose)
                 : null;
         if (cameraPose is not null)
         {
-            cameraPose.Fov = hasFov
-                ? fov.Fov
-                : visualCamera.OverrideFov
-                    ? visualCamera.Fov
-                    : cameraPose.Fov;
-            if (hasShake)
+            cameraPose = ApplyReplayShootingCameraVisuals(cameraPose, viewportTimeline, replayTime);
+            replayShootingPose = cameraPose.DeepClone();
+            replayShootingSourceId = activeCameraId;
+            if (editingFree)
             {
-                double phaseX = replayTime * Math.PI * 2d * shake.FrequencyX;
-                double phaseY = replayTime * Math.PI * 2d * shake.FrequencyY;
-                cameraPose.Yaw += (float)(Math.Sin(phaseX) * shake.AmplitudeX);
-                cameraPose.Pitch += (float)(Math.Sin(phaseY + Math.PI / 2d) * shake.AmplitudeY);
-            }
-            else if (visualCamera.CameraShake)
-            {
-                double phaseX = replayTime * Math.PI * 2d * visualCamera.ShakeFrequencyX;
-                double phaseY = replayTime * Math.PI * 2d * (visualCamera.SplitShake
-                    ? visualCamera.ShakeFrequencyY
-                    : visualCamera.ShakeFrequencyX);
-                cameraPose.Yaw += (float)(Math.Sin(phaseX) * visualCamera.ShakeAmplitudeX);
-                cameraPose.Pitch += (float)(Math.Sin(phaseY + Math.PI / 2d)
-                    * (visualCamera.SplitShake
-                        ? visualCamera.ShakeAmplitudeY
-                        : visualCamera.ShakeAmplitudeX));
-            }
-            if (visualCamera.OverrideRoll)
-            {
-                cameraPose.Roll = visualCamera.Roll;
+                pathPreview?.SetCurrentReplayCameraGuide(
+                    new DirectorReplayCurrentCameraGuide(cameraPose, cameraGuideTarget));
+                UpdateReplayElementEvents(replayTime, elementKeyframes);
+                return;
             }
             bool poseApplied = preserveReplayFollowState
                 ? controller.TrySetReplayFollowElementAdjustedPose(cameraPose, out _)
@@ -14633,11 +14584,24 @@ public sealed class VSDirectorModSystem : ModSystem
                     activeCameraId);
             }
         }
-        else if (appliedCameraTypes.Count == 0
+        else if (!editingFree && appliedCameraTypes.Count == 0
             && replayCameraState.Mode == DirectorReplayCameraMode.Fixed
             && controller.TryStartFreeCamera(out _))
         {
             replayCameraState = DirectorReplayCameraState.Free;
+        }
+        if (editingFree)
+        {
+            replayShootingPose = null;
+            replayShootingSourceId = Guid.Empty;
+            pathPreview?.SetCurrentReplayCameraGuide(null);
+            UpdateReplayElementEvents(replayTime, elementKeyframes);
+            return;
+        }
+        if (cameraPose is null)
+        {
+            replayShootingPose = null;
+            replayShootingSourceId = Guid.Empty;
         }
         if (hasFov || visualCamera.OverrideFov)
         {
@@ -14656,7 +14620,7 @@ public sealed class VSDirectorModSystem : ModSystem
         }
 
         pathPreview?.SetCurrentReplayCameraGuide(
-            replay.IsPaused && cameraPose is not null
+            replay.IsPlaying && cameraPose is not null
                 ? new DirectorReplayCurrentCameraGuide(cameraPose, cameraGuideTarget)
                 : null);
 
@@ -14874,6 +14838,10 @@ public sealed class VSDirectorModSystem : ModSystem
 
     private void ResetReplayElementRuntime()
     {
+        replayShootingPose = null;
+        replayShootingBasePose = null;
+        replayShootingSourceId = Guid.Empty;
+        controller?.ResetReplayPreviewFollowState();
         controller?.SetReplayElementClearView(false);
         replayElementRuntimeReplayId = Guid.Empty;
         replayElementPreviousTime = -1d;

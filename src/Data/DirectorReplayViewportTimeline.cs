@@ -686,6 +686,9 @@ public sealed class DirectorReplayViewportTimeline
                 clip.CameraPose = clip.CameraPose.DeepClone();
                 clip.CameraPose.Id = Guid.Empty;
                 clip.CameraPose.Name = clip.Name;
+                clip.CameraPose.EditorPivotOffsetX = double.IsFinite(clip.CameraPose.EditorPivotOffsetX) ? clip.CameraPose.EditorPivotOffsetX : 0;
+                clip.CameraPose.EditorPivotOffsetY = double.IsFinite(clip.CameraPose.EditorPivotOffsetY) ? clip.CameraPose.EditorPivotOffsetY : 0;
+                clip.CameraPose.EditorPivotOffsetZ = double.IsFinite(clip.CameraPose.EditorPivotOffsetZ) ? clip.CameraPose.EditorPivotOffsetZ : 0;
                 clip.CameraPose.Fov = float.IsFinite(clip.CameraPose.Fov)
                     ? Math.Clamp(clip.CameraPose.Fov, 10f, 170f)
                     : 70f;

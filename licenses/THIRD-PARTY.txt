@@ -18,8 +18,9 @@ Distributed resource: assets/vsdirector/fonts/noto/NotoSansSC-Regular.ttf
 (static regular instance generated from the upstream variable font).
 
 Runtime dependencies
-Vintage Story and its game assemblies, Harmony, protobuf-net and cairo-sharp
-are supplied by the game installation and are not bundled in this mod ZIP.
+Vintage Story and its game assemblies, Harmony, protobuf-net, cairo-sharp and
+OpenTK.Mathematics are supplied by the game installation and are not bundled
+in this mod ZIP.
 VSImGui and its ImGui-related assemblies are supplied by the separately
 installed VSImGui mod and are not bundled in this mod ZIP.
 OBS and FFmpeg are separately installed tools and are not bundled here.

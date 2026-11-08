@@ -15,6 +15,11 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
     private bool resetLayout;
     internal bool HasDockLayout { get; private set; }
     internal uint InspectorDockId { get; set; }
+    internal uint TimelineDockId { get; set; }
+    internal bool CameraPreviewVisible { get; set; }
+    private uint cameraPreviewDockId;
+    private bool cameraPreviewWasVisible;
+    private Vector2 previousPreviewDockSize;
     internal event Action<string, Vector2, Vector2>? BoundsChanged;
     internal void Add(Action draw) => panels.Add(draw);
     internal void Remove(Action draw) => panels.Remove(draw);
@@ -81,13 +86,18 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
                     SplitNode(center, ImGuiDir.Right, inspectorRatio, out uint right, out _);
                     DockWindow("###vsdirector-inspector", right);
                     DockWindow("###vsdirector-view", right);
+                    DockWindow("###vsdirector-transform", right);
                     DockWindow("###vsdirector-timeline", bottom);
+                    TimelineDockId = bottom;
+                    cameraPreviewWasVisible = false;
+                    cameraPreviewDockId = 0;
                     Finish(dockId);
                     resetLayout = false;
                 }
                 ImGui.SetCursorScreenPos(position);
                 ImGui.DockSpace(dockId, size, ImGuiDockNodeFlags.PassthruCentralNode | ImGuiDockNodeFlags.NoDockingInCentralNode);
                 HasDockLayout = true;
+                UpdateCameraPreviewDock();
                 nint central = GetCentralNode(dockId);
                 if (central != 0)
                 {
@@ -107,6 +117,52 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
     }
 
     protected override bool OnDraw() => true;
+
+    private void UpdateCameraPreviewDock()
+    {
+        if (!CameraPreviewVisible)
+        {
+            cameraPreviewWasVisible = false;
+            cameraPreviewDockId = 0;
+            return;
+        }
+        if (!cameraPreviewWasVisible && TimelineDockId != 0 && GetNode(TimelineDockId) is var timeline && timeline != 0)
+        {
+            NodeRect(out var rect, timeline);
+            Vector2 size = rect.Max - rect.Min;
+            float width = PreviewWidth(size.Y, size.X);
+            SplitNode(TimelineDockId, ImGuiDir.Right, Math.Clamp(width / Math.Max(1, size.X), .1f, .8f),
+                out cameraPreviewDockId, out _);
+            DockWindow("###vsdirector-camera-preview", cameraPreviewDockId);
+            Finish(dockId);
+            previousPreviewDockSize = Vector2.Zero;
+            cameraPreviewWasVisible = true;
+        }
+        if (cameraPreviewDockId == 0) return;
+        nint node = GetNode(cameraPreviewDockId);
+        if (node == 0) return;
+        NodeRect(out var previewRect, node);
+        Vector2 currentSize = previewRect.Max - previewRect.Min;
+        if (GetNode(TimelineDockId) is var other && other != 0)
+        {
+            NodeRect(out var timelineRect, other);
+            float totalWidth = currentSize.X + timelineRect.Max.X - timelineRect.Min.X;
+            Vector2 desired = new(PreviewWidth(currentSize.Y, totalWidth), currentSize.Y);
+            if (Vector2.DistanceSquared(desired, previousPreviewDockSize) > 1)
+            {
+                SetNodeSize(cameraPreviewDockId, desired);
+                previousPreviewDockSize = desired;
+            }
+        }
+    }
+
+    private float PreviewWidth(float height, float availableWidth)
+    {
+        float aspect = ClientApi.Render.FrameWidth / (float)Math.Max(1, ClientApi.Render.FrameHeight);
+        float imageHeight = Math.Max(16, height - ImGui.GetFrameHeight() - 8);
+        return Math.Clamp(imageHeight * aspect + 8,
+            80, Math.Max(80, availableWidth - 240 * DirectorImGuiTheme.Scale));
+    }
 
     // cimgui exports these stable docking APIs; VSImGui 1.2.7's managed binding omits them.
     [StructLayout(LayoutKind.Sequential)]

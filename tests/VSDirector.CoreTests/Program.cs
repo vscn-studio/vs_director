@@ -12,6 +12,7 @@ internal static class SmokeTests
 {
     private static readonly (string Name, Func<Task> Run)[] Cases =
     {
+        ("editor camera pivot, world rotation, precision and pointer intersections", RunSync(CameraManipulationChecks.Run)),
         ("timeline row geometry and indexed voice waveforms preserve clipping, amplitude and cancellation", RunSync(TimelineMediaChecks.Run)),
         ("paged playback opens metadata only, seeks both ways and evicts payloads", RunSync(ReplayPagingChecks.Run)),
         ("continuous voice preserves packets at low FPS and handles pause, seek and silence", RunSync(ReplayVoiceStreamChecks.Run)),

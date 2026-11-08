@@ -42,6 +42,7 @@ internal sealed class DirectorCameraController : IDisposable
     private bool freeCameraActive;
     private bool guiPointerCameraInput;
     private ReplayFollowExportState? replayFollowExportState;
+    private ReplayFollowExportState? replayFollowPreviewState;
     private bool guiOverride;
     private bool workspaceInputOverride;
     private bool? guiOverrideSavedOverlay;
@@ -263,6 +264,20 @@ internal sealed class DirectorCameraController : IDisposable
         pose.Id = Guid.Empty;
         pose.Name = "Replay Free Camera";
 
+        // Shooting cameras may cross the poles or roll upside down. Free look
+        // uses the native upright pitch range, so keep the viewing direction
+        // while choosing its upright yaw/pitch representation before activation.
+        double pitch = 180d + CameraFollowMath.NormalizeDegrees(pose.Pitch - 180d);
+        if (pitch < 90d || pitch > 270d)
+        {
+            pitch = 180d - pitch;
+            pose.Yaw += 180f;
+        }
+        if (pitch < 0d) pitch += 360d;
+        pose.Yaw = (float)CameraFollowMath.NormalizeDegrees(pose.Yaw);
+        pose.Pitch = (float)Math.Clamp(pitch, MinNativePitchDegrees, MaxNativePitchDegrees);
+        pose.Roll = 0f;
+
         if (!TryActivatePose(pose, out error))
         {
             return false;
@@ -329,15 +344,18 @@ internal sealed class DirectorCameraController : IDisposable
         Entity target,
         double timeSeconds,
         out CameraPreset pose,
-        out string error)
+        out string error,
+        bool applyToMainCamera = true)
     {
         pose = new CameraPreset();
-        if (!TrySetReplayFollowPose(rig, target, timeSeconds, out error))
+        if (!TrySetReplayFollowPose(rig, target, timeSeconds, out error, applyToMainCamera))
         {
             return false;
         }
 
-        pose = activeCamera?.DeepClone() ?? new CameraPreset();
+        pose = applyToMainCamera ? activeCamera?.DeepClone() ?? new CameraPreset()
+            : replayFollowPreviewState!.Pose.ToPreset(rig.Id, rig.Name);
+        if (!applyToMainCamera) return true;
         replayElementClearViewEnabled = rig.OpenClearView;
         replayElementClearViewTarget = rig.OpenClearView ? target : null;
         return true;
@@ -361,17 +379,18 @@ internal sealed class DirectorCameraController : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Evaluates a follow rig against the actor state currently applied by a
-    /// replay export. Keeping the small amount of history here preserves
-    /// smooth and delayed follow modes while the exporter seeks frame by
-    /// frame.
-    /// </summary>
-    public bool TrySetReplayFollowPose(
+    internal void ResetReplayPreviewFollowState() => replayFollowPreviewState = null;
+
+    /// <summary>Evaluates replay follow with history for smooth and delayed modes.</summary>
+    public bool TrySetReplayFollowPose(CameraFollowRig rig, Entity target, double timeSeconds, out string error)
+        => TrySetReplayFollowPose(rig, target, timeSeconds, out error, true);
+
+    private bool TrySetReplayFollowPose(
         CameraFollowRig rig,
         Entity target,
         double timeSeconds,
-        out string error)
+        out string error,
+        bool applyToMainCamera)
     {
         ArgumentNullException.ThrowIfNull(rig);
         ArgumentNullException.ThrowIfNull(target);
@@ -385,7 +404,7 @@ internal sealed class DirectorCameraController : IDisposable
         double orbitOffset = timeSeconds * rig.OrbitSpeedDegreesPerSecond;
         CameraFollowPose desired = CameraFollowMath.Evaluate(rig, targetPose, orbitOffset);
         CameraFollowPose output = desired;
-        ReplayFollowExportState? previous = replayFollowExportState;
+        ReplayFollowExportState? previous = applyToMainCamera ? replayFollowExportState : replayFollowPreviewState;
         if (previous is not null
             && previous.RigId == rig.Id
             && timeSeconds >= previous.TimeSeconds - 0.000001d)
@@ -407,19 +426,11 @@ internal sealed class DirectorCameraController : IDisposable
             };
         }
 
-        if (!TryActivatePose(output.ToPreset(rig.Id, rig.Name), out error))
+        if (applyToMainCamera && !TryActivatePose(output.ToPreset(rig.Id, rig.Name), out error))
         {
             return false;
         }
 
-        activePath = null;
-        activeSequence = null;
-        activeFollow = null;
-        freeCameraActive = false;
-        RestoreHiddenFollowEntity();
-        pathCompletionPending = false;
-        sequenceCompletionPending = false;
-        followTargetLostPending = false;
         ReplayFollowExportState next = previous is not null && previous.RigId == rig.Id
             && timeSeconds >= previous.TimeSeconds - 0.000001d
                 ? previous
@@ -433,6 +444,19 @@ internal sealed class DirectorCameraController : IDisposable
             next.History.Add(timeSeconds, desired, rig.DelaySeconds);
         }
 
+        if (!applyToMainCamera)
+        {
+            replayFollowPreviewState = next;
+            return true;
+        }
+        activePath = null;
+        activeSequence = null;
+        activeFollow = null;
+        freeCameraActive = false;
+        RestoreHiddenFollowEntity();
+        pathCompletionPending = false;
+        sequenceCompletionPending = false;
+        followTargetLostPending = false;
         replayFollowExportState = next;
         return true;
     }
@@ -1156,6 +1180,7 @@ internal sealed class DirectorCameraController : IDisposable
         guiOverride = false;
         guiOverrideSavedOverlay = null;
         replayFollowExportState = null;
+        replayFollowPreviewState = null;
         replayElementClearViewEnabled = false;
         replayElementClearViewTarget = null;
         DirectorFollowSoundIsolation.RestoreObserverRelativeSounds();
@@ -1334,6 +1359,12 @@ internal sealed class DirectorCameraController : IDisposable
 
     private void AdvanceFreeCamera(float deltaTime)
     {
+        // Match mouse ownership: GUI modifiers belong to the active editor,
+        // unless the viewport is explicitly being used for free-camera navigation.
+        if ((guiOverride || workspaceInputOverride) && (!freeCameraActive || !guiPointerCameraInput))
+        {
+            return;
+        }
         CameraPreset? camera = activeCamera;
         if (camera is null || game.IsPaused)
         {

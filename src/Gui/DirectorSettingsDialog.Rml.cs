@@ -131,7 +131,22 @@ internal sealed partial class DirectorSettingsDialog
         void Set(object next) => property.SetValue(draft, next);
 
         ImGui.PushID(name);
-        if (type != typeof(bool))
+        bool numeric = type == typeof(int) || type == typeof(long) || type == typeof(short)
+            || type == typeof(float) || type == typeof(double);
+        bool numericTable = numeric && ImGui.BeginTable("setting", 2,
+            ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.NoPadOuterX);
+        if (numericTable)
+        {
+            ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthStretch, 1.2f);
+            ImGui.TableSetupColumn("value", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableNextColumn();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextWrapped(label);
+            ImGui.TableNextColumn();
+            label = "##value";
+            ImGui.SetNextItemWidth(-1);
+        }
+        else if (type != typeof(bool))
         {
             ImGui.TextWrapped(label);
             label = "##value";
@@ -151,8 +166,8 @@ internal sealed partial class DirectorSettingsDialog
         }
         else if (name == "ModelOutlineThickness")
         {
-            float thickness = Convert.ToSingle(value, CultureInfo.InvariantCulture);
-            if (ImGui.SliderFloat(label, ref thickness, .5f, 16f, "%.1f")) Set(Convert.ChangeType(thickness, type, CultureInfo.InvariantCulture)!);
+            double thickness = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            if (DirectorImGuiNumeric.Double(label, ref thickness, .1f, .5, 16, "%.1f")) Set(Convert.ChangeType(thickness, type, CultureInfo.InvariantCulture)!);
         }
         else if (type == typeof(bool))
         {
@@ -195,20 +210,16 @@ internal sealed partial class DirectorSettingsDialog
         {
             double number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
             bool integer = type == typeof(int) || type == typeof(long) || type == typeof(short);
-            bool changed;
-            if (integer)
-            {
-                int intValue = (int)Math.Clamp(number, int.MinValue, int.MaxValue);
-                changed = ImGui.InputInt(label, ref intValue);
-                number = intValue;
-            }
-            else changed = ImGui.InputDouble(label, ref number, 0.1, 1, "%.3f");
+            bool changed = DirectorImGuiNumeric.Double(label, ref number, integer ? 1 : .1f,
+                integer ? int.MinValue : 0, integer ? int.MaxValue : 0, integer ? "%.0f" : "%.3f");
             if (changed)
             {
+                if (integer) number = Math.Round(number);
                 try { Set(Convert.ChangeType(number, type, CultureInfo.InvariantCulture)!); }
                 catch (OverflowException) { status = Lang.Get("vsdirector:invalid-number"); }
             }
         }
+        if (numericTable) ImGui.EndTable();
         ImGui.PopID();
     }
 

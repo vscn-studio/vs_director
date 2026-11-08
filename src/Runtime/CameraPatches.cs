@@ -6,6 +6,7 @@ using Vintagestory.API.MathTools;
 using Vintagestory.Client.NoObf;
 using VSDirector.Recording;
 using VSDirector.Replay;
+using VSDirector.Rendering;
 
 namespace VSDirector.Runtime;
 
@@ -220,6 +221,14 @@ internal static class DirectorFrustumOriginPatch
     [HarmonyPriority(Priority.Last)]
     private static void Prefix(ref BlockPos playerPos)
     {
+        // Preview/export passes supply their own camera. The editor pose must
+        // not replace the origin used for their terrain range and LOD checks.
+        if (DirectorOffscreenRenderRuntime.CurrentView is { } view)
+        {
+            playerPos = new BlockPos((int)Math.Floor(view.Pose.X), (int)Math.Floor(view.Pose.Y),
+                (int)Math.Floor(view.Pose.Z), view.Pose.Dimension);
+            return;
+        }
         if (DirectorCameraRuntime.Controller is not { IsActive: true, CurrentPose: { } camera }
             || !double.IsFinite(camera.X)
             || !double.IsFinite(camera.Y)

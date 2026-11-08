@@ -142,7 +142,13 @@ internal sealed partial class DirectorWorkspaceHud
     }
 
     private void PathFrameNumber(DirectorImGuiForm form, string label, string field, double value)
-        => PathFrameText(form, label, "pathFloating" + UpperFirst(field), DirectorNumberFormatting.Format(value));
+    {
+        string key = "pathFloating" + UpperFirst(field);
+        keyframeRmlValues[key] = DirectorNumberFormatting.Format(value);
+        float step = field.Contains("Time") || field.Contains("Duration") || field.Contains("Hold") ? .05f
+            : field.Contains("Speed") || field.Contains("Smooth") || field.Contains("Delay") ? .1f : 1;
+        form.NumberStep(label, value, step, next => keyframeRmlValues[key] = DirectorNumberFormatting.Format(next));
+    }
 
     private void RmlPathCameraKeyframe(DirectorImGuiForm form)
     {
@@ -233,17 +239,17 @@ internal sealed partial class DirectorWorkspaceHud
         if (SelectedReplayViewportClip() is not { } clip) return;
         SyncReplayViewportFields(clip);
         form.Text(RmlLabel("name"), replayViewportNameText, v => replayViewportNameText = v);
-        form.Text(RmlLabel("replay-element-time-seconds"), replayViewportStartText, v => replayViewportStartText = v);
+        form.NumericText(RmlLabel("replay-element-time-seconds"), replayViewportStartText, v => replayViewportStartText = v, .05f);
         form.Select(RmlLabel("replay-camera-interpolation"), replayViewportInterpolationCode,
             new[] { "step", "linear", "ease", "bezier" }.Select(v => (v, RmlLabel("replay-camera-interpolation-" + v))),
             v => replayViewportInterpolationCode = v);
-        form.Text("X", replayViewportXText, v => replayViewportXText = v);
-        form.Text("Y", replayViewportYText, v => replayViewportYText = v);
-        form.Text("Z", replayViewportZText, v => replayViewportZText = v);
-        form.Text(RmlLabel("camera-dimension"), replayViewportDimensionText, v => replayViewportDimensionText = v);
-        form.Text("Yaw", replayViewportYawText, v => replayViewportYawText = v);
-        form.Text("Pitch", replayViewportPitchText, v => replayViewportPitchText = v);
-        form.Text(RmlLabel("roll"), replayViewportRollText, v => replayViewportRollText = v);
+        form.NumericText("X", replayViewportXText, v => replayViewportXText = v);
+        form.NumericText("Y", replayViewportYText, v => replayViewportYText = v);
+        form.NumericText("Z", replayViewportZText, v => replayViewportZText = v);
+        form.NumericText(RmlLabel("camera-dimension"), replayViewportDimensionText, v => replayViewportDimensionText = v);
+        form.NumericText("Yaw", replayViewportYawText, v => replayViewportYawText = v);
+        form.NumericText("Pitch", replayViewportPitchText, v => replayViewportPitchText = v);
+        form.NumericText(RmlLabel("roll"), replayViewportRollText, v => replayViewportRollText = v);
         KeyframeAction(form, "apply", ApplyReplayViewport, "primary");
         KeyframeAction(form, "recapture", RecaptureSelectedReplayCameraKeyframe, refresh: true);
         KeyframeAction(form, "delete", DeleteReplayViewport, "danger");
@@ -262,7 +268,7 @@ internal sealed partial class DirectorWorkspaceHud
                 form.Time(label, TimeSpan.FromMinutes(Math.Round(ReplayElementNumber(field) * 1440 / 24000) % 1440),
                     v => Set(Math.Round(v.TotalMinutes * 24000 / 1440)));
             else if (range is not null) form.Slider(label, ReplayElementNumber(field), range.MinimumValue, range.MaximumValue, range.Step / range.Scale, Set);
-            else Text(field, label);
+            else form.Number(label, ReplayElementNumber(field), Set);
         }
         void N(string field, string label) => Number(field, RmlLabel(label));
         void Select(string field, string label, params (string, string)[] choices)

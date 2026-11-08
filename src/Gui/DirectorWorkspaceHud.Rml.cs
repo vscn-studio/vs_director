@@ -28,6 +28,7 @@ internal sealed partial class DirectorWorkspaceHud
             ComposeRmlInspector();
             rmlInspectorWindow.SetInputEnabled(!layout.NavigationMode);
             rmlViewWindow.SetInputEnabled(!layout.NavigationMode);
+            ComposeCameraTransform();
             UpdateInspectorBounds();
             if (IsOpened() && !rmlInspectorWindow.IsOpened) rmlInspectorWindow.Open();
             if (IsOpened() && !rmlViewWindow.IsOpened) rmlViewWindow.Open();
@@ -195,7 +196,7 @@ internal sealed partial class DirectorWorkspaceHud
                 v => RmlLabel("interpolation-" + v.ToString().ToLowerInvariant()));
             form.Enum(RmlLabel("loop-mode"), path.LoopMode, v => Edit(() => path.LoopMode = v),
                 v => RmlLabel("loop-" + v.ToString().ToLowerInvariant()));
-            form.Number(RmlLabel("path-speed"), path.PlaybackSpeed, v => Edit(() => path.PlaybackSpeed = v));
+            form.NumberStep(RmlLabel("path-speed"), path.PlaybackSpeed, .1f, v => Edit(() => path.PlaybackSpeed = v));
             form.Check(RmlLabel("path-preview"), path.PreviewVisible, v => Edit(() => path.PreviewVisible = v));
             InspectorSection(form, "keyframe");
             if (SelectedPathFrame() is { } frame)
@@ -264,8 +265,8 @@ internal sealed partial class DirectorWorkspaceHud
             InspectorSection(form, "motion");
             form.Enum(RmlLabel("follow-motion-mode"), rig.MotionMode, v => { rig.MotionMode = v; Save(); }, v => RmlLabel("follow-motion-" + v.ToString().ToLowerInvariant()));
             form.Number(RmlLabel("follow-orbit-speed"), rig.OrbitSpeedDegreesPerSecond, v => { rig.OrbitSpeedDegreesPerSecond = v; Save(); });
-            form.Number(RmlLabel("follow-smooth-time"), rig.SmoothTimeSeconds, v => { rig.SmoothTimeSeconds = v; Save(); });
-            form.Number(RmlLabel("follow-delay"), rig.DelaySeconds, v => { rig.DelaySeconds = v; Save(); });
+            form.NumberStep(RmlLabel("follow-smooth-time"), rig.SmoothTimeSeconds, .01f, v => { rig.SmoothTimeSeconds = v; Save(); });
+            form.NumberStep(RmlLabel("follow-delay"), rig.DelaySeconds, .05f, v => { rig.DelaySeconds = v; Save(); });
             InspectorSection(form, "lens");
             form.Slider(RmlLabel("follow-fov"), rig.Fov, 10, 170, 1, v => { rig.Fov = (float)v; Save(); });
             RmlQuickSlot(form, rig.QuickSlot, v => { rig.QuickSlot = v; Save(); });

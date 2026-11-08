@@ -32,12 +32,9 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
     private static readonly int SelectedPathColor = ColorUtil.ToRgba(255, 72, 224, 132);
     private static readonly int BezierHandleColor = ColorUtil.ToRgba(255, 190, 122, 212);
     private static readonly int HoverPreviewColor = ColorUtil.ToRgba(255, 92, 203, 224);
-    private static readonly int CameraBodyColor = ColorUtil.ToRgba(255, 238, 102, 86);
-    private static readonly int CameraDirectionColor = ColorUtil.ToRgba(255, 80, 205, 224);
-    private static readonly int OrbitCenterColor = ColorUtil.ToRgba(255, 250, 190, 45);
-    private static readonly int OrbitRadiusColor = ColorUtil.ToRgba(230, 226, 105, 214);
-    private static readonly int CurrentCameraColor = ColorUtil.ToRgba(255, 72, 224, 132);
-    private static readonly int TrackingGuideColor = ColorUtil.ToRgba(255, 250, 190, 45);
+    private static readonly int CameraBodyColor = ColorUtil.ToRgba(255, 70, 150, 255);
+    private static readonly int CameraDirectionColor = ColorUtil.ToRgba(255, 70, 150, 255);
+    private static readonly int CurrentCameraColor = ColorUtil.ToRgba(255, 70, 150, 255);
 
     private readonly ICoreClientAPI capi;
     private readonly ClientMain game;
@@ -357,16 +354,6 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
             AddLine(data, x, y - radius, z, x, y + radius, z, markerColor);
             AddLine(data, x, y, z - radius, x, y, z + radius, markerColor);
 
-            Vec3f forward = EntityPos.GetViewVector(
-                frame.Pitch * GameMath.DEG2RAD,
-                frame.Yaw * GameMath.DEG2RAD);
-            float directionLength = selected ? 1.4f : 1f;
-            AddLine(data, x, y, z,
-                x + forward.X * directionLength,
-                y + forward.Y * directionLength,
-                z + forward.Z * directionLength,
-                markerColor);
-
             if (index == selectedKeyframe && frame.BezierHandlesEnabled)
             {
                 AddBezierHandle(data, x, y, z,
@@ -457,8 +444,7 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
 
     private PreviewMesh? BuildReplayCameraPathMesh(
         CameraPath path,
-        int dimension,
-        PreviewKind kind)
+        int dimension)
     {
         DirectorKeyframe? first = path.Keyframes.FirstOrDefault(frame => frame.Dimension == dimension);
         if (first is null)
@@ -471,7 +457,7 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
         double originZ = Math.Floor(first.Z);
         int estimatedLines = Math.Max(
             12,
-            (path.Keyframes.Count - 1) * SamplesPerSegment + path.Keyframes.Count * 9);
+            (path.Keyframes.Count - 1) * SamplesPerSegment);
         MeshData data = new(
             estimatedLines * 2,
             estimatedLines * 2,
@@ -479,47 +465,28 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
             withUv: false);
         data.SetMode(EnumDrawMode.Lines);
 
-        if (kind == PreviewKind.ReplayPath)
+        for (int segment = 0; segment < path.Keyframes.Count - 1; segment++)
         {
-            for (int segment = 0; segment < path.Keyframes.Count - 1; segment++)
+            DirectorKeyframe left = path.Keyframes[segment];
+            DirectorKeyframe right = path.Keyframes[segment + 1];
+            if (left.Dimension != dimension || right.Dimension != dimension
+                || !CameraPathSampler.TryEvaluate(path, left.TimeSeconds, out DirectorKeyframe previous))
             {
-                DirectorKeyframe left = path.Keyframes[segment];
-                DirectorKeyframe right = path.Keyframes[segment + 1];
-                if (left.Dimension != dimension || right.Dimension != dimension
-                    || !CameraPathSampler.TryEvaluate(path, left.TimeSeconds, out DirectorKeyframe previous))
+                continue;
+            }
+
+            for (int sample = 1; sample <= SamplesPerSegment; sample++)
+            {
+                double time = left.TimeSeconds
+                    + (right.TimeSeconds - left.TimeSeconds) * sample / SamplesPerSegment;
+                if (!CameraPathSampler.TryEvaluate(path, time, out DirectorKeyframe current)
+                    || current.Dimension != dimension)
                 {
                     continue;
                 }
 
-                for (int sample = 1; sample <= SamplesPerSegment; sample++)
-                {
-                    double time = left.TimeSeconds
-                        + (right.TimeSeconds - left.TimeSeconds) * sample / SamplesPerSegment;
-                    if (!CameraPathSampler.TryEvaluate(path, time, out DirectorKeyframe current)
-                        || current.Dimension != dimension)
-                    {
-                        continue;
-                    }
-
-                    AddLine(data, previous, current, originX, originY, originZ, PathColor);
-                    previous = current;
-                }
-            }
-        }
-
-        if (kind == PreviewKind.ReplayKeyframes)
-        {
-            foreach (DirectorKeyframe frame in path.Keyframes.Where(frame => frame.Dimension == dimension))
-            {
-                AddCameraFrustum(
-                    data,
-                    (float)(frame.X - originX),
-                    (float)(frame.Y + dimension * 32768d - originY),
-                    (float)(frame.Z - originZ),
-                    frame.Yaw,
-                    frame.Pitch,
-                    frame.Roll,
-                    frame.Fov);
+                AddLine(data, previous, current, originX, originY, originZ, PathColor);
+                previous = current;
             }
         }
 
@@ -531,13 +498,12 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
                 originX,
                 originY,
                 originZ,
-                kind);
+                PreviewKind.ReplayPath);
     }
 
     private PreviewMesh? BuildReplayOrbitGuideMesh(
         DirectorReplayOrbitGuide guide,
-        int dimension,
-        PreviewKind kind)
+        int dimension)
     {
         CameraPreset? first = guide.Samples
             .Select(sample => sample.Camera)
@@ -551,9 +517,7 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
         double originX = Math.Floor(first.X);
         double originY = Math.Floor(first.Y + dimension * 32768d);
         double originZ = Math.Floor(first.Z);
-        int estimatedLines = kind == PreviewKind.ReplayPath
-            ? Math.Max(1, guide.Samples.Count - 1)
-            : Math.Max(1, guide.Keyframes.Count * 13);
+        int estimatedLines = Math.Max(1, guide.Samples.Count - 1);
         MeshData data = new(
             estimatedLines * 2,
             estimatedLines * 2,
@@ -561,65 +525,28 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
             withUv: false);
         data.SetMode(EnumDrawMode.Lines);
 
-        if (kind == PreviewKind.ReplayPath)
+        for (int index = 1; index < guide.Samples.Count; index++)
         {
-            for (int index = 1; index < guide.Samples.Count; index++)
+            CameraPreset left = guide.Samples[index - 1].Camera;
+            CameraPreset right = guide.Samples[index].Camera;
+            if (left.Dimension != dimension || right.Dimension != dimension)
             {
-                CameraPreset left = guide.Samples[index - 1].Camera;
-                CameraPreset right = guide.Samples[index].Camera;
-                if (left.Dimension != dimension || right.Dimension != dimension)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                AddLine(
-                    data,
-                    left.X,
-                    left.Y,
-                    left.Z,
-                    right.X,
-                    right.Y,
-                    right.Z,
-                    dimension,
-                    originX,
-                    originY,
-                    originZ,
-                    PathColor);
-            }
-        }
-        else if (kind == PreviewKind.ReplayKeyframes)
-        {
-            foreach (DirectorReplayOrbitGuideKeyframe keyframe in guide.Keyframes.Where(
-                         keyframe => keyframe.Dimension == dimension
-                             && keyframe.Camera.Dimension == dimension))
-            {
-                CameraPreset camera = keyframe.Camera;
-                float cameraX = (float)(camera.X - originX);
-                float cameraY = (float)(camera.Y + dimension * 32768d - originY);
-                float cameraZ = (float)(camera.Z - originZ);
-                float centerX = (float)(keyframe.CenterX - originX);
-                float centerY = (float)(keyframe.CenterY + dimension * 32768d - originY);
-                float centerZ = (float)(keyframe.CenterZ - originZ);
-                AddCameraFrustum(
-                    data,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    camera.Yaw,
-                    camera.Pitch,
-                    camera.Roll,
-                    camera.Fov);
-                AddLine(
-                    data,
-                    cameraX,
-                    cameraY,
-                    cameraZ,
-                    centerX,
-                    centerY,
-                    centerZ,
-                    OrbitRadiusColor);
-                AddPointMarker(data, centerX, centerY, centerZ, MarkerRadius * 1.2f, OrbitCenterColor);
-            }
+            AddLine(
+                data,
+                left.X,
+                left.Y,
+                left.Z,
+                right.X,
+                right.Y,
+                right.Z,
+                dimension,
+                originX,
+                originY,
+                originZ,
+                PathColor);
         }
 
         return data.VerticesCount == 0
@@ -630,7 +557,7 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
                 originX,
                 originY,
                 originZ,
-                kind);
+                PreviewKind.ReplayPath);
     }
 
     private PreviewMesh? BuildCurrentReplayCameraGuideMesh(
@@ -655,30 +582,25 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
             camera.Pitch,
             camera.Roll,
             camera.Fov,
-            CurrentCameraColor,
             CurrentCameraColor);
+
+        Vec3f forward = EntityPos.GetViewVector(camera.Pitch * GameMath.DEG2RAD, camera.Yaw * GameMath.DEG2RAD);
+        AddLine(data, cameraX, cameraY, cameraZ, cameraX + forward.X * 2.05f,
+            cameraY + forward.Y * 2.05f, cameraZ + forward.Z * 2.05f, CurrentCameraColor);
 
         if (guide.Target is { } target && target.Dimension == dimension)
         {
             float targetX = (float)(target.X - originX);
             float targetY = (float)(target.Y + dimension * 32768d - originY);
             float targetZ = (float)(target.Z - originZ);
-            AddLine(
-                data,
-                cameraX,
-                cameraY,
-                cameraZ,
-                targetX,
-                targetY,
-                targetZ,
-                TrackingGuideColor);
+            AddLine(data, cameraX, cameraY, cameraZ, targetX, targetY, targetZ, CurrentCameraColor);
             AddPointMarker(
                 data,
                 targetX,
                 targetY,
                 targetZ,
                 MarkerRadius * 1.35f,
-                TrackingGuideColor);
+                CurrentCameraColor);
         }
 
         return new PreviewMesh(
@@ -708,8 +630,7 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
             pitch,
             roll,
             fov,
-            CameraBodyColor,
-            CameraDirectionColor);
+            CameraBodyColor);
 
     private static void AddCameraFrustum(
         MeshData data,
@@ -720,8 +641,7 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
         float pitch,
         float roll,
         float fov,
-        int bodyColor,
-        int directionColor)
+        int bodyColor)
     {
 
         Vec3f forward = EntityPos.GetViewVector(
@@ -766,8 +686,6 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
         Vec3f topRight = Corner(center, rolledRight, rolledUp, halfWidth, halfHeight);
         Vec3f bottomRight = Corner(center, rolledRight, rolledUp, halfWidth, -halfHeight);
         Vec3f bottomLeft = Corner(center, rolledRight, rolledUp, -halfWidth, -halfHeight);
-        AddLine(data, x, y, z, center.X + forward.X * 0.8f,
-            center.Y + forward.Y * 0.8f, center.Z + forward.Z * 0.8f, directionColor);
         foreach (Vec3f corner in new[] { topLeft, topRight, bottomRight, bottomLeft })
         {
             AddLine(data, x, y, z, corner.X, corner.Y, corner.Z, bodyColor);
@@ -865,13 +783,10 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
 
         foreach (int dimension in path.Keyframes.Select(frame => frame.Dimension).Distinct())
         {
-            foreach (PreviewKind kind in new[] { PreviewKind.ReplayPath, PreviewKind.ReplayKeyframes })
+            PreviewMesh? preview = BuildReplayCameraPathMesh(path, dimension);
+            if (preview is not null)
             {
-                PreviewMesh? preview = BuildReplayCameraPathMesh(path, dimension, kind);
-                if (preview is not null)
-                {
-                    meshes.Add(preview);
-                }
+                meshes.Add(preview);
             }
         }
     }
@@ -885,13 +800,10 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
             .ToArray();
         foreach (int dimension in dimensions)
         {
-            foreach (PreviewKind kind in new[] { PreviewKind.ReplayPath, PreviewKind.ReplayKeyframes })
+            PreviewMesh? preview = BuildReplayOrbitGuideMesh(guide, dimension);
+            if (preview is not null)
             {
-                PreviewMesh? preview = BuildReplayOrbitGuideMesh(guide, dimension, kind);
-                if (preview is not null)
-                {
-                    meshes.Add(preview);
-                }
+                meshes.Add(preview);
             }
         }
     }
@@ -975,7 +887,6 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
         => kind switch
         {
             PreviewKind.ReplayPath => composition?.CameraPath == true,
-            PreviewKind.ReplayKeyframes => composition?.CameraPath == true,
             PreviewKind.ReplayCurrent => composition?.CameraPath == true,
             _ => true
         };
@@ -1167,7 +1078,6 @@ internal sealed class DirectorPathPreviewRenderer : IRenderer
     {
         Editor,
         ReplayPath,
-        ReplayKeyframes,
         ReplayCurrent
     }
 

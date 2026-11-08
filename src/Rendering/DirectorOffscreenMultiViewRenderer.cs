@@ -40,6 +40,17 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
     private bool enabled;
     private bool rendering;
     private bool disposed;
+    private DirectorOffscreenViewRequest? previewView;
+
+    // A workspace preview owns its own slot and never replaces capture requests.
+    internal void SetPreviewView(DirectorOffscreenViewRequest? view)
+    {
+        lock (sync)
+        {
+            ThrowIfDisposed();
+            previewView = view is null ? null : NormalizeView(view);
+        }
+    }
 
     public bool UseIndependentPlayerRenderer { get; set; }
 
@@ -69,12 +80,13 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
         {
             lock (sync)
             {
-                return views.Count;
+                return views.Count + (previewView is null ? 0 : 1);
             }
         }
     }
 
     public event Action<Exception>? RenderFailed;
+    internal event Action<Exception>? PreviewRenderFailed;
 
     public DirectorOffscreenMultiViewRenderer(ICoreClientAPI capi)
     {
@@ -195,13 +207,14 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
         {
             physicalFrameNumber++;
             frameNumber = physicalFrameNumber;
-            if (disposed || !enabled || rendering)
+            if (disposed || (!enabled && previewView is null && targets.Count == 0) || rendering)
             {
                 return;
             }
 
             rendering = true;
-            frameViews = new List<DirectorOffscreenViewRequest>(views);
+            frameViews = enabled ? new List<DirectorOffscreenViewRequest>(views) : new();
+            if (previewView is not null) frameViews.Add(previewView);
             frameSinks = new List<IDirectorOffscreenFrameSink>(sinks);
             frameContributors = new List<IDirectorOffscreenPassRenderer>(contributors);
         }
@@ -240,7 +253,8 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
                         "VS Director: offscreen view '{0}' failed: {1}",
                         view.Name,
                         exception);
-                    RenderFailed?.Invoke(exception);
+                    if (view.ViewId == previewView?.ViewId) PreviewRenderFailed?.Invoke(exception);
+                    else RenderFailed?.Invoke(exception);
                 }
                 finally
                 {
@@ -251,7 +265,8 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
         catch (Exception exception)
         {
             capi.Logger.Error("VS Director: offscreen multi-view frame failed: {0}", exception);
-            RenderFailed?.Invoke(exception);
+            if (previewView is not null) PreviewRenderFailed?.Invoke(exception);
+            if (enabled) RenderFailed?.Invoke(exception);
         }
         finally
         {
@@ -527,6 +542,7 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
 
             disposed = true;
             enabled = false;
+            previewView = null;
             views.Clear();
             sinks.Clear();
             contributors.Clear();

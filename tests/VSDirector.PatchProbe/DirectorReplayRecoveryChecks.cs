@@ -148,7 +148,16 @@ internal static partial class DirectorImGuiProbe
         Set(manager, "independentVoiceExportGate", new object());
         Set(owner, "replay", manager);
         object native = Activator.CreateInstance(TypeOf("Gui.DirectorImGuiWorkspace"), fixtureApi)!;
-        Call(native, "Add", (Action)(() => ImGui.TextUnformatted("Recovered workspace")));
+        Call(native, "Add", (Action)(() =>
+        {
+            // Real workspace panels draw in their own windows. Text after the
+            // full-height DockSpace would be clipped below the screen.
+            ImGui.SetNextWindowPos(new Vector2(40, 80), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(240, 100), ImGuiCond.Always);
+            ImGui.Begin("Recovered workspace###vsdirector-recovery-probe");
+            ImGui.TextUnformatted("Recovered workspace");
+            ImGui.End();
+        }));
         var harmony = new Harmony("vsdirector.probe.export-recovery");
         var hook = AccessTools.Property(TypeOf("Replay.DirectorReplayRuntime"), "UpdateCameraForRenderFrame");
         object? savedHook = hook.GetValue(null);

@@ -89,6 +89,7 @@ _ = AccessTools.Field(typeof(PlayerHeadController), "entityPlayer")
 
 MethodBase[] targets =
 {
+    AccessTools.Method(typeof(ModelDataPoolLocation), nameof(ModelDataPoolLocation.IsVisible)),
     AccessTools.PropertyGetter(typeof(EntityPlayer), nameof(EntityPlayer.AnimManager)),
     AccessTools.Method(typeof(ClientSystemEntities), "OnGameTick", new[] { typeof(float) }),
     AccessTools.Method(typeof(AnimationManager), nameof(AnimationManager.OnClientFrame), new[] { typeof(float) }),
@@ -1547,12 +1548,11 @@ try
         ?? throw new MissingMethodException(
             typeof(VSDirectorModSystem).FullName,
             "UpdateReplayViewportTimeline");
-    if (!CallsMethod(toggleReplayPause, updateReplayViewportTimelineForHandoff)
-        || !PatchProcessor.GetCurrentInstructions(toggleReplayPause).Any(instruction =>
-            Equals(instruction.operand, replayCameraAuthority)))
+    if (PatchProcessor.GetCurrentInstructions(toggleReplayPause).Any(instruction =>
+            instruction.opcode == System.Reflection.Emit.OpCodes.Stfld && Equals(instruction.operand, replayCameraAuthority)))
     {
         throw new InvalidOperationException(
-            "Resuming replay playback does not hand manual camera authority back to timeline elements.");
+            "Resuming replay playback replaces the independent editor camera authority.");
     }
 
     MethodInfo startControllerFreeCamera = cameraControllerType.GetMethod(

@@ -28,14 +28,16 @@ internal static partial class DirectorImGuiProbe
         var io = ImGui.GetIO();
         Vector2 savedDisplay = io.DisplaySize;
         float savedScale = RuntimeEnv.GUIScale;
-        void Frame()
+        void Frame(bool verifyLayout = true)
         {
             ImGui.NewFrame();
             ImGui.SetNextWindowPos(new Vector2(8));
             Call("Draw", 1f / 60);
             ImGui.Begin("###vsdirector-preload");
-            if (ImGui.GetScrollMaxY() > 1 || ImGui.GetWindowSize().X > io.DisplaySize.X)
-                throw new Exception("Preload controls exceed the viewport or hide the close button.");
+            // Scroll limits use the previous frame's content size. Allow one
+            // layout frame after opening, changing DPI or replacing the map.
+            if (verifyLayout && (ImGui.GetScrollMaxY() > 1 || ImGui.GetWindowSize().X > io.DisplaySize.X))
+                throw new Exception($"Preload controls exceed the viewport or hide the close button: scale={RuntimeEnv.GUIScale}, size={ImGui.GetWindowSize()}, display={io.DisplaySize}, scroll={ImGui.GetScrollMaxY()}.");
             ImGui.End();
             ImGui.Render();
             if (ImGui.GetDrawData().TotalVtxCount == 0) throw new Exception("Preload window has no draw data.");
@@ -49,14 +51,14 @@ internal static partial class DirectorImGuiProbe
             {
                 RuntimeEnv.GUIScale = scale;
                 current = null;
-                Call("Open"); Frame(); Frame();
+                Call("Open"); Frame(false); Frame();
                 capture($"preload-empty-{scale * 100:0}");
                 current = data;
-                Frame(); Frame();
+                Frame(false); Frame();
                 capture($"preload-map-{scale * 100:0}");
                 Call("Close");
                 ImGui.NewFrame(); Call("Draw", 1f / 60); ImGui.Render();
-                Call("Open"); Frame(); Frame();
+                Call("Open"); Frame(false); Frame();
                 Call("Close");
                 ImGui.NewFrame(); Call("Draw", 1f / 60); ImGui.Render();
             }

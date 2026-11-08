@@ -441,6 +441,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             ?? Guid.Empty;
         previewReplayTime = owner.ReplayTimeSeconds;
         SynchronizeReplaySelectionWithActivePlayback(force: true);
+        imGuiWorkspace.Add(DrawReplayCameraTools);
         ComposeAll();
     }
 
@@ -635,6 +636,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override bool OnEscapePressed()
     {
+        if (cameraDragOriginal is not null) { FinishCameraToolDrag(cancel: true); return true; }
         if (DirectorToolWindows.HasOpenTool) { DirectorToolWindows.Close(); return true; }
         if (resourceMenuSection is not null) { CloseResourceMenu(); return true; }
         return TryClose();
@@ -642,6 +644,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnGuiOpened()
     {
+        transformTabDismissed = false;
         imGuiWorkspace.Open();
         DirectorToolWindows.CloseWorkspaceMenu = CloseResourceMenu;
         if (SynchronizeReplaySelectionWithActivePlayback(force: true))
@@ -660,6 +663,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnGuiClosed()
     {
+        FinishCameraTransform(cancel: false);
+        rmlTransformWindow?.Close();
+        CloseReplayCameraPreview();
         imGuiWorkspace.Close();
         waveformCancellation?.Cancel();
         waveformKey = "";
@@ -1027,6 +1033,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             return;
         }
 
+        if (TryCameraToolMouseDown(args)) return;
+
         if (args.Button == EnumMouseButton.Right
             && TryOpenReplayEntityPopup(args.X, args.Y))
         {
@@ -1158,6 +1166,13 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     public override void OnMouseMove(MouseEvent args)
     {
         CheckPaneSplitRelease();
+        if (MoveCameraToolDrag(args.X, args.Y)) { args.Handled = true; return; }
+        if (GuiElementDirectorNumberInput.Captured is { } number)
+        {
+            number.OnMouseMove(capi, args);
+            args.Handled = true;
+            return;
+        }
         if (DirectorSliderInputCapture.Captured is GuiElementDirectorSlider slider)
         {
             slider.OnMouseMove(capi, args);
@@ -1429,6 +1444,23 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnMouseUp(MouseEvent args)
     {
+        if (GuiElementDirectorNumberInput.Captured is { } number)
+        {
+            number.OnMouseUp(capi, args);
+            args.Handled = true;
+            return;
+        }
+        if (cameraDragOriginal is not null && args.Button == EnumMouseButton.Left)
+        {
+            MoveCameraToolDrag(args.X, args.Y);
+            FinishCameraToolDrag(cancel: false);
+        }
+        if (consumeCameraRelease && args.Button == cameraReleaseButton)
+        {
+            consumeCameraRelease = false;
+            args.Handled = true;
+            return;
+        }
         // Release before other controls' Handled flags or focus routing can consume the event.
         if (paneSplitDragging && args.Button == EnumMouseButton.Left)
         {
@@ -1993,6 +2025,12 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             args.Handled = OnEscapePressed();
             return;
         }
+        if (cameraDragOriginal is not null)
+        {
+            // Keep raw modifiers for tool snapping, but do not also run workspace shortcuts.
+            args.Handled = true;
+            return;
+        }
         if (replayViewportFreeCameraPointerActive
             && args.KeyCode == (int)GlKeys.Space)
         {
@@ -2153,6 +2191,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         }
 
         disposed = true;
+        CloseReplayCameraPreview();
+        imGuiWorkspace.Remove(DrawReplayCameraTools);
         DisposeTimelineMedia();
         owner.SetWorkspaceInputOverride(false);
         rmlTimeline?.Dispose(); rmlTimeline = null;
@@ -2163,6 +2203,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         sceneBrowser?.Dispose(); sceneBrowser = null;
         rmlInspectorWindow?.Dispose();
         rmlViewWindow?.Dispose(); rmlViewWindow = null;
+        rmlTransformWindow?.Dispose(); rmlTransformWindow = null;
         rmlInspectorWindow = null;
         EndReplayViewportFreeCameraPointerInput();
         ResetWorkspacePointerInteraction();
@@ -8197,6 +8238,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void ResetWorkspacePointerInteraction()
     {
+        GuiElementDirectorNumberInput.CancelCapture();
+        FinishCameraToolDrag(cancel: true);
+        consumeCameraRelease = cameraContextRequested = false;
         resizingTimelineTrack = Guid.Empty;
         consumeWorkflowContextMouseUp = false;
         selectingPreloadGrid = false;

@@ -174,6 +174,7 @@ internal static class DirectorButtonInputCapture
         captured?.CancelPointerPress();
         DirectorDropdownInputCapture.CancelMouseCapture();
         DirectorSliderInputCapture.CancelPointerCapture();
+        GuiElementDirectorNumberInput.CancelCapture();
         captured = button;
     }
 
@@ -2122,234 +2123,146 @@ internal sealed class GuiElementDirectorListMenu : GuiElementListMenu
     }
 }
 
-/// <summary>
-/// Number input with a flat editor field and icon-only +/- steppers. Numeric
-/// parsing, interval modifiers, keyboard editing, and wheel behavior remain in
-/// GuiElementNumberInput.
-/// </summary>
+/// <summary>Compact numeric field with horizontal drag and direct text editing.</summary>
 internal sealed class GuiElementDirectorNumberInput : GuiElementNumberInput
 {
+    internal static GuiElementDirectorNumberInput? Captured { get; private set; }
     private readonly Action? onFocusLost;
-    private LoadedTexture buttonPressedTexture;
+    private readonly Action<float> renderText;
+    private readonly Action recomposeText;
+    private readonly Action<ICoreClientAPI, MouseEvent> textMouseDown;
     private LoadedTexture disabledOverlayTexture;
-    private int pressedStepper;
+    private bool pointerDown, dragging;
+    private int lastDragX, startDragX;
+    private double dragValue;
+    private long lastClick;
 
-    public GuiElementDirectorNumberInput(
-        ICoreClientAPI capi,
-        ElementBounds bounds,
-        Action<string>? onTextChanged,
-        CairoFont font,
-        Action? onFocusLost = null)
+    public GuiElementDirectorNumberInput(ICoreClientAPI capi, ElementBounds bounds,
+        Action<string>? onTextChanged, CairoFont font, Action? onFocusLost = null)
         : base(capi, bounds, onTextChanged, font)
     {
         this.onFocusLost = onFocusLost;
-        buttonPressedTexture = new LoadedTexture(capi);
+        Interval = 1;
         disabledOverlayTexture = new LoadedTexture(capi);
+        // Keep the game's text editing, bypassing only the numeric stepper UI.
+        renderText = AccessTools.MethodDelegate<Action<float>>(
+            AccessTools.Method(typeof(GuiElementTextInput), nameof(RenderInteractiveElements)), this, false, null);
+        textMouseDown = AccessTools.MethodDelegate<Action<ICoreClientAPI, MouseEvent>>(
+            AccessTools.Method(typeof(GuiElementTextInput), nameof(OnMouseDownOnElement)), this, false, null);
+        recomposeText = AccessTools.MethodDelegate<Action>(AccessTools.Method(typeof(GuiElementTextInput), "RecomposeText"), this, false, null);
     }
 
     public override void ComposeTextElements(Context ctx, ImageSurface surface)
     {
-        // Let the game maintain its internal cursor/text textures on a scratch
-        // surface. No vanilla static pixels are allowed onto the real dialog.
-        using (ImageSurface scratchSurface = new(
-            Format.Argb32,
-            Math.Max(1, surface.Width),
-            Math.Max(1, surface.Height)))
-        using (Context scratchContext = new(scratchSurface))
+        using (ImageSurface scratch = new(Format.Argb32, Math.Max(1, surface.Width), Math.Max(1, surface.Height)))
+        using (Context scratchContext = new(scratch))
         {
             bool requestedEnabled = enabled;
             try
             {
                 enabled = true;
-                base.ComposeTextElements(scratchContext, scratchSurface);
+                base.ComposeTextElements(scratchContext, scratch);
+                AccessTools.Field(typeof(GuiElementTextInput), "rightSpacing").SetValue(this, 0d);
+                recomposeText();
             }
-            finally
-            {
-                enabled = requestedEnabled;
-            }
+            finally { enabled = requestedEnabled; }
         }
         Bounds.CalcWorldBounds();
-        double x = Bounds.drawX;
-        double y = Bounds.drawY;
-        double width = Bounds.OuterWidth;
-        double height = Bounds.OuterHeight;
-        double stepWidth = GuiElement.scaled(17d) * Scale;
-        double stepX = x + width - stepWidth;
-        double halfHeight = height / 2d;
-
-        DirectorGuiTheme.RoundedRectangle(ctx, x + 0.5d, y + 0.5d, width - 1d, height - 1d,
-            DirectorGuiTheme.ScaledCornerRadius);
-        ctx.SetSourceRGBA(
-            DirectorGuiTheme.SurfaceR,
-            DirectorGuiTheme.SurfaceG,
-            DirectorGuiTheme.SurfaceB,
-            1d);
+        DirectorGuiTheme.RoundedRectangle(ctx, Bounds.drawX + .5, Bounds.drawY + .5,
+            Bounds.OuterWidth - 1, Bounds.OuterHeight - 1, DirectorGuiTheme.ScaledCornerRadius);
+        ctx.SetSourceRGBA(DirectorGuiTheme.SurfaceR, DirectorGuiTheme.SurfaceG, DirectorGuiTheme.SurfaceB, 1);
         ctx.FillPreserve();
-        ctx.SetSourceRGBA(
-            DirectorGuiTheme.BorderR,
-            DirectorGuiTheme.BorderG,
-            DirectorGuiTheme.BorderB,
-            0.88d);
-        ctx.LineWidth = Math.Max(1d, GuiElement.scaled(1d));
+        ctx.SetSourceRGBA(DirectorGuiTheme.BorderR, DirectorGuiTheme.BorderG, DirectorGuiTheme.BorderB, .88);
+        ctx.LineWidth = Math.Max(1, GuiElement.scaled(1));
         ctx.Stroke();
-
-        ctx.Save();
-        DirectorGuiTheme.RoundedRectangle(ctx, x + 0.5d, y + 0.5d, width - 1d, height - 1d,
-            DirectorGuiTheme.ScaledCornerRadius);
-        ctx.Clip();
-        ctx.Rectangle(stepX, y, stepWidth, height);
-        ctx.SetSourceRGBA(
-            DirectorGuiTheme.RaisedR,
-            DirectorGuiTheme.RaisedG,
-            DirectorGuiTheme.RaisedB,
-            1d);
-        ctx.Fill();
-        ctx.Restore();
-
-        ctx.SetSourceRGBA(
-            DirectorGuiTheme.BorderR,
-            DirectorGuiTheme.BorderG,
-            DirectorGuiTheme.BorderB,
-            0.66d);
-        ctx.LineWidth = Math.Max(1d, GuiElement.scaled(1d));
-        ctx.MoveTo(stepX, y + GuiElement.scaled(4d));
-        ctx.LineTo(stepX, y + height - GuiElement.scaled(4d));
-        ctx.MoveTo(stepX + GuiElement.scaled(3d), y + halfHeight);
-        ctx.LineTo(x + width - GuiElement.scaled(3d), y + halfHeight);
-        ctx.Stroke();
-
-        DrawStepperIcon(ctx, stepX + stepWidth / 2d, y + halfHeight / 2d, plus: true, enabled: true);
-        DrawStepperIcon(ctx, stepX + stepWidth / 2d, y + halfHeight + halfHeight / 2d,
-            plus: false, enabled: true);
-
-        GenerateFocusTexture();
-        GenerateStepperStateTexture(ref buttonHighlightTexture, 0.18d);
-        GenerateStepperStateTexture(ref buttonPressedTexture, 0.34d);
-        GenerateDisabledOverlayTexture();
-        highlightBounds = Bounds.CopyOffsetedSibling().WithFixedPadding(0d, 0d);
+        highlightBounds = Bounds.CopyOffsetedSibling().WithFixedPadding(0, 0);
         highlightBounds.CalcWorldBounds();
+        using ImageSurface overlay = new(Format.Argb32, Math.Max(1, Bounds.OuterWidthInt), Math.Max(1, Bounds.OuterHeightInt));
+        using Context overlayContext = new(overlay);
+        overlayContext.SetSourceRGBA(.02, .028, .032, .58);
+        overlayContext.Paint();
+        generateTexture(overlay, ref disabledOverlayTexture, linearMag: true);
     }
 
     public override void RenderInteractiveElements(float deltaTime)
     {
-        base.RenderInteractiveElements(deltaTime);
-        if (!Enabled)
-        {
-            api.Render.Render2DTexturePremultipliedAlpha(disabledOverlayTexture.TextureId, Bounds);
-            return;
-        }
-        if (pressedStepper == 0)
-        {
-            return;
-        }
-
-        double halfHeight = Bounds.OuterHeight / 2d - 1d;
-        double y = pressedStepper > 0
-            ? Bounds.renderY
-            : Bounds.renderY + halfHeight + 1d;
-        api.Render.Render2DTexturePremultipliedAlpha(
-            buttonPressedTexture.TextureId,
-            Bounds.renderX + Bounds.OuterWidth - GuiElement.scaled(17d) - 1d,
-            y,
-            GuiElement.scaled(17d),
-            halfHeight);
+        renderText(deltaTime);
+        if (!Enabled) api.Render.Render2DTexturePremultipliedAlpha(disabledOverlayTexture.TextureId, Bounds);
     }
 
     public override void OnMouseDownOnElement(ICoreClientAPI api, MouseEvent args)
     {
-        pressedStepper = 0;
-        if (Enabled && args.Button == EnumMouseButton.Left && IsStepperPoint(args.X, args.Y))
+        if (!Enabled || args.Button != EnumMouseButton.Left) return;
+        long now = Environment.TickCount64;
+        if (Key(api, GlKeys.LControl, GlKeys.RControl) || now - lastClick < 350)
         {
-            pressedStepper = args.Y > Bounds.absY + Bounds.OuterHeight / 2d ? -1 : 1;
+            textMouseDown(api, args);
+            lastClick = 0;
+            return;
         }
-        base.OnMouseDownOnElement(api, args);
+        lastClick = now;
+        CancelCapture();
+        Captured = this;
+        pointerDown = true;
+        dragging = false;
+        lastDragX = startDragX = args.X;
+        double.TryParse(GetText(), NumberStyles.Float, CultureInfo.InvariantCulture, out dragValue);
+        args.Handled = true;
+    }
+
+    public override void OnMouseMove(ICoreClientAPI api, MouseEvent args)
+    {
+        if (!pointerDown) { base.OnMouseMove(api, args); return; }
+        if (!api.Input.MouseButton.Left) { CancelCapture(); return; }
+        if (!dragging && Math.Abs(args.X - startDragX) < GuiElement.scaled(3)) return;
+        dragging = true;
+        double step = Interval * (Key(api, GlKeys.LControl, GlKeys.RControl) ? .1 : 1)
+            * (Key(api, GlKeys.LShift, GlKeys.RShift) ? 10 : 1);
+        dragValue += (args.X - lastDragX) / Math.Max(.001, GuiElement.scaled(1)) * step;
+        lastDragX = args.X;
+        if (double.IsFinite(dragValue)) SetValue(DirectorNumberFormatting.Format(IntMode ? Math.Round(dragValue) : dragValue));
+        args.Handled = true;
     }
 
     public override void OnMouseUp(ICoreClientAPI api, MouseEvent args)
     {
-        base.OnMouseUp(api, args);
-        if (args.Button == EnumMouseButton.Left)
-        {
-            pressedStepper = 0;
-        }
+        if (!pointerDown || args.Button != EnumMouseButton.Left) { base.OnMouseUp(api, args); return; }
+        bool edited = dragging;
+        CancelCapture();
+        if (edited) onFocusLost?.Invoke();
+        else textMouseDown(api, args);
+        args.Handled = true;
+    }
+
+    public override void OnMouseWheel(ICoreClientAPI api, MouseWheelEventArgs args)
+    {
+        // Scrolling a workbench panel must not silently change a numeric value.
     }
 
     public override void OnFocusLost()
     {
-        bool wasFocused = HasFocus;
+        bool focused = HasFocus;
         base.OnFocusLost();
-        if (wasFocused)
-        {
-            onFocusLost?.Invoke();
-        }
+        if (focused) onFocusLost?.Invoke();
+    }
+
+    internal static void CancelCapture()
+    {
+        if (Captured is { } previous) previous.pointerDown = previous.dragging = false;
+        Captured = null;
+    }
+
+    private static bool Key(ICoreClientAPI api, GlKeys left, GlKeys right)
+    {
+        var keys = api.Input.KeyboardKeyStateRaw;
+        return (uint)left < keys.Length && keys[(int)left] || (uint)right < keys.Length && keys[(int)right];
     }
 
     public override void Dispose()
     {
-        buttonPressedTexture.Dispose();
+        if (ReferenceEquals(Captured, this)) CancelCapture();
         disabledOverlayTexture.Dispose();
         base.Dispose();
-    }
-
-    private bool IsStepperPoint(int x, int y)
-        => x >= Bounds.absX + Bounds.OuterWidth - GuiElement.scaled(17d)
-            && x <= Bounds.absX + Bounds.OuterWidth
-            && y >= Bounds.absY
-            && y <= Bounds.absY + Bounds.OuterHeight;
-
-    private void GenerateFocusTexture()
-    {
-        using ImageSurface surface = new(
-            Format.Argb32,
-            Math.Max(1, Bounds.OuterWidthInt),
-            Math.Max(1, Bounds.OuterHeightInt));
-        using Context context = new(surface);
-        DirectorGuiTheme.RoundedRectangle(context, 1d, 1d, surface.Width - 2d, surface.Height - 2d,
-            DirectorGuiTheme.ScaledCornerRadius);
-        context.SetSourceRGBA(
-            1d,
-            1d,
-            1d,
-            0.95d);
-        context.LineWidth = Math.Max(1d, GuiElement.scaled(1.4d));
-        context.Stroke();
-        generateTexture(surface, ref highlightTexture, linearMag: true);
-    }
-
-    private void GenerateStepperStateTexture(ref LoadedTexture target, double alpha)
-    {
-        double halfHeight = Math.Max(1d, Bounds.OuterHeight / 2d - 1d);
-        using ImageSurface surface = new(
-            Format.Argb32,
-            Math.Max(1, (int)Math.Ceiling(GuiElement.scaled(17d))),
-            Math.Max(1, (int)Math.Ceiling(halfHeight)));
-        using Context context = new(surface);
-        context.SetSourceRGBA(
-            DirectorGuiTheme.AccentR,
-            DirectorGuiTheme.AccentG,
-            DirectorGuiTheme.AccentB,
-            alpha);
-        context.Paint();
-        generateTexture(surface, ref target, linearMag: true);
-    }
-
-    private void GenerateDisabledOverlayTexture()
-    {
-        using ImageSurface surface = new(
-            Format.Argb32,
-            Math.Max(1, Bounds.OuterWidthInt),
-            Math.Max(1, Bounds.OuterHeightInt));
-        using Context context = new(surface);
-        DirectorGuiTheme.RoundedRectangle(context, 0.5d, 0.5d, surface.Width - 1d, surface.Height - 1d,
-            DirectorGuiTheme.ScaledCornerRadius);
-        context.SetSourceRGBA(0.02d, 0.028d, 0.032d, 0.58d);
-        context.Fill();
-        generateTexture(surface, ref disabledOverlayTexture, linearMag: true);
-    }
-
-    private void DrawStepperIcon(Context context, double cx, double cy, bool plus, bool enabled)
-    {
-        DirectorTablerIcons.Draw(api, context, plus ? "plus" : "minus", cx, cy, GuiElement.scaled(14), enabled ? .88 : .27);
     }
 }
 
@@ -2952,6 +2865,12 @@ internal static class DirectorGuiComposerSliderMouseMoveCapturePatch
     [HarmonyPrefix]
     private static bool Prefix(GuiComposer __instance, MouseEvent mouse)
     {
+        if (GuiElementDirectorNumberInput.Captured is { } number)
+        {
+            number.OnMouseMove(__instance.Api, mouse);
+            mouse.Handled = true;
+            return false;
+        }
         GuiElementDirectorSlider? captured = DirectorSliderInputCapture.Captured;
         if (captured is null)
         {
@@ -2970,6 +2889,12 @@ internal static class DirectorGuiComposerSliderMouseUpCapturePatch
     [HarmonyPrefix]
     private static bool Prefix(GuiComposer __instance, MouseEvent mouse)
     {
+        if (GuiElementDirectorNumberInput.Captured is { } number)
+        {
+            number.OnMouseUp(__instance.Api, mouse);
+            mouse.Handled = true;
+            return false;
+        }
         if (DirectorButtonInputCapture.Captured is not null)
         {
             return true;

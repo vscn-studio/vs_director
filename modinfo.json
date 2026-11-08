@@ -7,7 +7,7 @@
   "authors": [
     "HansJack (VSCN-Studio)"
   ],
-  "version": "1.0.4-pre.1",
+  "version": "1.0.4-pre.2",
   "side": "universal",
   "dependencies": {
     "vsimgui": "1.2.7",

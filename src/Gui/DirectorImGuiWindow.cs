@@ -248,7 +248,7 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
     private void DrawDocked()
     {
         if (!Opened || nextPosition is not { } position || nextSize is not { } size) return;
-        bool nativeDock = id is "inspector" or "view" or "resource-browser";
+        bool nativeDock = id is "inspector" or "view" or "transform" or "resource-browser";
         bool nativeWindow = nativeDock;
         if (!nativeWindow) ImGui.SetCursorScreenPos(position);
         bool toolbar = id == "workspace-menu";
@@ -262,7 +262,7 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
         if (nativeDock)
         {
             if (focusNextFrame) { ImGui.SetNextWindowFocus(); focusNextFrame = false; }
-            if (id == "view" && workspace!.InspectorDockId != 0)
+            if (id is "view" or "transform" && workspace!.InspectorDockId != 0)
                 ImGui.SetNextWindowDockID(workspace.InspectorDockId, ImGuiCond.FirstUseEver);
             DirectorImGuiLayout.WindowSize(new Vector2(320, 500), new Vector2(220, form?.MinimumHeight ?? 140));
             visible = ImGui.Begin($"{title}###vsdirector-{id}", ref opened, ImGuiWindowFlags.NoBringToFrontOnFocus
@@ -478,7 +478,7 @@ internal sealed class DirectorImGuiForm
             finally { ImGui.PopID(); }
         }
     }
-    private void AddControl(Action draw)
+    internal void AddControl(Action draw)
     {
         Func<bool> visible = controlVisibility;
         controls.Add(() => { if (visible()) draw(); });
@@ -758,16 +758,22 @@ internal sealed class DirectorImGuiForm
     }
     public void Folder(string label, string value, ICoreClientAPI api, Action<string> changed) => Text(label, value, changed);
     public void Number(string label, double value, Action<double> changed)
+        => NumberStep(label, value, 1, changed);
+    public void NumberStep(string label, double value, float step, Action<double> changed)
     {
         FieldCount++;
         double number = value;
-        AddField(label, () => { if (ImGui.InputDouble("##value", ref number, 0, 0, "%.3f")) changed(number); });
+        AddField(label, () => { if (DirectorImGuiNumeric.Double("##value", ref number, step)) changed(number); });
     }
+    public void NumericText(string label, string value, Action<string> changed, float step = 1)
+        => NumberStep(label, double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double number)
+            && double.IsFinite(number) ? number : 0, step, v => changed(DirectorNumberFormatting.Format(v)));
     public void Slider(string label, double value, double min, double max, double step, Action<double> changed)
     {
         FieldCount++;
-        float number = (float)value;
-        AddField(label, () => { if (ImGui.SliderFloat("##value", ref number, (float)min, (float)max, $"%.{Math.Clamp((int)Math.Round(Math.Max(0, -Math.Log10(Math.Max(step, 0.000001)))), 0, 6)}f")) changed(number); });
+        double number = value;
+        AddField(label, () => { if (DirectorImGuiNumeric.Double("##value", ref number, (float)step, min, max,
+            $"%.{Math.Clamp((int)Math.Round(Math.Max(0, -Math.Log10(Math.Max(step, 0.000001)))), 0, 6)}f")) changed(number); });
     }
     public void Color(string label, string value, Action<string> changed) => Text(label, value, changed);
     public void Time(string label, TimeSpan value, Action<TimeSpan> changed, bool includeSeconds = false) => Text(label, value.ToString(), text => { if (TimeSpan.TryParse(text, out var parsed)) changed(parsed); });

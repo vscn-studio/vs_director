@@ -132,6 +132,7 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         ImGui.PopStyleVar();
         try
         {
+            workspace.TimelineDockId = ImGui.GetWindowDockID();
             ImGui.SetWindowFontScale(Scale);
             if (visible)
             {

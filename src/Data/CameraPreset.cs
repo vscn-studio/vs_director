@@ -34,6 +34,11 @@ public sealed class CameraPreset
 
     public float Fov { get; set; }
 
+    // Editor-only pivot offset in world axes; it does not affect the rendered view.
+    public double EditorPivotOffsetX { get; set; }
+    public double EditorPivotOffsetY { get; set; }
+    public double EditorPivotOffsetZ { get; set; }
+
     public bool PreviewVisible { get; set; }
 
     /// <summary>
@@ -69,6 +74,9 @@ public sealed class CameraPreset
             Pitch = Pitch,
             Roll = Roll,
             Fov = Fov,
+            EditorPivotOffsetX = EditorPivotOffsetX,
+            EditorPivotOffsetY = EditorPivotOffsetY,
+            EditorPivotOffsetZ = EditorPivotOffsetZ,
             PreviewVisible = PreviewVisible,
             QuickSlot = QuickSlot,
             CreatedUtc = CreatedUtc,
