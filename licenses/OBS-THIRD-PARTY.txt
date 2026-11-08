@@ -1,0 +1,21 @@
+VS Director OBS companion - distribution terms
+
+Original plugin code: Copyright (c) 2026 HansJack (VSCN-Studio), MIT.
+The original files remain available under MIT; this does not override the
+terms applicable to a binary linked with libobs. Distribute that combined
+plugin under GPL-2.0-or-later and provide its corresponding source and build
+scripts alongside it. See GPL-2.0.txt for the complete GPL version 2 text.
+The main VS Director mod is a separate process and remains MIT.
+
+OBS Studio / libobs 32.0.4
+Copyright: OBS Project contributors (individual notices remain in its source).
+License: GNU General Public License version 2 or later.
+Exact build revision: dcdbd2e9048ae66237fdab32dbba72b745b1b9c5
+Source: https://github.com/obsproject/obs-studio/tree/dcdbd2e9048ae66237fdab32dbba72b745b1b9c5
+Source archive: https://github.com/obsproject/obs-studio/archive/dcdbd2e9048ae66237fdab32dbba72b745b1b9c5.tar.gz
+
+The CI binary packages include corresponding-source/ with the exact original
+plugin source and build workflow used for that package, plus libobs interface
+headers. Obtain the separately installed OBS runtime, its complete source,
+submodules and platform build dependencies from the pinned upstream revision.
+No OBS runtime binary is bundled in these plugin packages.

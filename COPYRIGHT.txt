@@ -1,0 +1,13 @@
+VS Director
+Copyright (c) 2026 HansJack (VSCN-Studio)
+
+Original code, interface, and documentation are licensed under the MIT License.
+See LICENSE for the full license text. The companion OBS binary linked with
+libobs is distributed under GPL-2.0-or-later; see licenses/OBS-THIRD-PARTY.txt.
+
+Third-party components and resources remain the property of their respective
+copyright holders and are governed by their own licenses. See the notices in
+licenses/ for attribution and license locations.
+
+Vintage Story is a trademark of Anego Studios. This is an independent mod
+and is not affiliated with or endorsed by Anego Studios.

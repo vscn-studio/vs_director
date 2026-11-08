@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <VintageStoryPath Condition="'$(VintageStoryPath)' == '' and '$(VINTAGE_STORY)' != ''">$(VINTAGE_STORY)</VintageStoryPath>
+    <VintageStoryPath Condition="'$(VintageStoryPath)' == '' and Exists('$(MSBuildThisFileDirectory)..\Vintagestory\VintagestoryAPI.dll')">$(MSBuildThisFileDirectory)..\Vintagestory</VintageStoryPath>
+    <VSImGuiPath Condition="'$(VSImGuiPath)' == '' and '$(VSIMGUI)' != ''">$(VSIMGUI)</VSImGuiPath>
+    <VSImGuiPath Condition="'$(VSImGuiPath)' == '' and Exists('$(MSBuildThisFileDirectory)..\vsimgui_1.2.7\VSImGui.dll')">$(MSBuildThisFileDirectory)..\vsimgui_1.2.7</VSImGuiPath>
+  </PropertyGroup>
+</Project>

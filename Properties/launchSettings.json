@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Vintage Story Client": {
+      "commandName": "Executable",
+      "executablePath": "$(VINTAGE_STORY)\\Vintagestory.exe",
+      "commandLineArgs": "--tracelog --addModPath \"$(ProjectDir)bin\\Debug\\Mods\"",
+      "workingDirectory": "$(VINTAGE_STORY)"
+    }
+  }
+}

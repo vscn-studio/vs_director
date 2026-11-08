@@ -1,0 +1,16 @@
+{
+  "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
+  "type": "code",
+  "modid": "vsdirector",
+  "name": "VS Director",
+  "description": "Director workspace with camera paths, replay timeline elements, follow cameras, and video export through OBS or FFmpeg MP4.",
+  "authors": [
+    "HansJack (VSCN-Studio)"
+  ],
+  "version": "1.0.4-pre.1",
+  "side": "universal",
+  "dependencies": {
+    "vsimgui": "1.2.7",
+    "game": "1.22.3"
+  }
+}

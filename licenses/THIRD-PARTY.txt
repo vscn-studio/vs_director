@@ -1,0 +1,28 @@
+VS Director - third-party resources
+
+Tabler Icons 3.34.1
+Copyright (c) 2020-2024 Paweł Kuna
+License: MIT; full text: ../assets/vsdirector/fonts/tabler/LICENSE
+Source: https://github.com/tabler/tabler-icons/tree/v3.34.1
+Distributed resources: assets/vsdirector/fonts/tabler/tabler-icons.ttf and
+assets/vsdirector/textures/icons/tabler/*.svg.
+SVG resources include outline and filled variants. The font is registered
+under the local UI family alias "vsdirector-tabler".
+
+Noto Sans SC Regular
+Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+License: SIL Open Font License 1.1; full text:
+../assets/vsdirector/fonts/noto/OFL.txt
+Source: https://github.com/google/fonts/tree/main/ofl/notosanssc
+Distributed resource: assets/vsdirector/fonts/noto/NotoSansSC-Regular.ttf
+(static regular instance generated from the upstream variable font).
+
+Runtime dependencies
+Vintage Story and its game assemblies, Harmony, protobuf-net and cairo-sharp
+are supplied by the game installation and are not bundled in this mod ZIP.
+VSImGui and its ImGui-related assemblies are supplied by the separately
+installed VSImGui mod and are not bundled in this mod ZIP.
+OBS and FFmpeg are separately installed tools and are not bundled here.
+See OBS-THIRD-PARTY.txt for the companion OBS source plugin's dependency.
+
+The above third-party licenses apply to their respective components only.
