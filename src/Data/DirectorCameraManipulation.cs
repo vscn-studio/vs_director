@@ -5,6 +5,18 @@ namespace VSDirector.Data;
 /// <summary>Camera editing in world axes. World positions stay in double precision.</summary>
 public static class DirectorCameraManipulation
 {
+    /// <summary>One signed turn for camera editing; path/animation winding is left intact.</summary>
+    public static float NormalizeEditorAngle(double degrees)
+    {
+        if (!double.IsFinite(degrees)) return 0;
+        double angle = degrees % 360;
+        if (angle >= 180) angle -= 360;
+        if (angle < -180) angle += 360;
+        float rounded = (float)angle;
+        // Rounding to the camera's float storage can reach the upper boundary.
+        return rounded >= 180 ? -180 : rounded == 0 ? 0 : rounded;
+    }
+
     public static (Vector3 Right, Vector3 Up, Vector3 Back) Basis(CameraPreset camera)
     {
         double yaw = camera.Yaw * Math.PI / 180, pitch = camera.Pitch * Math.PI / 180;
@@ -15,6 +27,15 @@ public static class DirectorCameraManipulation
         float roll = camera.Roll * MathF.PI / 180;
         return (right * MathF.Cos(roll) - up * MathF.Sin(roll),
             right * MathF.Sin(roll) + up * MathF.Cos(roll), back);
+    }
+
+    public static (Vector3 Right, Vector3 Up, Vector3 Back) CameraHeadBasis(CameraPreset camera)
+    {
+        var basis = Basis(camera);
+        // Native shooting views use world-up before applying roll. The other
+        // Euler pitch hemisphere describes the same sightline with opposite axes.
+        return Math.Cos(camera.Pitch * Math.PI / 180d) < 0
+            ? (-basis.Right, -basis.Up, basis.Back) : basis;
     }
 
     public static CameraPreset Translate(CameraPreset original, Vector3 offset, bool pivotOnly)
@@ -31,7 +52,7 @@ public static class DirectorCameraManipulation
         return result;
     }
 
-    public static CameraPreset Rotate(CameraPreset original, Vector3 axis, float radians)
+    public static CameraPreset Rotate(CameraPreset original, Vector3 axis, float radians, CameraPreset? angleReference = null)
     {
         var result = original.DeepClone();
         if (!Finite(axis) || axis.LengthSquared() < 1e-8f || !float.IsFinite(radians)) return result;
@@ -41,13 +62,23 @@ public static class DirectorCameraManipulation
         Vector3 right = Vector3.Normalize(Vector3.Transform(basis.Right, rotation));
         double yaw = Math.Atan2(back.X, back.Z);
         double pitch = Math.Atan2(-back.Y, Math.Sqrt((double)back.X * back.X + (double)back.Z * back.Z));
-        // At a vertical view the right vector still defines a stable heading.
-        if (Math.Abs(Math.Cos(pitch)) < 1e-6) yaw = Math.Atan2(-right.Z, right.X);
+        // At a vertical view yaw and roll are coupled. Retain the heading and
+        // recover the remaining rotation from the right vector.
+        var reference = angleReference ?? original;
+        if (Math.Abs(Math.Cos(pitch)) < 1e-6) yaw = reference.Yaw * Math.PI / 180d;
         Vector3 flatRight = new((float)Math.Cos(yaw), 0, (float)-Math.Sin(yaw));
         Vector3 flatUp = Vector3.Cross(back, flatRight);
-        result.Yaw = (float)(yaw * 180 / Math.PI);
-        result.Pitch = (float)(pitch * 180 / Math.PI);
-        result.Roll = (float)(-Math.Atan2(Vector3.Dot(right, flatUp), Vector3.Dot(right, flatRight)) * 180 / Math.PI);
+        double roll = -Math.Atan2(Vector3.Dot(right, flatUp), Vector3.Dot(right, flatRight)) * 180 / Math.PI;
+        double pitchDegrees = pitch * 180 / Math.PI, yawDegrees = yaw * 180 / Math.PI;
+        // Both Euler branches describe the same full camera frame. Keep the
+        // closest branch before wrapping each component by whole turns. A tiny
+        // drag must not select another branch with a compensating 180-degree roll.
+        var first = NearReference(pitchDegrees, yawDegrees, roll);
+        var second = NearReference(180 - pitchDegrees, yawDegrees + 180, roll + 180);
+        var angles = Distance(first) <= Distance(second) ? first : second;
+        result.Pitch = NormalizeEditorAngle(angles.Pitch);
+        result.Yaw = NormalizeEditorAngle(angles.Yaw);
+        result.Roll = NormalizeEditorAngle(angles.Roll);
         Vector3 oldOffset = new((float)original.EditorPivotOffsetX, (float)original.EditorPivotOffsetY,
             (float)original.EditorPivotOffsetZ);
         Vector3 newOffset = Vector3.Transform(oldOffset, rotation);
@@ -58,13 +89,22 @@ public static class DirectorCameraManipulation
         result.EditorPivotOffsetY = newOffset.Y;
         result.EditorPivotOffsetZ = newOffset.Z;
         return result;
+
+        (double Pitch, double Yaw, double Roll) NearReference(double p, double y, double r)
+            => (Unwrap(p, reference.Pitch), Unwrap(y, reference.Yaw), Unwrap(r, reference.Roll));
+        static double Unwrap(double value, double target) => value + 360 * Math.Round((target - value) / 360);
+        double Distance((double Pitch, double Yaw, double Roll) value)
+            => Math.Pow(value.Pitch - reference.Pitch, 2) + Math.Pow(value.Yaw - reference.Yaw, 2)
+                + Math.Pow(value.Roll - reference.Roll, 2);
     }
 
     public static CameraPreset WithEulerRotation(CameraPreset original, float pitch, float yaw, float roll)
     {
         var result = original.DeepClone();
         if (!float.IsFinite(pitch) || !float.IsFinite(yaw) || !float.IsFinite(roll)) return result;
-        result.Pitch = pitch; result.Yaw = yaw; result.Roll = roll;
+        result.Pitch = NormalizeEditorAngle(pitch);
+        result.Yaw = NormalizeEditorAngle(yaw);
+        result.Roll = NormalizeEditorAngle(roll);
         var before = Basis(original);
         var after = Basis(result);
         // Rotate the offset with the same change of basis as the camera head.

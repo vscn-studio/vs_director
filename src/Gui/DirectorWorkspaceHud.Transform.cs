@@ -58,13 +58,16 @@ internal sealed partial class DirectorWorkspaceHud
             if (axis == 1) transformPose!.Y = value + dy;
             if (axis == 2) transformPose!.Z = value + dz;
         });
-        Row("rotation", [pose.Pitch, pose.Yaw, pose.Roll], (axis, value) =>
+        Row("rotation", [DirectorCameraManipulation.NormalizeEditorAngle(pose.Pitch),
+            DirectorCameraManipulation.NormalizeEditorAngle(pose.Yaw),
+            DirectorCameraManipulation.NormalizeEditorAngle(pose.Roll)], (axis, value) =>
         {
             var angles = transformPose!;
+            float angle = DirectorCameraManipulation.NormalizeEditorAngle(value);
             transformPose = DirectorCameraManipulation.WithEulerRotation(angles,
-                axis == 0 ? (float)value : angles.Pitch,
-                axis == 1 ? (float)value : angles.Yaw,
-                axis == 2 ? (float)value : angles.Roll);
+                axis == 0 ? angle : angles.Pitch,
+                axis == 1 ? angle : angles.Yaw,
+                axis == 2 ? angle : angles.Roll);
         });
         Row("pivot", [displayed.Item1 + pose.EditorPivotOffsetX, displayed.Item2 + pose.EditorPivotOffsetY,
             displayed.Item3 + pose.EditorPivotOffsetZ], (axis, value) =>

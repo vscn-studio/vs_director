@@ -130,8 +130,8 @@ internal sealed partial class DirectorWorkspaceHud
     {
         var basis = CameraHeadBasis(pose);
         var origin = new Vec3d(pose.X, pose.Y + pose.Dimension * 32768d, pose.Z);
-        float size = CameraModelScale(origin);
-        Vec3d At(Vector3 point) => Add(origin, (basis.Right * point.X + basis.Up * point.Y + basis.Back * point.Z) * size);
+        // The outline is measured in world blocks, just like nearby geometry.
+        Vec3d At(Vector3 point) => Add(origin, basis.Right * point.X + basis.Up * point.Y + basis.Back * point.Z);
         foreach (var edge in CameraOutline)
             CameraWorldLine(draw, At(edge.A), At(edge.B), color, id);
         if (ProjectCameraPoint(origin, out var screen))
@@ -142,14 +142,7 @@ internal sealed partial class DirectorWorkspaceHud
     }
 
     private static (Vector3 Right, Vector3 Up, Vector3 Back) CameraHeadBasis(CameraPreset pose)
-    {
-        var basis = DirectorCameraManipulation.Basis(pose);
-        // The game's normal pitch is centred on 180 degrees. Its world-up
-        // camera stays upright there, whereas a raw Euler basis flips both
-        // image axes. Match that frame without changing the shooting pose.
-        return Math.Cos(pose.Pitch * Math.PI / 180d) < 0
-            ? (-basis.Right, -basis.Up, basis.Back) : basis;
-    }
+        => DirectorCameraManipulation.CameraHeadBasis(pose);
 
     private static (Vector3 A, Vector3 B)[] CreateCameraOutline()
     {
@@ -333,15 +326,6 @@ internal sealed partial class DirectorWorkspaceHud
         return double.IsFinite(units) && units > 0 ? (float)units : .01f;
     }
 
-    // Keep the camera itself one block across through normal viewing distances.
-    // Bound extreme screen sizes so close-ups cannot fill the viewport and
-    // distant cameras remain identifiable without looking like nearby objects.
-    private float CameraModelScale(Vec3d point)
-    {
-        float pixel = CameraWorldUnitsPerPixel(point) * DirectorImGuiTheme.Scale;
-        return Math.Clamp(1, pixel * 24, pixel * 112);
-    }
-
     // Editor controls stay at a comfortable screen size independently of the model.
     private float CameraHandleRadius(Vec3d point)
         => CameraWorldUnitsPerPixel(point) * 60 * DirectorImGuiTheme.Scale;
@@ -349,6 +333,7 @@ internal sealed partial class DirectorWorkspaceHud
     private void DrawCameraRotationArc(ImDrawListPtr draw, Vec3d pivot, float radius)
     {
         float angle = IsControlDown() ? MathF.Round(cameraDragAngle / (MathF.PI / 12)) * (MathF.PI / 12) : cameraDragAngle;
+        angle = DirectorCameraManipulation.NormalizeEditorAngle(angle * 180 / MathF.PI) * MathF.PI / 180;
         int segments = Math.Clamp((int)(Math.Abs(angle) * 32), 1, 256);
         Vector3 Direction(float amount) => Vector3.Transform(cameraDragStartDirection,
             Quaternion.CreateFromAxisAngle(cameraDragAxis, amount));
@@ -365,12 +350,13 @@ internal sealed partial class DirectorWorkspaceHud
         if (axis is < 0 or > 2) return;
         var panel = layout.Panel("preview");
         float scale = DirectorImGuiTheme.Scale;
-        float value = axis == 0 ? pose.Pitch : axis == 1 ? pose.Yaw : pose.Roll;
+        float value = DirectorCameraManipulation.NormalizeEditorAngle(axis == 0 ? pose.Pitch : axis == 1 ? pose.Yaw : pose.Roll);
         string text = FormattableString.Invariant($"{"XYZ"[axis]}  {value:0.0}°");
         if (cameraDragAxisIndex >= 0)
         {
             float degrees = cameraDragAngle * 180 / MathF.PI;
             if (IsControlDown()) degrees = MathF.Round(degrees / 15) * 15;
+            degrees = DirectorCameraManipulation.NormalizeEditorAngle(degrees);
             text = Lang.Get("vsdirector:camera-rotation-feedback", "XYZ"[axis],
                 FormattableString.Invariant($"{degrees:+0.0;-0.0;0.0}"), FormattableString.Invariant($"{value:0.0}"));
         }
@@ -487,7 +473,7 @@ internal sealed partial class DirectorWorkspaceHud
                 Vector3.Dot(cameraDragPreviousDirection, current));
             cameraDragPreviousDirection = current;
             float angle = snap ? MathF.Round(cameraDragAngle / (MathF.PI / 12)) * (MathF.PI / 12) : cameraDragAngle;
-            cameraDragPose = DirectorCameraManipulation.Rotate(original, cameraDragAxis, angle);
+            cameraDragPose = DirectorCameraManipulation.Rotate(original, cameraDragAxis, angle, cameraDragPose);
         }
         else if (cameraDragAxisIndex >= 3)
         {

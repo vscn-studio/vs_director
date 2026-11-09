@@ -44,6 +44,32 @@ internal static partial class DirectorImGuiProbe
                 Near(origin[row] * origin[other] + origin[row + 4] * origin[other + 4] + origin[row + 8] * origin[other + 8], row == other ? 1 : 0);
         }
 
+        // Exercise the actual editor -> Euler -> preview matrix chain. A basis
+        // test alone can miss rotating the silhouette instead of the shot.
+        foreach (float pitch in new[] { 180f, 200f, 560f, -160f })
+        foreach (float yaw in new[] { 100f, 460f })
+        foreach (float roll in new[] { 0f, 30f, 380f })
+        foreach (var axis in new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ })
+        foreach (float angle in new[] { 0f, .0001f, -.0001f, .4f })
+        {
+            var source = new CameraPreset { Pitch = pitch, Yaw = yaw, Roll = roll };
+            var edited = DirectorCameraManipulation.Rotate(source, axis, angle);
+            double[] Matrix(CameraPreset camera)
+                => (((double[], double[], Vec3f))matrices.Invoke(null,
+                    [new DirectorOffscreenCameraPose(0, 0, 0, 0, camera.Yaw, camera.Pitch, camera.Roll, 70)])!).Item2;
+            var before = Matrix(source);
+            var after = Matrix(edited);
+            var rotation = Quaternion.CreateFromAxisAngle(axis, angle);
+            for (int row = 0; row < 3; row++)
+            {
+                var expected = Vector3.Transform(new((float)before[row], (float)before[row + 4], (float)before[row + 8]), rotation);
+                var actual = new Vector3((float)after[row], (float)after[row + 4], (float)after[row + 8]);
+                if (Vector3.Distance(expected, actual) > .00002f)
+                    throw new Exception($"Rotation changed preview image axes at {pitch}/{yaw}/{roll}, axis {axis}, angle {angle}.");
+            }
+        }
+        Console.WriteLine("PASS editor rotation preserves actual preview matrices at 200/100 and multi-turn Euler values, including zero and tiny drags on XYZ");
+
         // Real engine culler and patched visibility: chunks occluded in the
         // editor must still appear when an offscreen camera faces them.
         var culler = new FrustumCulling { lod0BiasSq = 4096, shadowRangeX = 128, shadowRangeZ = 128 };

@@ -130,6 +130,32 @@ internal static partial class DirectorImGuiProbe
                 if (p.X <= 100 || p.Y <= 100 || edge.X + 180 > 960 || edge.Y + 24 > 640)
                     throw new Exception("Angle feedback does not stay beside the mouse and within the viewport.");
             }
+            // The body has fixed world dimensions. Undoing perspective on the
+            // front body edge must recover the same width across the old screen
+            // size thresholds, including close-ups and distant views.
+            float? worldWidth = null;
+            foreach (float scale in new[] { 1f, 1.5f, 2f })
+            {
+                RuntimeEnv.GUIScale = scale;
+                float previousWidth = float.PositiveInfinity;
+                foreach (float distance in new[] { .5f, 1f, 1.4f, 1.9f, 2.7f, 2.9f, 4f, 6.5f, 9f, 13f, 14f, 100f, 1000f })
+                {
+                    Configure(Vector3.UnitZ, distance: distance);
+                    Clear(); ImGui.NewFrame();
+                    Call("DrawCameraHead", ImGui.GetForegroundDrawList(), Guid.NewGuid(), new CameraPreset(), 0xffffffffu);
+                    ImGui.Render();
+                    var edge = lines[0]!;
+                    Vector2 a = (Vector2)AccessTools.Property(edge.GetType(), "A").GetValue(edge)!;
+                    Vector2 b = (Vector2)AccessTools.Property(edge.GetType(), "B").GetValue(edge)!;
+                    float width = Vector2.Distance(a, b);
+                    float recovered = width * (distance + .12f);
+                    worldWidth ??= recovered;
+                    if (width >= previousWidth || Math.Abs(recovered / worldWidth.Value - 1) > .002f)
+                        throw new Exception($"Camera body changed world size with distance or UI scale: distance={distance}, scale={scale}, width={width}, recovered={recovered}.");
+                    previousWidth = width;
+                }
+            }
+            Console.WriteLine("PASS camera body retains fixed world dimensions from 0.5 to 1000 blocks at 100/150/200% UI scale; perspective size decreases naturally");
             // Close and distant rotation handles must keep a usable screen size.
             foreach (float scale in new[] { 1f, 1.5f, 2f })
             foreach (float distance in new[] { .05f, 1f, 4f, 100000f })

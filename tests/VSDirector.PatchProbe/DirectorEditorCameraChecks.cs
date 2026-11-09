@@ -355,7 +355,6 @@ internal static partial class DirectorImGuiProbe
         AccessTools.Field(hudType, "capi").SetValue(hud, api);
         var project = AccessTools.Method(hudType, "ProjectCameraPoint");
         var units = AccessTools.Method(hudType, "CameraWorldUnitsPerPixel");
-        var modelScale = AccessTools.Method(hudType, "CameraModelScale");
         var handleRadius = AccessTools.Method(hudType, "CameraHandleRadius");
         float savedScale = RuntimeEnv.GUIScale;
         Vector2 Project(Vec3d point)
@@ -390,23 +389,23 @@ internal static partial class DirectorImGuiProbe
                         Vector2 edge = Project(new(point.X + step * 50, point.Y, -distance));
                         if (Math.Abs(Vector2.Distance(center, edge) - 50) > .1)
                             throw new Exception($"Editor camera pixel scale changed with distance/FOV/viewport/position: {distance}, {fov}, {width}, {horizontal}/{vertical}.");
-                        double size = (float)modelScale.Invoke(hud, [point])!;
                         double radius = (float)handleRadius.Invoke(hud, [point])!;
-                        double modelPixels = size / step / uiScale;
-                        if (modelPixels < 24 - .01 || modelPixels > 112 + .01
-                            || Math.Abs(radius / step / uiScale - 60) > .01)
-                            throw new Exception($"Camera screen bounds or constant handle size failed: model={modelPixels}, handle={radius / step / uiScale}, distance={distance}.");
-                        double naturalPixels = 1 / step / uiScale;
-                        if (naturalPixels >= 24 && naturalPixels <= 112 && Math.Abs(size - 1) > .0001)
-                            throw new Exception("Camera model lost its one-block world size within normal viewing distances.");
+                        if (Math.Abs(radius / step / uiScale - 60) > .01)
+                            throw new Exception($"Constant handle size failed: handle={radius / step / uiScale}, distance={distance}.");
                         foreach (Vector3 corner in outline)
-                            Project(new(point.X + corner.X * size, point.Y + corner.Y * size, point.Z + corner.Z * size));
+                        {
+                            var worldCorner = new Vec3d(point.X + corner.X, point.Y + corner.Y, point.Z + corner.Z);
+                            object?[] cornerArgs = [worldCorner, null];
+                            bool visible = (bool)project.Invoke(hud, cornerArgs)!;
+                            if (visible != (worldCorner.Z < 0))
+                                throw new Exception("Fixed-size camera outline has incorrect close-up/behind-eye projection.");
+                        }
                         object?[] behind = [new Vec3d(worldX, 0, distance), null];
                         if ((bool)project.Invoke(hud, behind)!) throw new Exception("Editor camera behind the eye remains visible/pickable.");
                     }
                 }
             }
-            Console.WriteLine("PASS simplified one-block camera with bounded close/far screen sizes and constant screen-sized handles; DPI 100/150/200%, 0.05-100000 blocks, off-centre/large coordinates, FOVs/viewports and behind-eye rejection");
+            Console.WriteLine("PASS simplified one-block camera projection and constant screen-sized handles; DPI 100/150/200%, 0.05-100000 blocks, off-centre/large coordinates, FOVs/viewports and behind-eye rejection");
         }
         finally
         {

@@ -17,6 +17,7 @@ internal static partial class DirectorImGuiProbe
         RuntimeEnv.GUIScale = 1;
         io.DisplaySize = new(960, 640);
         double value = 9.125;
+        bool rotation = false;
         bool finished = false;
         Vector2 min = default, max = default;
         void Frame(Vector2 pointer, bool down)
@@ -28,8 +29,11 @@ internal static partial class DirectorImGuiProbe
             ImGui.Begin("Transform number probe", ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDecoration);
             ImGui.SetWindowFontScale(1);
             ImGui.SetNextItemWidth(200);
+            // Match the rotation row: present one signed turn and wrap the edit.
+            if (rotation) value = VSDirector.Data.DirectorCameraManipulation.NormalizeEditorAngle(value);
             object?[] args = ["##transform", value, 1f, 0xff6161f2u, "X 轴向枢轴", false];
             method.Invoke(null, args); value = (double)args[1]!; finished = (bool)args[5]!;
+            if (rotation) value = VSDirector.Data.DirectorCameraManipulation.NormalizeEditorAngle(value);
             min = ImGui.GetItemRectMin(); max = ImGui.GetItemRectMax();
             ImGui.End(); ImGui.Render();
         }
@@ -90,11 +94,52 @@ internal static partial class DirectorImGuiProbe
         Frame(new(350, 150), true);
         if (value != -2.5 || !finished) throw new Exception("Transform text did not commit when clicking outside.");
         Frame(new(350, 150), false); Idle();
+        rotation = true;
+        value = 179; Idle(); Click(Arrow(1));
+        if (value != -180 || !finished) throw new Exception("Rotation increment stopped or jumped at +180.");
+        Idle(); Click(Arrow(-1));
+        if (value != 179 || !finished) throw new Exception("Rotation decrement stopped or jumped at -180.");
+        foreach (int direction in new[] { -1, 1 })
+        foreach (ImGuiKey modifier in new[] { ImGuiKey.None, ImGuiKey.LeftCtrl, ImGuiKey.LeftShift })
+        {
+            double[] Trace(bool wrap)
+            {
+                rotation = wrap; value = direction * 179; Idle();
+                Vector2 start = Center(); Frame(start, false); Frame(start, true);
+                if (modifier != ImGuiKey.None) io.AddKeyEvent(modifier, true);
+                Frame(start, true);
+                var values = new List<double>();
+                for (int pixels = 13; pixels <= 390; pixels += 13)
+                {
+                    Frame(start + new Vector2(direction * pixels, 0), true);
+                    values.Add(value);
+                }
+                Frame(start + new Vector2(direction * 390, 0), false);
+                if (!finished) throw new Exception("Wrapped rotation drag did not commit.");
+                if (modifier != ImGuiKey.None) io.AddKeyEvent(modifier, false);
+                Idle(); return values.ToArray();
+            }
+            var raw = Trace(false); var wrapped = Trace(true);
+            for (int i = 0; i < raw.Length; i++)
+                if (Math.Abs(wrapped[i] - VSDirector.Data.DirectorCameraManipulation.NormalizeEditorAngle(raw[i])) > .002)
+                    throw new Exception($"Rotation drag lost movement at the wrap boundary: {direction}/{modifier}, {raw[i]} -> {wrapped[i]}.");
+        }
+        foreach (string input in new[] { "1080.5", "-1080.5" })
+        {
+            rotation = true; value = 5000; Idle();
+            Click(Center()); Frame(Center(), false); Frame(Center(), false);
+            io.AddInputCharactersUTF8(input); Frame(Center(), false);
+            io.AddKeyEvent(ImGuiKey.Enter, true); Frame(Center(), false);
+            if (value != (input[0] == '-' ? -.5 : .5) || !finished)
+                throw new Exception("Multi-turn rotation text did not wrap and commit: " + value);
+            io.AddKeyEvent(ImGuiKey.Enter, false); Idle();
+        }
+        rotation = false;
         value = 9.125; Frame(Center(), false); Frame(Center(), false);
         capture("transform-number-hover");
         RuntimeEnv.GUIScale = savedScale;
         io.DisplaySize = savedDisplay;
-        Console.WriteLine("PASS transform hover arrows/click stepping, drag from value or arrows, Ctrl/Shift, large coordinates, single-click text input and Enter/outside commit");
+        Console.WriteLine("PASS transform arrows/drag/text, Ctrl/Shift, large coordinates, signed rotation wrap through repeated turns in both directions and text commit");
     }
 
     private static void CheckLegacyNumericBinding(Assembly assembly, ICoreClientAPI api)
