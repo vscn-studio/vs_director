@@ -205,7 +205,7 @@ internal sealed partial class DirectorWorkspaceHud
         double x = label + (time * ReplayTimelineTicksPerSecond - scroll) * pixels;
         if (x < label || x > width) return;
         rmlTimeline!.Shape("key-" + id, "timeline-key " + role + (icon == "square-rotated-filled" ? " dot" : "")
-            + (selected ? " selected" : ""), x - 10, rowY + rowHeight / 2 - 10, 20, 20, icon: icon);
+            + (selected ? " selected" : ""), x - 12, rowY + rowHeight / 2 - 12, 24, 24, icon: icon);
     }
 
     private void RmlTimelineReorder(int index, int first, int visible, double width)

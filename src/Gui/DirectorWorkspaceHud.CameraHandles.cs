@@ -1,11 +1,87 @@
 using System.Numerics;
 using ImGuiNET;
 using Vintagestory.API.MathTools;
+using VSDirector.Data;
 
 namespace VSDirector.Gui;
 
 internal sealed partial class DirectorWorkspaceHud
 {
+    private Vector3 CameraScreenRotationAxis()
+    {
+        var m = capi.Render.PerspectiveViewMat;
+        return Vector3.Normalize(new((float)m[2], (float)m[6], (float)m[10]));
+    }
+
+    private float CameraGizmoRadius(CameraPreset pose)
+    {
+        Vec3d pivot = CameraPivot(pose);
+        float units = CameraWorldUnitsPerPixel(pivot), scale = DirectorImGuiTheme.Scale;
+        float pixels = CameraHandleRadius(pivot) / units;
+        if (!ProjectCameraPoint(pivot, out var center)) return units * pixels;
+        var basis = CameraHeadBasis(pose);
+        Vec3d origin = new(pose.X, pose.Y + pose.Dimension * 32768d, pose.Z);
+        foreach (var edge in CameraOutline)
+        foreach (var point in new[] { edge.A, edge.B })
+            if (ProjectCameraPoint(Add(origin, basis.Right * point.X + basis.Up * point.Y + basis.Back * point.Z), out var screen))
+                pixels = Math.Max(pixels, Vector2.Distance(center, screen) + 18 * scale);
+        return units * pixels;
+    }
+
+    private bool ProjectCameraHandlePoint(Vec3d pivot, Vec3d point, out Vector2 screen)
+    {
+        // Editor gizmos use an orthographic frame at the pivot. Their shape
+        // and picking agree even when the outline is very close to the editor eye.
+        if (!ProjectCameraPoint(pivot, out screen)) return false;
+        var m = capi.Render.PerspectiveViewMat;
+        double x = point.X - pivot.X, y = point.Y - pivot.Y, z = point.Z - pivot.Z;
+        float units = CameraWorldUnitsPerPixel(pivot);
+        screen += new Vector2((float)(m[0] * x + m[4] * y + m[8] * z),
+            (float)-(m[1] * x + m[5] * y + m[9] * z)) / units;
+        return float.IsFinite(screen.X) && float.IsFinite(screen.Y);
+    }
+
+    private bool CameraRotationPointerDirection(int x, int y, Vec3d pivot, Vector3 axis, out Vector3 direction)
+    {
+        direction = default;
+        if (!ProjectCameraPoint(pivot, out var center)) return false;
+        var m = capi.Render.PerspectiveViewMat;
+        Vector3 right = new((float)m[0], (float)m[4], (float)m[8]);
+        Vector3 up = new((float)m[1], (float)m[5], (float)m[9]);
+        Vector3 view = CameraScreenRotationAxis();
+        float denominator = Vector3.Dot(view, axis);
+        if (Math.Abs(denominator) < .0001f) return false;
+        Vector3 point = right * (x - center.X) - up * (y - center.Y);
+        point -= view * (Vector3.Dot(point, axis) / denominator);
+        if (point.LengthSquared() < .0001f) return false;
+        direction = Vector3.Normalize(point);
+        return true;
+    }
+
+    private void CameraHandleLine(ImDrawListPtr draw, Vec3d pivot, Vec3d a, Vec3d b, uint color, int axis, float thickness)
+    {
+        if (!ProjectCameraHandlePoint(pivot, a, out var start) || !ProjectCameraHandlePoint(pivot, b, out var end)) return;
+        draw.AddLine(start, end, color, thickness * DirectorImGuiTheme.Scale);
+        if (axis >= 0) cameraToolLines.Add(new(start, end, axis, Guid.Empty));
+    }
+
+    private void DrawCameraScreenRotationRing(ImDrawListPtr draw, Vec3d pivot, float radius)
+    {
+        if (!ProjectCameraPoint(pivot, out var center)) return;
+        float pixels = radius / CameraWorldUnitsPerPixel(pivot);
+        uint color = cameraDragAxisIndex == ScreenRotationAxis || cameraHoverAxis == ScreenRotationAxis
+            ? 0xffffc982u : 0xffff9a42u;
+        const int segments = 128;
+        for (int i = 0; i < segments; i++)
+        {
+            Vector2 Point(int index) => center + new Vector2(MathF.Cos(index * MathF.Tau / segments),
+                MathF.Sin(index * MathF.Tau / segments)) * pixels;
+            Vector2 a = Point(i), b = Point(i + 1);
+            draw.AddLine(a, b, color, 2.5f * DirectorImGuiTheme.Scale);
+            cameraToolLines.Add(new(a, b, ScreenRotationAxis, Guid.Empty));
+        }
+    }
+
     private Vector3 CameraViewDirection(Vec3d pivot)
     {
         // Derive the editor eye from the current render view, independently of the player.
@@ -20,6 +96,12 @@ internal sealed partial class DirectorWorkspaceHud
 
     private void DrawCameraRotationRing(ImDrawListPtr draw, Vec3d pivot, float radius, int axis, uint color, Vector3 view)
     {
+        DrawCameraRotationRingLayer(draw, pivot, radius, axis, color, view, false);
+        DrawCameraRotationRingLayer(draw, pivot, radius, axis, color, view, true);
+    }
+
+    private void DrawCameraRotationRingLayer(ImDrawListPtr draw, Vec3d pivot, float radius, int axis, uint color, Vector3 view, bool frontLayer)
+    {
         Vector3 normal = CameraAxis(axis), u = CameraAxis((axis + 1) % 3), v = CameraAxis((axis + 2) % 3);
         Vector3 front = view - normal * Vector3.Dot(view, normal);
         bool faceOn = front.LengthSquared() < .001f;
@@ -32,28 +114,21 @@ internal sealed partial class DirectorWorkspaceHud
         }
         float facingAngle = MathF.Atan2(Vector3.Dot(front, v), Vector3.Dot(front, u));
         Vector3 Radial(float a) => u * MathF.Cos(a) + v * MathF.Sin(a);
-        bool active = cameraDragAxisIndex == axis;
-        float markerAngle = facingAngle + MathF.PI / 4;
-        if (active)
-        {
-            float angle = IsControlDown() ? MathF.Round(cameraDragAngle / (MathF.PI / 12)) * (MathF.PI / 12) : cameraDragAngle;
-            Vector3 current = Vector3.Transform(cameraDragStartDirection, Quaternion.CreateFromAxisAngle(normal, angle));
-            markerAngle = MathF.Atan2(Vector3.Dot(current, v), Vector3.Dot(current, u));
-        }
+        float markerAngle = facingAngle;
         const int steps = 96;
         float sweep = faceOn ? MathF.Tau : MathF.PI;
-        float start = facingAngle - sweep / 2;
+        if (faceOn && !frontLayer) return;
+        float start = facingAngle - MathF.PI / 2 + (frontLayer ? 0 : MathF.PI);
+        uint arcColor = frontLayer ? color : DarkCameraRingColor(color);
         for (int step = 0; step < steps; step++)
         {
             float a = start + step * sweep / steps, b = start + (step + 1) * sweep / steps;
-            CameraWorldLine(draw, Add(pivot, Radial(a) * radius), Add(pivot, Radial(b) * radius), color,
-                Guid.Empty, axis);
+            CameraHandleLine(draw, pivot, Add(pivot, Radial(a) * radius), Add(pivot, Radial(b) * radius), arcColor,
+                axis, frontLayer ? 2.5f : 1);
         }
-        Vector3 marker = Radial(markerAngle);
-        // Only the visible half can be picked; hidden rear arcs do not intercept the mouse.
-        if ((faceOn || Vector3.Dot(marker, view) >= -.001f)
-            && ProjectCameraPoint(Add(pivot, Radial(markerAngle - .01f) * radius), out var before)
-            && ProjectCameraPoint(Add(pivot, Radial(markerAngle + .01f) * radius), out var after))
+        if (!frontLayer) return;
+        if (ProjectCameraHandlePoint(pivot, Add(pivot, Radial(markerAngle - .01f) * radius), out var before)
+            && ProjectCameraHandlePoint(pivot, Add(pivot, Radial(markerAngle + .01f) * radius), out var after))
         {
             // Both tips stay on the arc while the solid double cone stays straight.
             float scale = DirectorImGuiTheme.Scale;
@@ -64,16 +139,20 @@ internal sealed partial class DirectorWorkspaceHud
             // same screen size without pulling either tip away from the arc.
             for (int iteration = 0; iteration < 4; iteration++)
             {
-                if (!ProjectCameraPoint(Add(pivot, Radial(markerAngle - halfAngle) * radius), out var left)
-                    || !ProjectCameraPoint(Add(pivot, Radial(markerAngle + halfAngle) * radius), out var right)) return;
+                if (!ProjectCameraHandlePoint(pivot, Add(pivot, Radial(markerAngle - halfAngle) * radius), out var left)
+                    || !ProjectCameraHandlePoint(pivot, Add(pivot, Radial(markerAngle + halfAngle) * radius), out var right)) return;
                 float span = Vector2.Distance(left, right);
                 if (span < .001f) return;
                 halfAngle = Math.Clamp(halfAngle * (30 * scale / span), .001f, MathF.PI / 4);
             }
-            float thickness = CameraWorldUnitsPerPixel(Add(pivot, marker * radius)) * 5 * scale;
+            float thickness = CameraWorldUnitsPerPixel(pivot) * 5 * scale;
             DrawCameraRotationHandle(draw, pivot, radius, axis, markerAngle, halfAngle, thickness, color);
         }
     }
+
+    private static uint DarkCameraRingColor(uint color)
+        => (uint)((color & 0xff) * .45f) | (uint)(((color >> 8) & 0xff) * .45f) << 8
+            | (uint)(((color >> 16) & 0xff) * .45f) << 16 | 0x70000000;
 
     private static Vec3d CameraRotationHandlePoint(Vec3d pivot, float radius, int axis,
         float angle, float halfAngle, float thickness, float along, float around)
@@ -97,7 +176,7 @@ internal sealed partial class DirectorWorkspaceHud
         var points = new Vector2[segments + 1, sides];
         for (int i = 0; i <= segments; i++)
         for (int j = 0; j < sides; j++)
-            if (!ProjectCameraPoint(CameraRotationHandlePoint(pivot, radius, axis, angle, halfAngle,
+            if (!ProjectCameraHandlePoint(pivot, CameraRotationHandlePoint(pivot, radius, axis, angle, halfAngle,
                 thickness, 2f * i / segments - 1, j * MathF.Tau / sides), out points[i, j])) return;
         var flags = draw.Flags;
         draw.Flags &= ~ImDrawListFlags.AntiAliasedFill;
@@ -131,27 +210,27 @@ internal sealed partial class DirectorWorkspaceHud
         Vec3d At(float x, float y) => Add(pivot, (u * x + v * y) * length);
         int handle = normalAxis + 3;
         bool highlighted = cameraDragAxisIndex == handle || cameraDragAxisIndex < 0 && cameraHoverAxis == handle;
-        DrawCameraHandleQuad(draw, [At(.30f, .30f), At(.58f, .30f), At(.58f, .58f), At(.30f, .58f)],
+        DrawCameraHandleQuad(draw, pivot, [At(.30f, .30f), At(.58f, .30f), At(.58f, .58f), At(.30f, .58f)],
             color, handle, highlighted ? 0xb0000000u : 0x55000000u);
     }
 
     private void DrawCameraPivotBox(ImDrawListPtr draw, Vec3d pivot, float length, int axis, uint color)
     {
         Vector3 tip = CameraAxis(axis) * length;
-        float half = length * .10f;
+        float half = Math.Min(length * .10f, CameraWorldUnitsPerPixel(pivot) * 6 * DirectorImGuiTheme.Scale);
         Vec3d[] corners = Enumerable.Range(0, 8).Select(i => Add(pivot,
             tip + new Vector3((i & 1) == 0 ? -half : half, (i & 2) == 0 ? -half : half, (i & 4) == 0 ? -half : half))).ToArray();
         int[][] faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
         var m = capi.Render.PerspectiveViewMat;
         double Depth(int[] face) => face.Average(i => m[2] * corners[i].X + m[6] * corners[i].Y + m[10] * corners[i].Z + m[14]);
         foreach (var face in faces.OrderBy(Depth))
-            DrawCameraHandleQuad(draw, face.Select(i => corners[i]).ToArray(), color, axis, 0xe0000000);
+            DrawCameraHandleQuad(draw, pivot, face.Select(i => corners[i]).ToArray(), color, axis, 0xe0000000);
     }
 
-    private void DrawCameraHandleQuad(ImDrawListPtr draw, Vec3d[] corners, uint color, int handle, uint alpha)
+    private void DrawCameraHandleQuad(ImDrawListPtr draw, Vec3d pivot, Vec3d[] corners, uint color, int handle, uint alpha)
     {
         var screen = new Vector2[4];
-        for (int i = 0; i < 4; i++) if (!ProjectCameraPoint(corners[i], out screen[i])) return;
+        for (int i = 0; i < 4; i++) if (!ProjectCameraHandlePoint(pivot, corners[i], out screen[i])) return;
         float area = (screen[1].X - screen[0].X) * (screen[2].Y - screen[0].Y)
             - (screen[1].Y - screen[0].Y) * (screen[2].X - screen[0].X);
         if (Math.Abs(area) < .01f) return;

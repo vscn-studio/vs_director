@@ -23,6 +23,7 @@ internal sealed partial class DirectorWorkspaceHud
     private readonly record struct CameraToolTriangle(Vector2 A, Vector2 B, Vector2 C, int Axis);
     private static readonly (Vector3 A, Vector3 B)[] CameraOutline = CreateCameraOutline();
     private const uint CameraOutlineColor = 0xffffffff;
+    private const int ScreenRotationAxis = 6;
     private CameraPreset? cameraDragOriginal, cameraDragPose;
     private DirectorReplayViewportTimeline? cameraDragTimeline;
     private Vector3 cameraDragAxis, cameraDragPreviousDirection, cameraDragStartDirection, cameraDragPlanePoint;
@@ -105,13 +106,16 @@ internal sealed partial class DirectorWorkspaceHud
         var timeline = transformTimeline ?? cameraDragTimeline ?? owner.ReplayViewportTimeline;
         var enabled = timeline.Tracks.Where(t => t.Enabled && t.TrackType == DirectorReplayElementTrackType.Camera)
             .Select(t => t.Id).ToHashSet();
-        var draw = ImGui.GetForegroundDrawList();
+        // This callback runs inside the workspace host. Its draw list overlays
+        // the world without depth testing, while normal windows/popups stay above it.
+        var draw = ImGui.GetWindowDrawList();
         var panel = layout.Panel("preview");
         float scale = DirectorImGuiTheme.Scale;
         Vector2 min = new((float)panel.X * scale, (float)panel.Y * scale);
         draw.PushClipRect(min, min + new Vector2((float)panel.Width, (float)panel.Height) * scale, true);
         try
         {
+            CameraPreset? selectedPose = null;
             foreach (var clip in timeline.Clips.Where(c => c.Enabled && enabled.Contains(c.TrackId)
                 && c.SourceType == DirectorReplayViewportSourceType.StaticCamera))
             {
@@ -119,9 +123,10 @@ internal sealed partial class DirectorWorkspaceHud
                     : clip.Id == cameraToolSelection && cameraDragPose is not null ? cameraDragPose : ReplayCameraElementPose(clip);
                 if (pose is null || pose.Dimension != capi.World.Player.Entity.Pos.Dimension) continue;
                 bool selected = clip.Id == cameraToolSelection;
-                DrawCameraHead(draw, clip.Id, pose, CameraOutlineColor);
-                if (selected) DrawCameraHandles(draw, pose);
+                DrawCameraHead(draw, clip.Id, pose, selected ? CameraOutlineColor : 0xff000000);
+                if (selected) selectedPose = pose;
             }
+            if (selectedPose is not null) DrawCameraHandles(draw, selectedPose);
         }
         finally { draw.PopClipRect(); }
     }
@@ -137,8 +142,22 @@ internal sealed partial class DirectorWorkspaceHud
         if (ProjectCameraPoint(origin, out var screen))
         {
             cameraToolHeads.Add((id, screen));
-            DrawCameraCenter(draw, screen, id == cameraToolSelection ? 0xff55d9ff : 0xffedaa62);
+            if (id == cameraToolSelection)
+            {
+                DrawCameraOriginAxes(draw, origin);
+                DrawCameraCenter(draw, screen);
+            }
         }
+    }
+
+    private void DrawCameraOriginAxes(ImDrawListPtr draw, Vec3d origin)
+    {
+        // These plain world axes mark the camera itself, even with an offset pivot.
+        // They are visual guides only and must never intercept handle picking.
+        float length = Math.Max(.35f, CameraWorldUnitsPerPixel(origin) * 24 * DirectorImGuiTheme.Scale);
+        uint[] colors = [0xff6666ee, 0xff77cf75, 0xffedaa62];
+        for (int axis = 0; axis < 3; axis++)
+            CameraHandleLine(draw, origin, origin, Add(origin, CameraAxis(axis) * length), colors[axis], -1, 1.5f);
     }
 
     private static (Vector3 Right, Vector3 Up, Vector3 Back) CameraHeadBasis(CameraPreset pose)
@@ -182,8 +201,8 @@ internal sealed partial class DirectorWorkspaceHud
     {
         Vec3d pivot = CameraPivot(pose);
         if (!ProjectCameraPoint(pivot, out var center)) return;
-        float length = CameraHandleRadius(pivot);
-        Vector3 view = CameraViewDirection(pivot);
+        float length = CameraGizmoRadius(pose);
+        Vector3 view = cameraTool == CameraTool.Rotate ? CameraScreenRotationAxis() : CameraViewDirection(pivot);
         uint[] colors = [0xff6666ee, 0xff77cf75, 0xffedaa62];
         for (int axis = 0; axis < 3; axis++)
         {
@@ -191,17 +210,33 @@ internal sealed partial class DirectorWorkspaceHud
             uint color = active || cameraDragAxisIndex < 0 && cameraHoverAxis == axis ? 0xff55d9ff : colors[axis];
             if (cameraTool == CameraTool.Rotate)
             {
-                DrawCameraRotationRing(draw, pivot, length, axis, color, view);
+                // Render all rear arcs first, so they never cover another axis' front arc.
+                DrawCameraRotationRingLayer(draw, pivot, length, axis, color, view, false);
+            }
+        }
+        for (int axis = 0; axis < 3; axis++)
+        {
+            bool active = cameraDragAxisIndex == axis;
+            uint color = active || cameraDragAxisIndex < 0 && cameraHoverAxis == axis ? 0xff55d9ff : colors[axis];
+            if (cameraTool == CameraTool.Rotate)
+            {
+                DrawCameraRotationRingLayer(draw, pivot, length, axis, color, view, true);
                 if (active) DrawCameraRotationArc(draw, pivot, length);
             }
             else
             {
-                Vec3d end = Add(pivot, CameraAxis(axis) * length);
-                Vec3d shaftEnd = cameraTool == CameraTool.Move ? Add(pivot, CameraAxis(axis) * length * .82f) : end;
-                CameraWorldLine(draw, pivot, shaftEnd, color, Guid.Empty, axis);
-                if (cameraTool == CameraTool.Move) DrawCameraMoveCone(draw, pivot, length, axis, color);
-                if (cameraTool == CameraTool.Pivot) DrawCameraPivotBox(draw, pivot, length, axis, color);
-                if (ProjectCameraPoint(end, out var tip))
+                var m = capi.Render.PerspectiveViewMat;
+                Vector3 axisDirection = CameraAxis(axis);
+                float projectedLength = new Vector2((float)(m[0] * axisDirection.X + m[4] * axisDirection.Y + m[8] * axisDirection.Z),
+                    (float)(m[1] * axisDirection.X + m[5] * axisDirection.Y + m[9] * axisDirection.Z)).Length();
+                float axisLength = length / Math.Max(.15f, projectedLength);
+                Vec3d end = Add(pivot, axisDirection * axisLength);
+                Vec3d shaftEnd = cameraTool == CameraTool.Move
+                    ? Add(pivot, axisDirection * (axisLength - CameraMoveConeLength(pivot, axisLength))) : end;
+                CameraHandleLine(draw, pivot, pivot, shaftEnd, color, axis, 1.5f);
+                if (cameraTool == CameraTool.Move) DrawCameraMoveCone(draw, pivot, axisLength, axis, color);
+                if (cameraTool == CameraTool.Pivot) DrawCameraPivotBox(draw, pivot, axisLength, axis, color);
+                if (ProjectCameraHandlePoint(pivot, end, out var tip))
                 {
                     float radius = 4 * DirectorImGuiTheme.Scale;
                     draw.AddText(tip + new Vector2(radius + 2, -radius), color, "XYZ"[axis].ToString());
@@ -215,6 +250,12 @@ internal sealed partial class DirectorWorkspaceHud
                 bool highlighted = cameraDragAxisIndex == handle || cameraDragAxisIndex < 0 && cameraHoverAxis == handle;
                 DrawCameraMovePlane(draw, pivot, length, normal, highlighted ? 0xff55d9ff : colors[normal], view);
             }
+        else
+        {
+            float outerRadius = length + CameraWorldUnitsPerPixel(pivot) * 22 * DirectorImGuiTheme.Scale;
+            DrawCameraScreenRotationRing(draw, pivot, outerRadius);
+            if (cameraDragAxisIndex == ScreenRotationAxis) DrawCameraRotationArc(draw, pivot, outerRadius);
+        }
         DrawCameraCenter(draw, center);
         cameraToolHeads.Add((cameraToolSelection, center));
         if (cameraTool == CameraTool.Rotate) DrawCameraAngleReadout(draw, pose);
@@ -230,8 +271,8 @@ internal sealed partial class DirectorWorkspaceHud
     {
         const int sides = 64;
         Vector3 direction = CameraAxis(axis), u = CameraAxis((axis + 1) % 3), v = CameraAxis((axis + 2) % 3);
-        Vec3d tip = Add(pivot, direction * length), bottom = Add(pivot, direction * length * .82f);
-        float radius = length * .075f;
+        Vec3d tip = Add(pivot, direction * length), bottom = Add(pivot, direction * (length - CameraMoveConeLength(pivot, length)));
+        float radius = Math.Min(length * .075f, CameraWorldUnitsPerPixel(pivot) * 4.5f * DirectorImGuiTheme.Scale);
         var faces = new List<(Vec3d A, Vec3d B, Vec3d C)>(sides * 2);
         for (int i = 0; i < sides; i++)
         {
@@ -250,8 +291,8 @@ internal sealed partial class DirectorWorkspaceHud
             // Opaque faces and the bottom cap share the same unlit axis colour.
             foreach (var face in faces)
             {
-                if (!ProjectCameraPoint(face.A, out var a) || !ProjectCameraPoint(face.B, out var b)
-                    || !ProjectCameraPoint(face.C, out var c)) continue;
+                if (!ProjectCameraHandlePoint(pivot, face.A, out var a) || !ProjectCameraHandlePoint(pivot, face.B, out var b)
+                    || !ProjectCameraHandlePoint(pivot, face.C, out var c)) continue;
                 if ((b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X) < 0) (b, c) = (c, b);
                 draw.AddTriangleFilled(a, b, c, color);
                 cameraToolTriangles.Add(new(a, b, c, axis));
@@ -262,6 +303,9 @@ internal sealed partial class DirectorWorkspaceHud
         }
         finally { draw.Flags = flags; }
     }
+
+    private float CameraMoveConeLength(Vec3d pivot, float length)
+        => Math.Min(length * .18f, CameraWorldUnitsPerPixel(pivot) * 10.8f * DirectorImGuiTheme.Scale);
 
     private int CameraHandleAxisAt(Vector2 point, float threshold)
     {
@@ -337,28 +381,31 @@ internal sealed partial class DirectorWorkspaceHud
         int segments = Math.Clamp((int)(Math.Abs(angle) * 32), 1, 256);
         Vector3 Direction(float amount) => Vector3.Transform(cameraDragStartDirection,
             Quaternion.CreateFromAxisAngle(cameraDragAxis, amount));
-        CameraWorldLine(draw, pivot, Add(pivot, cameraDragStartDirection * radius), 0x99ffffff, Guid.Empty, -1, 1);
-        CameraWorldLine(draw, pivot, Add(pivot, Direction(angle) * radius), 0xffffffff, Guid.Empty, -1, 1);
+        CameraHandleLine(draw, pivot, pivot, Add(pivot, cameraDragStartDirection * radius), 0x99ffffff, -1, 1);
+        CameraHandleLine(draw, pivot, pivot, Add(pivot, Direction(angle) * radius), 0xffffffff, -1, 1);
         for (int i = 0; i < segments; i++)
-            CameraWorldLine(draw, Add(pivot, Direction(angle * i / segments) * radius * .88f),
-                Add(pivot, Direction(angle * (i + 1) / segments) * radius * .88f), 0xeeffffff, Guid.Empty, -1, 2);
+            CameraHandleLine(draw, pivot, Add(pivot, Direction(angle * i / segments) * radius * .88f),
+                Add(pivot, Direction(angle * (i + 1) / segments) * radius * .88f), 0xeeffffff, -1, 2);
     }
 
     private void DrawCameraAngleReadout(ImDrawListPtr draw, CameraPreset pose)
     {
         int axis = cameraDragAxisIndex >= 0 ? cameraDragAxisIndex : cameraHoverAxis;
-        if (axis is < 0 or > 2) return;
+        if ((axis is < 0 or > 2) && axis != ScreenRotationAxis) return;
         var panel = layout.Panel("preview");
         float scale = DirectorImGuiTheme.Scale;
         float value = DirectorCameraManipulation.NormalizeEditorAngle(axis == 0 ? pose.Pitch : axis == 1 ? pose.Yaw : pose.Roll);
-        string text = FormattableString.Invariant($"{"XYZ"[axis]}  {value:0.0}°");
+        string text = axis == ScreenRotationAxis ? Lang.Get("vsdirector:camera-rotation-screen")
+            : FormattableString.Invariant($"{"XYZ"[axis]}  {value:0.0}°");
         if (cameraDragAxisIndex >= 0)
         {
             float degrees = cameraDragAngle * 180 / MathF.PI;
             if (IsControlDown()) degrees = MathF.Round(degrees / 15) * 15;
             degrees = DirectorCameraManipulation.NormalizeEditorAngle(degrees);
-            text = Lang.Get("vsdirector:camera-rotation-feedback", "XYZ"[axis],
-                FormattableString.Invariant($"{degrees:+0.0;-0.0;0.0}"), FormattableString.Invariant($"{value:0.0}"));
+            text = axis == ScreenRotationAxis
+                ? Lang.Get("vsdirector:camera-rotation-screen-feedback", FormattableString.Invariant($"{degrees:+0.0;-0.0;0.0}"))
+                : Lang.Get("vsdirector:camera-rotation-feedback", "XYZ"[axis],
+                    FormattableString.Invariant($"{degrees:+0.0;-0.0;0.0}"), FormattableString.Invariant($"{value:0.0}"));
         }
         float fontScale = Math.Min(scale, Math.Max(1, (float)panel.Width * scale - 28 * scale)
             / Math.Max(1, ImGui.CalcTextSize(text).X));
@@ -437,18 +484,23 @@ internal sealed partial class DirectorWorkspaceHud
         var timeline = owner.ReplayViewportTimeline;
         var clip = timeline.Clips.FirstOrDefault(c => c.Id == cameraToolSelection);
         var pose = clip is null ? null : ReplayCameraElementPose(clip);
-        if (pose is null || !CameraPointerRay(x, y, CameraPivot(pose), out var origin, out var direction)) return;
-        var axisVector = CameraAxis(axis >= 3 ? axis - 3 : axis);
+        if (pose is null) return;
+        var axisVector = cameraTool == CameraTool.Rotate && axis == ScreenRotationAxis
+            ? CameraScreenRotationAxis() : CameraAxis(axis >= 3 ? axis - 3 : axis);
         if (cameraTool == CameraTool.Rotate)
         {
-            if (!DirectorCameraManipulation.TryPlaneDirection(origin, direction, axisVector, out cameraDragPreviousDirection)) return;
+            if (!CameraRotationPointerDirection(x, y, CameraPivot(pose), axisVector, out cameraDragPreviousDirection)) return;
             cameraDragStartDirection = cameraDragPreviousDirection;
         }
-        else if (axis >= 3)
+        else
         {
-            if (!DirectorCameraManipulation.TryPlanePoint(origin, direction, axisVector, out cameraDragPlanePoint)) return;
+            if (!CameraPointerRay(x, y, CameraPivot(pose), out var origin, out var direction)) return;
+            if (axis >= 3)
+            {
+                if (!CameraPointerPlanePoint(origin, direction, axisVector, out cameraDragPlanePoint)) return;
+            }
+            else if (!DirectorCameraManipulation.TryAxisParameter(origin, direction, axisVector, out cameraDragParameter)) return;
         }
-        else if (!DirectorCameraManipulation.TryAxisParameter(origin, direction, axisVector, out cameraDragParameter)) return;
         EndReplayViewportFreeCameraPointerInput();
         owner.PauseReplayForTimelineScrub();
         cameraDragOriginal = pose;
@@ -464,11 +516,12 @@ internal sealed partial class DirectorWorkspaceHud
     private bool MoveCameraToolDrag(int x, int y)
     {
         if (cameraDragOriginal is not { } original || cameraDragTimeline is null) return false;
-        if (!CameraPointerRay(x, y, CameraPivot(original), out var origin, out var direction)) return true;
+        Vector3 origin = default, direction = default;
+        if (cameraTool != CameraTool.Rotate && !CameraPointerRay(x, y, CameraPivot(original), out origin, out direction)) return true;
         bool snap = IsControlDown();
         if (cameraTool == CameraTool.Rotate)
         {
-            if (!DirectorCameraManipulation.TryPlaneDirection(origin, direction, cameraDragAxis, out var current)) return true;
+            if (!CameraRotationPointerDirection(x, y, CameraPivot(original), cameraDragAxis, out var current)) return true;
             cameraDragAngle += MathF.Atan2(Vector3.Dot(cameraDragAxis, Vector3.Cross(cameraDragPreviousDirection, current)),
                 Vector3.Dot(cameraDragPreviousDirection, current));
             cameraDragPreviousDirection = current;
@@ -477,7 +530,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         else if (cameraDragAxisIndex >= 3)
         {
-            if (!DirectorCameraManipulation.TryPlanePoint(origin, direction, cameraDragAxis, out var current)) return true;
+            if (!CameraPointerPlanePoint(origin, direction, cameraDragAxis, out var current)) return true;
             Vector3 offset = current - cameraDragPlanePoint;
             offset -= cameraDragAxis * Vector3.Dot(offset, cameraDragAxis);
             if (snap) offset = new(MathF.Round(offset.X * 4) / 4, MathF.Round(offset.Y * 4) / 4, MathF.Round(offset.Z * 4) / 4);
@@ -521,10 +574,25 @@ internal sealed partial class DirectorWorkspaceHud
     private bool CameraPointerRay(int x, int y, Vec3d pivot, out Vector3 origin, out Vector3 direction)
     {
         origin = direction = default;
-        if (!TryGetWorldRay(x, y, out var near, out var far)) return false;
-        origin = new((float)(near.X - pivot.X), (float)(near.Y - pivot.Y), (float)(near.Z - pivot.Z));
-        direction = Vector3.Normalize(new((float)(far.X - near.X), (float)(far.Y - near.Y), (float)(far.Z - near.Z)));
+        if (!ProjectCameraPoint(pivot, out var center)) return false;
+        var m = capi.Render.PerspectiveViewMat;
+        Vector3 right = new((float)m[0], (float)m[4], (float)m[8]);
+        Vector3 up = new((float)m[1], (float)m[5], (float)m[9]);
+        // Invert the same view-plane projection used to draw the controls.
+        origin = (right * (x - center.X) - up * (y - center.Y)) * CameraWorldUnitsPerPixel(pivot);
+        direction = -CameraScreenRotationAxis();
         return float.IsFinite(direction.X) && float.IsFinite(direction.Y) && float.IsFinite(direction.Z);
+    }
+
+    private static bool CameraPointerPlanePoint(Vector3 origin, Vector3 direction, Vector3 normal, out Vector3 point)
+    {
+        point = default;
+        float denominator = Vector3.Dot(direction, normal);
+        if (Math.Abs(denominator) < 1e-6f) return false;
+        // The orthographic pointer starts in the pivot's view plane. A valid
+        // handle plane can lie on either side, so intersect the whole line.
+        point = origin - direction * (Vector3.Dot(origin, normal) / denominator);
+        return float.IsFinite(point.X) && float.IsFinite(point.Y) && float.IsFinite(point.Z);
     }
 
     private static Vec3d CameraPivot(CameraPreset pose) => new(pose.X + pose.EditorPivotOffsetX,
@@ -607,9 +675,8 @@ internal sealed partial class DirectorWorkspaceHud
     }
 
     private static void DrawCameraPreviewImage(int texture, Vector2 size)
-        // Preview frames use image row order: the top row is at v=0.
-        // Do not apply an additional vertical flip at the UI boundary.
-        => ImGui.Image((nint)texture, size, new Vector2(0, 0), new Vector2(1, 1));
+        // The final composition and blit preserve OpenGL's bottom-left origin.
+        => ImGui.Image((nint)texture, size, new Vector2(0, 1), new Vector2(1, 0));
 
     private CameraPreset? CameraPreviewPose()
     {

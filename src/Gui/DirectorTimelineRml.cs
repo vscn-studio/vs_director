@@ -234,21 +234,16 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         if (shape.Classes.Contains("timeline-key", StringComparison.Ordinal))
         {
             Vector2 center = (min + max) * .5f;
-            float radius = 6 * Scale;
             uint color = selected ? DirectorImGuiTheme.Accent : Color(222, 224, 230);
-            string icon = shape.Icon == "square-rotated-filled" ? "" : DirectorImGuiIcons.Get(shape.Icon);
+            string icon = DirectorImGuiIcons.Get(shape.Icon);
+            bool diamond = shape.Icon == "square-rotated-filled" || icon.Length == 0;
+            if (diamond) icon = DirectorImGuiIcons.Get("square-rotated-filled");
             if (icon.Length > 0)
             {
-                Vector2 size = ImGui.CalcTextSize(icon);
-                if (selected) draw.AddRectFilled(min, max, DirectorImGuiTheme.Selected, 2 * Scale);
-                draw.AddText(center - size * .5f, color, icon);
-            }
-            else
-            {
-                Vector2 a = center + new Vector2(0, -radius), b = center + new Vector2(radius, 0);
-                Vector2 c = center + new Vector2(0, radius), d = center + new Vector2(-radius, 0);
-                draw.AddQuadFilled(a, b, c, d, color);
-                draw.AddQuad(a, b, c, d, selected ? Color(209, 233, 255) : Color(16, 16, 20), 1 * Scale);
+                float fontSize = diamond ? 24 * Scale : ImGui.GetFontSize();
+                Vector2 size = ImGui.CalcTextSize(icon) * (fontSize / ImGui.GetFontSize());
+                if (selected && !diamond) draw.AddRectFilled(min, max, DirectorImGuiTheme.Selected, 2 * Scale);
+                draw.AddText(ImGui.GetFont(), fontSize, center - size * .5f, color, icon);
             }
         }
         else if (!textOnly)
@@ -294,8 +289,10 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         string label = icon.Length == 0 ? button.Text : icon;
         using var tone = DirectorImGuiTheme.Button(button.Tone, quiet: true);
         if (!button.Enabled) ImGui.BeginDisabled();
-        bool clicked = ImGui.Button($"{label}##timeline-{button.Id}",
-            new Vector2((float)button.Width, (float)button.Height) * Scale);
+        Vector2 size = new Vector2((float)button.Width, (float)button.Height) * Scale;
+        bool clicked = icon.Length > 0
+            ? DirectorImGuiIcons.Button($"{label}##timeline-{button.Id}", size)
+            : ImGui.Button($"{label}##timeline-{button.Id}", size);
         if (!button.Enabled) ImGui.EndDisabled();
         if (clicked && button.Enabled) button.Click();
         interactive.Add(new Rect((float)button.X, (float)button.Y, (float)button.Width, (float)button.Height));

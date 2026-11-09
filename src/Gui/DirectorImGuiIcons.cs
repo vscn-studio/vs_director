@@ -125,6 +125,17 @@ internal static class DirectorImGuiIcons
 
     internal static string Get(string name) => Glyphs.GetValueOrDefault(name ?? string.Empty, string.Empty);
 
+    internal static bool Button(string label, System.Numerics.Vector2 size)
+    {
+        // Native Button clamps text to FramePadding before aligning it. A 20px
+        // glyph in a 28px button cannot fit the normal 6px padding on both sides.
+        if (size.Y == 0) size.Y = ImGui.GetFrameHeight();
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, System.Numerics.Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new System.Numerics.Vector2(.5f));
+        try { return ImGui.Button(label, size); }
+        finally { ImGui.PopStyleVar(2); }
+    }
+
     // cimgui packs Colored:1, Visible:1 and Codepoint:30 into ONE uint.
     // VSImGui 1.2.7's ImGui.NET incorrectly exposes three separate uints;
     // writing its X1 actually overwrites native U0 and corrupts the atlas UVs.

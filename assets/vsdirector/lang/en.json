@@ -1534,6 +1534,8 @@
   "replay-visual-color-picker": "Color",
   "replay-visual-time-picker": "Time of day",
   "camera-rotation-feedback": "{0} change {1}° | current {2}°",
+  "camera-rotation-screen": "Screen rotation",
+  "camera-rotation-screen-feedback": "Screen rotation {0}°",
   "camera-tool-pivot": "Pivot",
   "camera-tool-rotate": "Rotate",
   "camera-tool-move": "Move",

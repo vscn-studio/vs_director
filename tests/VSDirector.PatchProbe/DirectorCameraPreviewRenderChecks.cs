@@ -4,6 +4,7 @@ using HarmonyLib;
 using ImGuiNET;
 using OpenTK.Graphics.OpenGL4;
 using Vintagestory.API.Client;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 using VSDirector.Data;
 using VSDirector.Rendering;
@@ -21,7 +22,24 @@ internal static partial class DirectorImGuiProbe
         {
             var pose = new DirectorOffscreenCameraPose(30000000.125, 100.25, -30000000.875, dimension, yaw, pitch, roll, 70);
             var (view, origin, forward) = ((double[], double[], Vec3f))matrices.Invoke(null, [pose])!;
-            var basis = DirectorCameraManipulation.Basis(new CameraPreset { Yaw = yaw, Pitch = pitch, Roll = roll });
+            // Compare against native world-up LookAt, independently of the
+            // editor basis helper so both implementations cannot share a flip.
+            var sightline = EntityPos.GetViewVector(pitch * GameMath.DEG2RAD, yaw * GameMath.DEG2RAD);
+            var native = Mat4d.Create();
+            Mat4d.LookAt(native, [0d, 0, 0], [(double)sightline.X, sightline.Y, sightline.Z], [0d, 1, 0]);
+            var nativeRight = new Vector3((float)native[0], (float)native[4], (float)native[8]);
+            var nativeUp = new Vector3((float)native[1], (float)native[5], (float)native[9]);
+            // Native float trigonometry is ambiguous exactly at a pole; keep
+            // the specified heading there rather than comparing float noise.
+            if (Math.Abs(Math.Cos(pitch * Math.PI / 180)) < 1e-6)
+            {
+                double y = yaw * Math.PI / 180, p = pitch * Math.PI / 180;
+                nativeRight = new((float)Math.Cos(y), 0, (float)-Math.Sin(y));
+                nativeUp = new((float)(Math.Sin(y) * Math.Sin(p)), 0, (float)(Math.Cos(y) * Math.Sin(p)));
+            }
+            float r = roll * MathF.PI / 180;
+            var basis = (Right: nativeRight * MathF.Cos(r) - nativeUp * MathF.Sin(r),
+                Up: nativeRight * MathF.Sin(r) + nativeUp * MathF.Cos(r));
             var eye = new Vec4d(pose.X, pose.Y + dimension * 32768d, pose.Z, 1);
             Vec4d Transform(Vec4d point)
             {
@@ -62,7 +80,9 @@ internal static partial class DirectorImGuiProbe
             var rotation = Quaternion.CreateFromAxisAngle(axis, angle);
             for (int row = 0; row < 3; row++)
             {
-                var expected = Vector3.Transform(new((float)before[row], (float)before[row + 4], (float)before[row + 8]), rotation);
+                float sourceSign = row < 2 && Math.Cos(source.Pitch * Math.PI / 180) < 0 ? -1 : 1;
+                float editedSign = row < 2 && Math.Cos(edited.Pitch * Math.PI / 180) < 0 ? -1 : 1;
+                var expected = Vector3.Transform(new Vector3((float)before[row], (float)before[row + 4], (float)before[row + 8]) * sourceSign, rotation) * editedSign;
                 var actual = new Vector3((float)after[row], (float)after[row + 4], (float)after[row + 8]);
                 if (Vector3.Distance(expected, actual) > .00002f)
                     throw new Exception($"Rotation changed preview image axes at {pitch}/{yaw}/{roll}, axis {axis}, angle {angle}.");
@@ -122,42 +142,66 @@ internal static partial class DirectorImGuiProbe
                 GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, textures[i], 0);
                 if (GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != FramebufferErrorCode.FramebufferComplete) throw new Exception("Preview test framebuffer incomplete.");
             }
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, buffers[0]);
-            GL.Enable(EnableCap.ScissorTest);
-            // The preview's final frame has image row order (v=0 is the top).
-            // Simulate that input explicitly, rather than treating this as a
-            // raw world framebuffer whose OpenGL bottom should stay at bottom.
-            var colors = new[] { new Vector4(1, 0, 0, 1), new(0, 1, 0, 1), new(0, 0, 1, 1), new(1, 1, 0, 1) };
-            for (int corner = 0; corner < 4; corner++)
+            var matrices = AccessTools.Method(assembly.GetType("VSDirector.Rendering.DirectorOffscreenEngineState", true)!, "CameraMatrices");
+            foreach (float pitch in new[] { 0f, 35f, 180f, 200f })
+            foreach (float yaw in new[] { 0f, 73f })
+            foreach (float roll in new[] { 0f, 30f })
             {
-                GL.Scissor(corner % 2 * 32, corner / 2 * 32, 32, 32);
-                GL.ClearColor(colors[corner].X, colors[corner].Y, colors[corner].Z, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, buffers[0]);
+                GL.Enable(EnableCap.ScissorTest);
+                // A composed world framebuffer retains OpenGL row order. Distinct
+                // top-left, top-right, bottom-left and bottom-right landmarks must
+                // arrive at the corresponding ImGui image corners.
+                var colors = new[] { new Vector4(1, 0, 0, 1), new(0, 1, 0, 1), new(0, 0, 1, 1), new(1, 1, 0, 1) };
+                var pose = new DirectorOffscreenCameraPose(30000000.125, 100, -30000000.875, 2, yaw, pitch, roll, 90);
+                var (view, _, _) = ((double[], double[], Vec3f))matrices.Invoke(null, [pose])!;
+                var forward = EntityPos.GetViewVector(pitch * GameMath.DEG2RAD, yaw * GameMath.DEG2RAD);
+                double[] native = Mat4d.Create();
+                Mat4d.LookAt(native, [0d, 0, 0], [(double)forward.X, forward.Y, forward.Z], [0d, 1, 0]);
+                var right = new Vector3((float)native[0], (float)native[4], (float)native[8]);
+                var up = new Vector3((float)native[1], (float)native[5], (float)native[9]);
+                float angle = roll * MathF.PI / 180;
+                (right, up) = (right * MathF.Cos(angle) - up * MathF.Sin(angle), right * MathF.Sin(angle) + up * MathF.Cos(angle));
+                for (int corner = 0; corner < 4; corner++)
+                {
+                    // Place landmarks in world space using the native shooting
+                    // frame, then project using the actual offscreen view matrix.
+                    Vector3 offset = new Vector3(forward.X, forward.Y, forward.Z) * 4
+                        + right * (corner % 2 == 0 ? -2 : 2) + up * (corner / 2 == 0 ? 2 : -2);
+                    var point = new Vec4d(pose.X + offset.X, pose.Y + 2 * 32768d + offset.Y, pose.Z + offset.Z, 1);
+                    var cameraPoint = new Vec4d(); Mat4d.MulWithVec4(view, point, cameraPoint);
+                    if (cameraPoint.Z >= 0) throw new Exception("Native shooting landmarks ended up behind the preview camera.");
+                    int x = (int)Math.Round((cameraPoint.X / -cameraPoint.Z * .5 + .5) * 64) - 16;
+                    int y = (int)Math.Round((cameraPoint.Y / -cameraPoint.Z * .5 + .5) * 64) - 16;
+                    GL.Scissor(x, y, 32, 32);
+                    GL.ClearColor(colors[corner].X, colors[corner].Y, colors[corner].Z, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
+                }
+                GL.Disable(EnableCap.ScissorTest);
+                AccessTools.Method(apiType, "BlitColor").Invoke(create[0], [new FrameBufferRef { FboId = buffers[0], Width = 64, Height = 64 }, new FrameBufferRef { FboId = buffers[1], Width = 64, Height = 64 }]);
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+                GL.Viewport(0, 0, 960, 640); GL.ClearColor(0, 0, 0, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
+                io.DisplaySize = new(960, 640);
+                Vector2 imagePosition = default;
+                for (int frame = 0; frame < 2; frame++)
+                {
+                    ImGui.NewFrame(); ImGui.SetNextWindowPos(new(0)); ImGui.SetNextWindowSize(new(200));
+                    ImGui.Begin("preview-texture-probe", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings);
+                    imagePosition = ImGui.GetCursorScreenPos();
+                    AccessTools.Method(assembly.GetType("VSDirector.Gui.DirectorWorkspaceHud", true)!, "DrawCameraPreviewImage").Invoke(null, [textures[1], new Vector2(64)]);
+                    ImGui.End(); ImGui.Render();
+                }
+                AccessTools.Method(renderer.GetType(), "Render").Invoke(renderer, null);
+                for (int corner = 0; corner < 4; corner++)
+                {
+                    byte[] pixel = new byte[4];
+                    GL.ReadPixels((int)imagePosition.X + corner % 2 * 32 + 16,
+                        640 - (int)imagePosition.Y - corner / 2 * 32 - 16, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, pixel);
+                    var color = colors[corner];
+                    if (Math.Abs(pixel[0] - color.X * 255) > 2 || Math.Abs(pixel[1] - color.Y * 255) > 2 || Math.Abs(pixel[2] - color.Z * 255) > 2)
+                        throw new Exception($"Preview framebuffer/ImGui image was inverted or mirrored at {yaw}/{pitch}/{roll}, corner {corner}: {pixel[0]},{pixel[1]},{pixel[2]} expected {color.X * 255},{color.Y * 255},{color.Z * 255}");
+                }
             }
-            GL.Disable(EnableCap.ScissorTest);
-            AccessTools.Method(apiType, "BlitColor").Invoke(create[0], [new FrameBufferRef { FboId = buffers[0], Width = 64, Height = 64 }, new FrameBufferRef { FboId = buffers[1], Width = 64, Height = 64 }]);
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-            GL.Viewport(0, 0, 960, 640); GL.ClearColor(0, 0, 0, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
-            io.DisplaySize = new(960, 640);
-            Vector2 imagePosition = default;
-            for (int frame = 0; frame < 2; frame++)
-            {
-                ImGui.NewFrame(); ImGui.SetNextWindowPos(new(0)); ImGui.SetNextWindowSize(new(200));
-                ImGui.Begin("preview-texture-probe", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings);
-                imagePosition = ImGui.GetCursorScreenPos();
-                AccessTools.Method(assembly.GetType("VSDirector.Gui.DirectorWorkspaceHud", true)!, "DrawCameraPreviewImage").Invoke(null, [textures[1], new Vector2(64)]);
-                ImGui.End(); ImGui.Render();
-            }
-            AccessTools.Method(renderer.GetType(), "Render").Invoke(renderer, null);
-            for (int corner = 0; corner < 4; corner++)
-            {
-                byte[] pixel = new byte[4];
-                GL.ReadPixels((int)imagePosition.X + corner % 2 * 32 + 16,
-                    640 - (int)imagePosition.Y - corner / 2 * 32 - 16, 1, 1, PixelFormat.Rgba, PixelType.UnsignedByte, pixel);
-                var color = colors[corner];
-                if (Math.Abs(pixel[0] - color.X * 255) > 2 || Math.Abs(pixel[1] - color.Y * 255) > 2 || Math.Abs(pixel[2] - color.Z * 255) > 2)
-                    throw new Exception($"Preview framebuffer/ImGui image was inverted or mirrored at corner {corner}: {pixel[0]},{pixel[1]},{pixel[2]} expected {color.X * 255},{color.Y * 255},{color.Z * 255}");
-            }
-            Console.WriteLine("PASS preview image row order through real OpenGL blit and ImGui: top/bottom and left/right corners remain in place");
+            Console.WriteLine("PASS native shooting world landmarks through preview matrices, real OpenGL blit and ImGui: top/bottom and left/right at normal/inverted pitch, headings, roll and large/dimension coordinates");
         }
         finally
         {

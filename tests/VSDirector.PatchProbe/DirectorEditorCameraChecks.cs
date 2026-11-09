@@ -168,7 +168,7 @@ internal static partial class DirectorImGuiProbe
                 ImGui.Render();
                 GL.Viewport(0, 0, 960, 640); GL.ClearColor(0, 0, 0, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
                 AccessTools.Method(renderer.GetType(), "Render").Invoke(renderer, null);
-                int radius = (int)(320 * .075 / (1.5 - sign * .82)) - 2;
+                int radius = 2;
                 int size = radius * 2 + 1;
                 byte[] pixels = new byte[size * size * 4];
                 GL.ReadPixels(480 - radius, 320 - radius, size, size, PixelFormat.Bgra, PixelType.UnsignedByte, pixels);
@@ -181,6 +181,50 @@ internal static partial class DirectorImGuiProbe
                 }
             }
             Console.WriteLine("PASS real OpenGL: solid cone interiors/caps without transparent seams from both ends of XYZ; antialiasing state restored");
+            AccessTools.Field(type, "cameraDragAxisIndex").SetValue(hud, -1);
+            for (int frame = 0; frame < 2; frame++)
+            {
+                ImGui.NewFrame();
+                ImGui.SetNextWindowPos(Vector2.Zero); ImGui.SetNextWindowSize(new(960, 640));
+                ImGui.Begin("camera-overlay-host", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoBackground
+                    | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoBringToFrontOnFocus);
+                AccessTools.Method(type, "DrawCameraRotationRing").Invoke(hud,
+                    [ImGui.GetWindowDrawList(), new Vec3d(), .55f, 2, 0xff77cf75u, Vector3.UnitZ]);
+                if (frame == 0) ImGui.OpenPopup("camera-overlay-popup");
+                ImGui.SetNextWindowPos(new(300, 170)); ImGui.SetNextWindowSize(new(180, 300));
+                if (ImGui.BeginPopup("camera-overlay-popup", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings))
+                {
+                    ImGui.GetWindowDrawList().AddRectFilled(new(300, 170), new(480, 470), 0xff0000ffu);
+                    if (frame == 1) ImGui.CloseCurrentPopup();
+                    ImGui.EndPopup();
+                }
+                ImGui.End(); ImGui.Render();
+            }
+            GL.Viewport(0, 0, 960, 640); GL.ClearColor(0, 0, 0, 1);
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+            // Simulate a world depth buffer that rejects every overlay fragment.
+            // The UI backend must disable depth testing and restore it afterwards.
+            GL.Enable(EnableCap.DepthTest); GL.DepthFunc(DepthFunction.Never);
+            try
+            {
+                AccessTools.Method(renderer.GetType(), "Render").Invoke(renderer, null);
+                if (!GL.IsEnabled(EnableCap.DepthTest)) throw new Exception("Overlay rendering leaked depth state.");
+                byte[] pixels = new byte[960 * 640 * 4];
+                GL.ReadPixels(0, 0, 960, 640, PixelFormat.Bgra, PixelType.UnsignedByte, pixels);
+                int visible = 0, covered = 0;
+                for (int y = 170; y < 470; y++)
+                for (int x = 300; x < 660; x++)
+                {
+                    int i = (y * 960 + x) * 4;
+                    if (pixels[i + 1] < 140 || pixels[i + 2] > 150) continue;
+                    if (x < 475) covered++;
+                    if (x > 490) visible++;
+                }
+                if (visible < 100 || covered != 0)
+                    throw new Exception($"Camera overlay depth/popup ordering is wrong: visible={visible}, abovePopup={covered}.");
+            }
+            finally { GL.Disable(EnableCap.DepthTest); GL.DepthFunc(DepthFunction.Less); }
+            Console.WriteLine("PASS real OpenGL: full camera ring remains visible over rejecting world depth, while a popup covers it; depth state restored");
         }
         finally
         {

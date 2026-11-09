@@ -580,6 +580,15 @@ internal sealed class DirectorOffscreenEngineState
             -sy * cr - cy * sp * sr, -sy * sr + cy * sp * cr, cy * cp, 0,
             0, 0, 0, 1
         ];
+        // Match the native shooting camera's world-up hemisphere, just like
+        // the editor silhouette. Without this, pitch 180 reverses both image
+        // axes; displaying the raw GL texture upright hides only one reversal.
+        if (cp < 0)
+            for (int column = 0; column < 3; column++)
+            {
+                origin[column * 4] = -origin[column * 4];
+                origin[column * 4 + 1] = -origin[column * 4 + 1];
+            }
         double[] view = (double[])origin.Clone();
         double y = pose.Y + pose.Dimension * 32768d;
         for (int row = 0; row < 3; row++)

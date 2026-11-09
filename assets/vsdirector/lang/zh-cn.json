@@ -1534,6 +1534,8 @@
   "replay-visual-color-picker": "颜色",
   "replay-visual-time-picker": "时间",
   "camera-rotation-feedback": "{0} 变化 {1}° | 当前 {2}°",
+  "camera-rotation-screen": "屏幕空间旋转",
+  "camera-rotation-screen-feedback": "屏幕空间旋转 {0}°",
   "camera-tool-pivot": "枢轴",
   "camera-tool-rotate": "旋转",
   "camera-tool-move": "移动",

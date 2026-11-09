@@ -40,10 +40,36 @@ internal static partial class DirectorImGuiProbe
             if (Math.Abs(center - origin.X - advance / 2) > .01f)
                 throw new Exception("Rendered icon ink is not centered: " + icon.Key);
         }
+        // The timeline must emit the actual filled Tabler glyph, not a small
+        // custom diamond with an extra outline or selection rectangle.
+        var timelineType = typeof(VSDirector.VSDirectorModSystem).Assembly.GetType("VSDirector.Gui.DirectorTimelineWindow", true)!;
+        object timeline = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(timelineType);
+        var shapeType = timelineType.GetNestedType("ShapeCommand", System.Reflection.BindingFlags.NonPublic)!;
+        float savedScale = Vintagestory.API.Config.RuntimeEnv.GUIScale;
+        try
+        {
+            foreach (float scale in new[] { 1f, 1.5f, 2f })
+            foreach (bool selected in new[] { false, true })
+            {
+                Vintagestory.API.Config.RuntimeEnv.GUIScale = scale;
+                object shape = Activator.CreateInstance(shapeType, ["key", "timeline-key" + (selected ? " selected" : ""), "",
+                    "square-rotated-filled", "", 0d, 0d, 24d, 24d])!;
+                int first = draw.VtxBuffer.Size, indices = draw.IdxBuffer.Size;
+                HarmonyLib.AccessTools.Method(timelineType, "DrawShape").Invoke(timeline, [draw, new Vector2(300, 100), shape]);
+                if (draw.VtxBuffer.Size != first + 4 || draw.IdxBuffer.Size != indices + 6)
+                    throw new Exception("Timeline diamond has an outline or an extra background.");
+                var top = draw.VtxBuffer[first]; var bottom = draw.VtxBuffer[first + 2];
+                float width = (bottom.pos.X - top.pos.X) / scale;
+                if (width < 18 || width > 26 || Math.Abs(VisibleCenter(top, bottom, tex, tw, th) - 300 - 12 * scale) > .01f)
+                    throw new Exception("Timeline diamond is too small or off center.");
+            }
+        }
+        finally { Vintagestory.API.Config.RuntimeEnv.GUIScale = savedScale; }
         ImGui.PopFont();
         ImGui.Render();
         // Verify actual Button text placement as well as direct draw-list rendering.
         foreach (float scale in new[] { 1f, 1.5f, 2f })
+        foreach (var buttonSize in new[] { new Vector2(68, 48), new Vector2(28) })
         {
             ImGui.NewFrame();
             ImGui.SetNextWindowPos(Vector2.Zero);
@@ -51,6 +77,9 @@ internal static partial class DirectorImGuiProbe
             ImGui.Begin("icon-button-centering", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings);
             ImGui.PushFont(font);
             ImGui.SetWindowFontScale(scale);
+            var assembly = typeof(VSDirector.VSDirectorModSystem).Assembly;
+            using var theme = (IDisposable)HarmonyLib.AccessTools.Method(assembly.GetType("VSDirector.Gui.DirectorImGuiTheme"), "Use").Invoke(null, null)!;
+            var compactButton = HarmonyLib.AccessTools.Method(assembly.GetType("VSDirector.Gui.DirectorImGuiIcons"), "Button");
             int index = 0;
             foreach (var icon in icons)
             {
@@ -58,7 +87,7 @@ internal static partial class DirectorImGuiProbe
                 index++;
                 var list = ImGui.GetWindowDrawList();
                 int first = list.VtxBuffer.Size;
-                ImGui.Button(icon.Value + "##" + icon.Key, new Vector2(68, 48));
+                compactButton.Invoke(null, [icon.Value + "##" + icon.Key, buttonSize * scale]);
                 float buttonCenter = (ImGui.GetItemRectMin().X + ImGui.GetItemRectMax().X) / 2;
                 // The final quad belongs to the single glyph following the button background.
                 if (list.VtxBuffer.Size < first + 4) throw new Exception("Missing button icon: " + icon.Key);
@@ -66,7 +95,7 @@ internal static partial class DirectorImGuiProbe
                 var bottom = list.VtxBuffer[list.VtxBuffer.Size - 2];
                 float center = VisibleCenter(top, bottom, tex, tw, th);
                 if (Math.Abs(center - buttonCenter) > 1)
-                    throw new Exception($"Visible button icon is off center: {icon.Key}, scale {scale}, offset {center - buttonCenter}");
+                    throw new Exception($"Visible button icon is off center: {icon.Key}, size {buttonSize}, scale {scale}, offset {center - buttonCenter}");
             }
             ImGui.SetWindowFontScale(1);
             ImGui.PopFont();

@@ -621,7 +621,7 @@ internal sealed class DirectorImGuiForm
                 {
                     if (i > 0) ImGui.SameLine();
                     using var overflowTone = DirectorImGuiTheme.Button(quiet: true);
-                    if (ImGui.Button(Icon("chevron-down") + "###overflow", new Vector2(ImGui.GetFrameHeight(), 0)))
+                    if (DirectorImGuiIcons.Button(Icon("chevron-down") + "###overflow", new Vector2(ImGui.GetFrameHeight(), 0)))
                         ImGui.OpenPopup("overflow");
                     UpdateItemBounds("toolbar-overflow");
                     if (ImGui.BeginPopup("overflow"))
@@ -738,7 +738,7 @@ internal sealed class DirectorImGuiForm
                 }
                 ImGui.TableNextColumn();
                 using var tone = DirectorImGuiTheme.Button(quiet: true);
-                if (ImGui.Button(Icon("play") + "###activate", new Vector2(ImGui.GetFrameHeight())))
+                if (DirectorImGuiIcons.Button(Icon("play") + "###activate", new Vector2(ImGui.GetFrameHeight())))
                 { BeforeAction?.Invoke(); activate(); }
                 UpdateItemBounds("resource-activate-" + id);
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip(activateLabel);
