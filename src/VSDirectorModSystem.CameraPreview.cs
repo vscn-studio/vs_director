@@ -10,6 +10,10 @@ public sealed partial class VSDirectorModSystem
     private Guid replayShootingSourceId;
     private readonly Guid replayPreviewViewId = Guid.NewGuid();
     private IDirectorOffscreenFrameSink? replayPreviewSink;
+    private readonly Guid replayObservationViewId = Guid.NewGuid();
+    private IDirectorOffscreenFrameSink? replayObservationSink;
+    internal string ReplayCameraObservationError { get; private set; } = "";
+    internal void ClearReplayCameraObservationError() => ReplayCameraObservationError = "";
     internal string ReplayCameraPreviewError { get; private set; } = "";
     internal void ClearReplayCameraPreviewError() => ReplayCameraPreviewError = "";
 
@@ -43,27 +47,38 @@ public sealed partial class VSDirectorModSystem
 
     internal bool ConfigureReplayCameraPreview(CameraPreset? pose, int width, int height,
         IDirectorOffscreenFrameSink sink, out string error)
+        => ConfigureReplayPreview(pose, width, height, sink, false, out error);
+
+    internal bool ConfigureReplayCameraObservation(CameraPreset? pose, int width, int height,
+        IDirectorOffscreenFrameSink sink, out string error)
+        => ConfigureReplayPreview(pose, width, height, sink, true, out error);
+
+    private bool ConfigureReplayPreview(CameraPreset? pose, int width, int height,
+        IDirectorOffscreenFrameSink sink, bool observation, out string error)
     {
         error = string.Empty;
         if (pose is null || replay?.IsPlaying != true || replay.IsLoading || replay.IsExporting || OffscreenCaptureBusy)
         {
-            StopReplayCameraPreview();
+            StopReplayPreview(observation);
             return false;
         }
         if (!EnsureOffscreenRenderer(out error) || offscreenRenderer is null) return false;
-        if (!ReferenceEquals(replayPreviewSink, sink))
+        ref var channelSink = ref (observation ? ref replayObservationSink : ref replayPreviewSink);
+        if (!ReferenceEquals(channelSink, sink))
         {
-            if (replayPreviewSink is not null) offscreenRenderer.RemoveSink(replayPreviewSink);
-            replayPreviewSink = sink;
+            if (channelSink is not null) offscreenRenderer.RemoveSink(channelSink);
+            channelSink = sink;
             offscreenRenderer.AddSink(sink);
             offscreenRenderer.PreviewRenderFailed -= OnReplayPreviewRenderFailed;
             offscreenRenderer.PreviewRenderFailed += OnReplayPreviewRenderFailed;
-            ReplayCameraPreviewError = "";
+            if (observation) ReplayCameraObservationError = "";
+            else ReplayCameraPreviewError = "";
         }
         double resolutionScale = Math.Min(1, 2048d / Math.Max(1, Math.Max(width, height)));
-        offscreenRenderer.SetPreviewView(new DirectorOffscreenViewRequest
+        Guid viewId = observation ? replayObservationViewId : replayPreviewViewId;
+        offscreenRenderer.SetPreviewView(viewId, new DirectorOffscreenViewRequest
         {
-            ViewId = replayPreviewViewId, Name = "Replay camera preview",
+            ViewId = viewId, Name = observation ? "Replay camera observation" : "Replay camera preview",
             Width = Math.Max(16, (int)Math.Round(width * resolutionScale)),
             Height = Math.Max(16, (int)Math.Round(height * resolutionScale)),
             Pose = new(pose.X, pose.Y, pose.Z, pose.Dimension, pose.Yaw, pose.Pitch, pose.Roll, pose.Fov),
@@ -73,21 +88,38 @@ public sealed partial class VSDirectorModSystem
     }
 
     internal Guid ReplayCameraPreviewViewId => replayPreviewViewId;
+    internal Guid ReplayCameraObservationViewId => replayObservationViewId;
 
-    private void OnReplayPreviewRenderFailed(Exception exception)
+    private void OnReplayPreviewRenderFailed(Guid viewId, Exception exception)
     {
-        ReplayCameraPreviewError = exception.GetBaseException().Message;
-        StopReplayCameraPreview();
+        if (viewId == replayObservationViewId)
+        {
+            ReplayCameraObservationError = exception.GetBaseException().Message;
+            StopReplayCameraObservation();
+        }
+        else if (viewId == replayPreviewViewId)
+        {
+            ReplayCameraPreviewError = exception.GetBaseException().Message;
+            StopReplayCameraPreview();
+        }
     }
 
     internal void StopReplayCameraPreview()
+        => StopReplayPreview(false);
+
+    internal void StopReplayCameraObservation()
+        => StopReplayPreview(true);
+
+    private void StopReplayPreview(bool observation)
     {
+        ref var channelSink = ref (observation ? ref replayObservationSink : ref replayPreviewSink);
         if (offscreenRenderer is not null)
         {
-            offscreenRenderer.SetPreviewView(null);
-            if (replayPreviewSink is not null) offscreenRenderer.RemoveSink(replayPreviewSink);
-            offscreenRenderer.PreviewRenderFailed -= OnReplayPreviewRenderFailed;
+            offscreenRenderer.SetPreviewView(observation ? replayObservationViewId : replayPreviewViewId, null);
+            if (channelSink is not null) offscreenRenderer.RemoveSink(channelSink);
         }
-        replayPreviewSink = null;
+        channelSink = null;
+        if (offscreenRenderer is not null && replayPreviewSink is null && replayObservationSink is null)
+            offscreenRenderer.PreviewRenderFailed -= OnReplayPreviewRenderFailed;
     }
 }

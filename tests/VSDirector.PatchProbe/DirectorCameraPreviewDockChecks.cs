@@ -9,15 +9,38 @@ internal static partial class DirectorImGuiProbe
     {
         var type = workspace.GetType();
         var visible = AccessTools.Property(type, "CameraPreviewVisible");
+        var observationVisible = AccessTools.Property(type, "CameraObservationVisible");
         Vector2 position = default, size = default, imageSize = default;
         uint previewDock = 0;
+        uint observationDock = 0;
         bool open = true;
+        bool observationOpen = false, observationActive = false, previewActive = false, focusObservation = false, focusPreview = false;
         Action draw = () =>
         {
+            previewActive = observationActive = false;
+            if (observationOpen)
+            {
+                if (focusObservation) { ImGui.SetNextWindowFocus(); focusObservation = false; }
+                ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4));
+                observationActive = ImGui.Begin("观察视角###vsdirector-camera-observation", ref observationOpen,
+                    ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+                observationDock = ImGui.GetWindowDockID();
+                if (observationActive)
+                {
+                    position = ImGui.GetWindowPos(); size = ImGui.GetWindowSize();
+                    Vector2 available = ImGui.GetContentRegionAvail();
+                    imageSize = new(Math.Min(available.X, available.Y * 16 / 9), Math.Min(available.Y, available.X * 9 / 16));
+                    ImGui.Dummy(imageSize);
+                }
+                ImGui.End(); ImGui.PopStyleVar();
+            }
             if (!open) return;
+            if (focusPreview) { ImGui.SetNextWindowFocus(); focusPreview = false; }
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4));
-            if (ImGui.Begin("预览相机###vsdirector-camera-preview", ref open,
-                ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
+            previewActive = ImGui.Begin("预览相机###vsdirector-camera-preview", ref open,
+                ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+            previewDock = ImGui.GetWindowDockID();
+            if (previewActive)
             {
                 position = ImGui.GetWindowPos(); size = ImGui.GetWindowSize();
                 previewDock = ImGui.GetWindowDockID();
@@ -48,6 +71,22 @@ internal static partial class DirectorImGuiProbe
                 io.MouseDown[0] = false;
                 for (int i = 0; i < 5; i++) frame();
                 CheckLayout();
+                observationVisible.SetValue(workspace, true); observationOpen = focusObservation = true;
+                for (int i = 0; i < 5; i++) frame();
+                CheckLayout();
+                if (observationDock == 0 || observationDock != previewDock || !observationActive || previewActive)
+                    throw new Exception("Observation did not share and activate the preview dock tab.");
+                visible.SetValue(workspace, false); open = false;
+                for (int i = 0; i < 5; i++) frame();
+                CheckLayout();
+                if (!observationActive) throw new Exception("Closing preview also closed observation.");
+                visible.SetValue(workspace, true); open = focusPreview = true;
+                for (int i = 0; i < 5; i++) frame();
+                if (previewDock != observationDock || !previewActive || observationActive)
+                    throw new Exception("Preview did not reopen into the observation tab group.");
+                observationVisible.SetValue(workspace, false); observationOpen = false;
+                for (int i = 0; i < 5; i++) frame();
+                CheckLayout();
                 visible.SetValue(workspace, false); open = false;
                 for (int i = 0; i < 5; i++) frame();
                 if (bounds["timeline"].Size.X * scale < io.DisplaySize.X - 4 * scale)
@@ -55,6 +94,11 @@ internal static partial class DirectorImGuiProbe
                 io.DisplaySize = originalDisplay;
                 for (int i = 0; i < 3; i++) frame();
             }
+            // The observation window must also create the right-hand pane on its own.
+            observationVisible.SetValue(workspace, true); observationOpen = focusObservation = true;
+            for (int i = 0; i < 5; i++) frame();
+            CheckLayout();
+            if (!observationActive || observationDock == 0) throw new Exception("Observation requires preview to be opened first.");
             void CheckLayout()
             {
                 var timeline = bounds["timeline"];
@@ -70,6 +114,7 @@ internal static partial class DirectorImGuiProbe
         finally
         {
             open = false; visible.SetValue(workspace, false);
+            observationOpen = false; observationVisible.SetValue(workspace, false);
             io.DisplaySize = originalDisplay; io.MouseDown[0] = false;
             AccessTools.Method(type, "Remove").Invoke(workspace, [draw]);
             for (int i = 0; i < 3; i++) frame();

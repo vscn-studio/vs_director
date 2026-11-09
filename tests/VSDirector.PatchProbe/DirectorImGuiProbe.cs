@@ -24,6 +24,7 @@ internal static partial class DirectorImGuiProbe
         CheckEditorCameraInput(assembly);
         CheckEditorCameraProjection(assembly);
         CheckOffscreenCamera(assembly);
+        CheckCameraObservationChannels(assembly);
         Type Runtime(string name) => assembly.GetType("VSDirector.Gui." + name, true)!;
         object? Call(object instance, string name, params object?[] args)
             => AccessTools.Method(instance.GetType(), name, args.Select(a => a!.GetType()).ToArray()).Invoke(instance, args);
@@ -157,7 +158,7 @@ internal static partial class DirectorImGuiProbe
             io.ConfigFlags &= ~ImGuiConfigFlags.ViewportsEnable;
             CheckDynamicReplayPanels(assembly, api, system);
             CheckExportWorkspaceRecovery(assembly, api);
-            CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckReplayKeyframeWindow(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); CheckNumericControls(assembly, capture); CheckTransformNumberControls(assembly, capture); CheckCameraHandles(assembly, capture); });
+            CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckReplayKeyframeWindow(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); CheckNumericControls(assembly, capture); CheckTransformNumberControls(assembly, capture); CheckCameraHandles(assembly, capture); CheckCameraObservationViewport(assembly, capture); });
             bool emptyTimeline = false;
             var panelBounds = new Dictionary<string, (Vector2 Position, Vector2 Size)>();
             Action<string, Vector2, Vector2> boundsChanged = (id, position, size) =>
@@ -285,7 +286,7 @@ internal static partial class DirectorImGuiProbe
                 CheckCameraPreviewDock(workspace, WorkspaceFrame, panelBounds, scale);
             }
             RuntimeEnv.GUIScale = 1;
-            Console.WriteLine("PASS camera preview docks beside timeline, follows row height/aspect, closes and reopens at 100/150/200%");
+            Console.WriteLine("PASS camera preview/observation share timeline-right native dock tabs, follow row height/aspect, switch/close/reopen independently at 100/150/200%");
             Console.WriteLine("PASS ImGui native Properties/View/Transform tabs, Transform close/reopen at 100/150/200% and host layering/full viewport patch");
             Console.WriteLine($"PASS native ImGui Chinese glyphs ({atlasWidth}x{atlasHeight} atlas), centered icon glyphs, single viewport, stable full-width camera/replay bottom pane, left/right Ctrl+wheel direction and single dispatch, timeline coordinates and game mouse passthrough at 100/150/200%; collapsed dialogs balance Begin/End");
         }

@@ -17,8 +17,10 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
     internal uint InspectorDockId { get; set; }
     internal uint TimelineDockId { get; set; }
     internal bool CameraPreviewVisible { get; set; }
+    internal bool CameraObservationVisible { get; set; }
     private uint cameraPreviewDockId;
     private bool cameraPreviewWasVisible;
+    private bool cameraPreviewTabWasVisible, cameraObservationWasVisible;
     private Vector2 previousPreviewDockSize;
     internal event Action<string, Vector2, Vector2>? BoundsChanged;
     internal void Add(Action draw) => panels.Add(draw);
@@ -90,6 +92,7 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
                     DockWindow("###vsdirector-timeline", bottom);
                     TimelineDockId = bottom;
                     cameraPreviewWasVisible = false;
+                    cameraPreviewTabWasVisible = cameraObservationWasVisible = false;
                     cameraPreviewDockId = 0;
                     Finish(dockId);
                     resetLayout = false;
@@ -120,9 +123,10 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
 
     private void UpdateCameraPreviewDock()
     {
-        if (!CameraPreviewVisible)
+        if (!CameraPreviewVisible && !CameraObservationVisible)
         {
             cameraPreviewWasVisible = false;
+            cameraPreviewTabWasVisible = cameraObservationWasVisible = false;
             cameraPreviewDockId = 0;
             return;
         }
@@ -133,12 +137,17 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
             float width = PreviewWidth(size.Y, size.X);
             SplitNode(TimelineDockId, ImGuiDir.Right, Math.Clamp(width / Math.Max(1, size.X), .1f, .8f),
                 out cameraPreviewDockId, out _);
-            DockWindow("###vsdirector-camera-preview", cameraPreviewDockId);
-            Finish(dockId);
             previousPreviewDockSize = Vector2.Zero;
             cameraPreviewWasVisible = true;
         }
         if (cameraPreviewDockId == 0) return;
+        bool dockPreview = CameraPreviewVisible && !cameraPreviewTabWasVisible;
+        bool dockObservation = CameraObservationVisible && !cameraObservationWasVisible;
+        if (dockPreview) DockWindow("###vsdirector-camera-preview", cameraPreviewDockId);
+        if (dockObservation) DockWindow("###vsdirector-camera-observation", cameraPreviewDockId);
+        if (dockPreview || dockObservation) Finish(dockId);
+        cameraPreviewTabWasVisible = CameraPreviewVisible;
+        cameraObservationWasVisible = CameraObservationVisible;
         nint node = GetNode(cameraPreviewDockId);
         if (node == 0) return;
         NodeRect(out var previewRect, node);

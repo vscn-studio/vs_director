@@ -666,6 +666,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         FinishCameraTransform(cancel: false);
         rmlTransformWindow?.Close();
         CloseReplayCameraPreview();
+        CloseReplayCameraObservation();
         imGuiWorkspace.Close();
         waveformCancellation?.Cancel();
         waveformKey = "";
@@ -2192,6 +2193,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
         disposed = true;
         CloseReplayCameraPreview();
+        CloseReplayCameraObservation();
         imGuiWorkspace.Remove(DrawReplayCameraTools);
         DisposeTimelineMedia();
         owner.SetWorkspaceInputOverride(false);

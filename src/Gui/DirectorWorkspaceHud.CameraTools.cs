@@ -33,6 +33,7 @@ internal sealed partial class DirectorWorkspaceHud
     private Guid cameraDragReplayId, cameraDragSceneId;
     private readonly CameraPreviewSink cameraPreviewSink = new();
     private bool cameraPreviewOpen;
+    private bool cameraPreviewFocus;
     private string cameraPreviewError = "";
     private bool cameraPreviewFailed;
     private Guid cameraPreviewSource;
@@ -93,12 +94,14 @@ internal sealed partial class DirectorWorkspaceHud
                     rmlTransformWindow?.FocusNextFrame();
                 }
                 if (ImGui.MenuItem(RmlLabel("camera-tool-preview"))) OpenReplayCameraPreview();
+                if (ImGui.MenuItem(RmlLabel("camera-observation-title"))) OpenReplayCameraObservation();
                 if (ImGui.MenuItem(RmlLabel("camera-tool-reset-pivot"))) ResetSelectedCameraPivot();
                 ImGui.EndPopup();
             }
         }
         else if (cameraDragOriginal is not null) FinishCameraToolDrag(cancel: true);
         DrawReplayCameraPreview();
+        DrawReplayCameraObservation();
     }
 
     private void DrawCameraModels()
@@ -620,6 +623,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         cameraPreviewSource = cameraToolSelection;
         cameraPreviewOpen = true;
+        cameraPreviewFocus = true;
         cameraPreviewFailed = false;
         cameraPreviewError = "";
         owner.ClearReplayCameraPreviewError();
@@ -637,6 +641,7 @@ internal sealed partial class DirectorWorkspaceHud
             return;
         }
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4));
+        if (cameraPreviewFocus) { ImGui.SetNextWindowFocus(); cameraPreviewFocus = false; }
         bool visible = ImGui.Begin(RmlLabel("camera-preview-title") + "###vsdirector-camera-preview", ref cameraPreviewOpen,
             ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         try
@@ -679,16 +684,20 @@ internal sealed partial class DirectorWorkspaceHud
         => ImGui.Image((nint)texture, size, new Vector2(0, 1), new Vector2(1, 0));
 
     private CameraPreset? CameraPreviewPose()
+        => ReplayCameraViewSubject(cameraPreviewSource);
+
+    private CameraPreset? ReplayCameraViewSubject(Guid source)
     {
         // Follow the evaluated shooting camera when this element owns the current shot.
-        if (cameraDragPose is null && transformPose is null && owner.ReplayShootingSourceId == cameraPreviewSource) return owner.ReplayShootingPose;
-        var clip = owner.ReplayViewportTimeline.Clips.FirstOrDefault(c => c.Id == cameraPreviewSource && c.Enabled);
-        if (clip is null) return null;
-        var pose = transformPose is not null && transformClipId == cameraPreviewSource ? transformPose.DeepClone()
-            : cameraDragPose is not null && cameraToolSelection == cameraPreviewSource ? cameraDragPose.DeepClone() : ReplayCameraElementPose(clip);
-        if (pose is null) return null;
         var timeline = owner.ReplayViewportTimeline;
+        var clip = timeline.Clips.FirstOrDefault(c => c.Id == source && c.Enabled
+            && c.SourceType == DirectorReplayViewportSourceType.StaticCamera);
+        if (clip is null) return null;
         if (!timeline.Tracks.Any(t => t.Id == clip.TrackId && t.Enabled)) return null;
+        if (cameraDragPose is null && transformPose is null && owner.ReplayShootingSourceId == source) return owner.ReplayShootingPose;
+        var pose = transformPose is not null && transformClipId == source ? transformPose.DeepClone()
+            : cameraDragPose is not null && cameraToolSelection == source ? cameraDragPose.DeepClone() : ReplayCameraElementPose(clip);
+        if (pose is null) return null;
         return owner.ApplyReplayShootingCameraVisuals(pose, timeline, owner.ReplayCameraSampleTime);
     }
 
