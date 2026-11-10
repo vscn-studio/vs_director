@@ -11,5 +11,10 @@ licenses/THIRD-PARTY.txt in the main mod package and
 licenses/OBS-THIRD-PARTY.txt in the OBS companion package for attribution
 and license locations.
 
+Game and third-party models, textures, animations, and audio imported, extracted,
+or exported with this tool remain subject to their respective rights holders'
+terms and do not become covered by this project's MIT License through use of
+the tool.
+
 Vintage Story is a trademark of Anego Studios. This is an independent mod
 and is not affiliated with or endorsed by Anego Studios.
