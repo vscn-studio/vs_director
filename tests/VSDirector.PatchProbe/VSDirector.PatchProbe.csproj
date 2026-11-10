@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Reference Include="OpenTK.Core" HintPath="$(VintageStoryPath)\Lib\OpenTK.Core.dll" />
     <Reference Include="OpenTK.Mathematics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Mathematics.dll" />
     <Reference Include="OpenTK.Graphics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Graphics.dll" />
     <Reference Include="OpenTK.Windowing.Desktop" HintPath="$(VintageStoryPath)\Lib\OpenTK.Windowing.Desktop.dll" />
@@ -45,9 +46,12 @@
       <HintPath>$(VintageStoryPath)\Mods\VSSurvivalMod.dll</HintPath>
     </Reference>
     <None Include="$(VintageStoryPath)\Lib\Newtonsoft.Json.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VintageStoryPath)\Lib\SkiaSharp.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VintageStoryPath)\Lib\libSkiaSharp.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(VintageStoryPath)\Lib\MonoMod*.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(VintageStoryPath)\Lib\OpenTK*.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(VintageStoryPath)\Lib\openal32.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="$(VSImGuiPath)\native\win\cimgui.dll" Link="cimgui.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(VSImGuiPath)\native\win\cimguizmo.dll" Link="cimguizmo.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

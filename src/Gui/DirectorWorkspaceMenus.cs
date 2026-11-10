@@ -11,7 +11,7 @@ internal static class DirectorWorkspaceMenus
         var form = new DirectorImGuiForm { ClassName = "workspace-menu" };
         var list = commands.ToArray();
         form.ButtonRow(list.Select(c => (c.Id, c.Label, c.Run, c.Enabled, c.Selected ? "primary" : "normal",
-            c.Id == "tab-replay" ? "replay" : c.Id)).ToArray());
+            string.Empty)).ToArray());
         return form;
     }
 

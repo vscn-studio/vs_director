@@ -316,6 +316,7 @@ internal sealed class DirectorReplayManager : IDisposable
     internal IReadOnlyList<DirectorReplayVoiceFrame>? OpenTimelineVoiceView()
         => playback?.Document.Pages?.OpenVoiceView() ?? playback?.Document.VoiceFrames;
     internal object? TimelineDocumentIdentity => playback?.Document;
+    internal DirectorReplayDocument? ActiveDocument => playback?.Document;
     internal bool IsWorldPlaybackActive => playback?.WorldPlayback is not null;
     internal bool IsServerRecordingWorldPlaybackActive => playback?.Document.HasHistoricalBaselines == true && playback.WorldPlayback is not null;
     internal void ObserveServerRecordingChunkLoad(int x, int y, int z) => playback?.WorldPlayback?.ObserveServerRecordingChunkLoad(x, y, z);
@@ -1348,6 +1349,7 @@ internal sealed class DirectorReplayManager : IDisposable
 
     internal bool ShouldRenderReplayEntity(long entityId)
     {
+        if (IsReplacedByCreation(entityId)) return false;
         if (IsDedicatedReplayAnimationWarmup(entityId))
         {
             return true;
@@ -1412,7 +1414,7 @@ internal sealed class DirectorReplayManager : IDisposable
                 }
             }
 
-            bool visible = ShouldPrepareBinding(active, binding)
+            bool visible = ShouldRenderBinding(active, binding)
                 && IsInCurrentReplayView(
                     binding.Entity,
                     cameraX,
@@ -2481,6 +2483,20 @@ internal sealed class DirectorReplayManager : IDisposable
         UpdateReplaySoundPauseState(playback);
         PlaybackStateChanged?.Invoke();
         return true;
+    }
+
+    internal void DriveCreationBackground(double timeSeconds, bool advancing)
+    {
+        if (playback is not { } active || !double.IsFinite(timeSeconds)) return;
+        // The creation clock owns playback. Do not notify/rebuild the legacy
+        // workspace or reset transient world state on every forward frame.
+        if (!active.Paused) SetPaused(true);
+        double next = Math.Clamp(timeSeconds, 0, active.Document.DurationSeconds);
+        if (Math.Abs(next - active.TimeSeconds) < 1e-6) return;
+        bool continuous = advancing && next >= active.TimeSeconds && next - active.TimeSeconds <= .5;
+        active.TimeSeconds = next;
+        if (!continuous) active.TimedEventSeekPending = true;
+        ApplyPlaybackFrame(active);
     }
 
     public bool Seek(double timeSeconds, out double applied)
@@ -7515,8 +7531,9 @@ internal sealed class DirectorReplayManager : IDisposable
                     }
                 }
             }
-            if (resetTimedEvents || Math.Abs(active.TimeSeconds - previousTime) > TimeEpsilon) ApplyClock(active);
-            visualEnvironment.Apply(active.Document.ViewportTimeline.Visuals);
+            if (resetTimedEvents || Math.Abs(active.TimeSeconds - previousTime) > TimeEpsilon
+                || VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals is not null) ApplyClock(active);
+            visualEnvironment.Apply(VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals ?? active.Document.ViewportTimeline.Visuals);
             DirectorReplayVisualRuntime.ReplaySpeed = PlaybackSpeed;
             ActionFrameDecorator?.Invoke(active.TimeSeconds);
             CameraPreset? camera = controller.IsActive ? controller.CurrentPose : null;
@@ -8023,7 +8040,12 @@ internal sealed class DirectorReplayManager : IDisposable
             && item.WatchedAttributes.GetInt("entityDead") == 0;
 
     private bool ShouldRenderBinding(Playback active, ActorBinding binding)
-        => ShouldPrepareBinding(active, binding);
+        => ShouldPrepareBinding(active, binding)
+            && VSDirector.Runtime.DirectorCreationRuntime.Current?.ReplacesReplayActor(active.Document.Id, binding.Track.ActorKey) != true;
+
+    internal bool IsReplacedByCreation(long entityId) => playback is { } active
+        && active.BindingsByEntityId.TryGetValue(entityId, out var binding)
+        && VSDirector.Runtime.DirectorCreationRuntime.Current?.ReplacesReplayActor(active.Document.Id, binding.Track.ActorKey) == true;
 
     private bool ShouldPrepareBinding(Playback active, ActorBinding binding)
         => active.WorldPlayback?.IsSynchronizing != true
@@ -8548,7 +8570,9 @@ internal sealed class DirectorReplayManager : IDisposable
                 DirectorReplayElementTrackType.TimeOfDay,
                 active.TimeSeconds,
                 out DirectorReplayElementKeyframe timeOfDay);
-        DirectorReplayEnvironmentVisuals environment = active.Document.ViewportTimeline.Visuals.Environment;
+        var creationVisuals = VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals;
+        DirectorReplayEnvironmentVisuals environment = (creationVisuals ?? active.Document.ViewportTimeline.Visuals).Environment;
+        if (creationVisuals is not null) sampledTime = false;
         if (sampledTime || environment.OverrideTime)
         {
             double dayStart = Math.Floor(clock.TotalHours / hoursPerDay) * hoursPerDay;

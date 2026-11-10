@@ -159,6 +159,7 @@ internal static partial class DirectorImGuiProbe
             CheckDynamicReplayPanels(assembly, api, system);
             CheckExportWorkspaceRecovery(assembly, api);
             CheckNativeCoordinates(capture => { CheckIconGallery(font, icons, capture); CheckPreloadWindow(assembly, api, capture); CheckExportAndFooterWindows(assembly, api, capture); CheckReplayKeyframeWindow(assembly, api, capture); CheckCompactChoices(assembly); CheckAdaptiveBrowser(assembly, api, workspace, capture); CheckEditorControls(assembly); CheckNumericControls(assembly, capture); CheckTransformNumberControls(assembly, capture); CheckCameraHandles(assembly, capture); CheckCameraObservationViewport(assembly, capture); });
+            CheckNativeCoordinates(capture => CheckCreationWorkspace(assembly, api, capture));
             bool emptyTimeline = false;
             var panelBounds = new Dictionary<string, (Vector2 Position, Vector2 Size)>();
             Action<string, Vector2, Vector2> boundsChanged = (id, position, size) =>

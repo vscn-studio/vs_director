@@ -7,17 +7,33 @@ using VSImGui.API;
 namespace VSDirector.Gui;
 
 /// <summary>Native docking host with a transparent central game viewport.</summary>
-internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBase(api)
+internal sealed partial class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBase(api)
 {
     private readonly List<Action> panels = new();
+    private readonly List<Action> creationPanels = new();
+    internal bool CreationMode { get; private set; }
+    internal void AddCreation(Action draw) => creationPanels.Add(draw);
+    internal void RemoveCreation(Action draw) => creationPanels.Remove(draw);
+    internal void SetCreationMode(bool enabled)
+    {
+        if (enabled == CreationMode) return;
+        if (enabled) legacyDockIds = (LeftDockId, InspectorDockId, TimelineDockId);
+        else (LeftDockId, InspectorDockId, TimelineDockId) = legacyDockIds;
+        CreationMode = enabled;
+    }
+    private (uint Left, uint Right, uint Bottom) legacyDockIds;
     private Vector2 previewPosition, previewSize;
     private uint dockId;
     private bool resetLayout;
     internal bool HasDockLayout { get; private set; }
     internal uint InspectorDockId { get; set; }
     internal uint TimelineDockId { get; set; }
+    internal uint LeftDockId { get; private set; }
+    internal Vector2 ViewportPosition => previewPosition;
+    internal Vector2 ViewportSize => previewSize;
     internal bool CameraPreviewVisible { get; set; }
     internal bool CameraObservationVisible { get; set; }
+    internal bool CreationPreviewVisible { get; set; }
     private uint cameraPreviewDockId;
     private bool cameraPreviewWasVisible;
     private bool cameraPreviewTabWasVisible, cameraObservationWasVisible;
@@ -25,7 +41,7 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
     internal event Action<string, Vector2, Vector2>? BoundsChanged;
     internal void Add(Action draw) => panels.Add(draw);
     internal void Remove(Action draw) => panels.Remove(draw);
-    internal void ResetLayout() => resetLayout = true;
+    internal void ResetLayout() { if (CreationMode) resetCreationLayout = true; else resetLayout = true; }
     internal void SetPreview(double x, double y, double width, double height)
     {
         if (HasDockLayout) return;
@@ -43,6 +59,7 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
     protected override CallbackGUIStatus Draw(float deltaSeconds)
     {
         if (!Opened) return DrawStatus();
+        if (CreationMode) return DrawCreationHost();
         using var font = DirectorImGuiRuntime.UseFont(dialog: false);
         ImGui.GetIO().ConfigFlags |= ImGuiConfigFlags.DockingEnable;
         // ImGui's display size is the coordinate space used by the current
@@ -66,6 +83,7 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
         {
             if (visible)
             {
+                if (creationDock != 0) ImGui.DockSpace(creationDock, Vector2.Zero, ImGuiDockNodeFlags.KeepAliveOnly);
                 float toolbarHeight = (float)VSDirector.Data.DirectorWorkspacePanelLayout.ToolbarHeight * DirectorImGuiTheme.Scale;
                 Vector2 position = new(0, toolbarHeight);
                 Vector2 size = Vector2.Max(new Vector2(1), frame - position);
@@ -84,11 +102,13 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
                     DockWindow("###vsdirector-settings", left);
                     DockWindow("###vsdirector-resource-browser", left);
                     DockWindow("###vsdirector-scene-browser", left);
+                    LeftDockId = left;
                     float inspectorRatio = Math.Clamp(320 * DirectorImGuiTheme.Scale / size.X, .2f, .45f);
                     SplitNode(center, ImGuiDir.Right, inspectorRatio, out uint right, out _);
                     DockWindow("###vsdirector-inspector", right);
                     DockWindow("###vsdirector-view", right);
                     DockWindow("###vsdirector-transform", right);
+                    InspectorDockId = right;
                     DockWindow("###vsdirector-timeline", bottom);
                     TimelineDockId = bottom;
                     cameraPreviewWasVisible = false;
@@ -112,6 +132,8 @@ internal sealed class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGuiDialogBa
                 // Keep game input in client coordinates and pass it through the empty centre.
                 if (previewSize.X > 0 && previewSize.Y > 0)
                     SetWindowHitTestHole(GetCurrentWindow(), previewPosition, previewSize);
+                // Only the active workspace submits windows and viewport tools.
+                // Inactive windows retain their open state without consuming input.
                 foreach (var panel in panels.ToArray()) panel();
             }
         }

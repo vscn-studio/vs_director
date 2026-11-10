@@ -406,12 +406,14 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private bool disposed;
     private Guid synchronizedActiveReplayId;
     private readonly DirectorImGuiWorkspace imGuiWorkspace;
+    private readonly DirectorCreationWorkspace creationWorkspace;
 
     public DirectorWorkspaceHud(ICoreClientAPI capi, VSDirectorModSystem owner, string worldId)
         : base(capi)
     {
         this.owner = owner;
         imGuiWorkspace = new DirectorImGuiWorkspace(capi);
+        creationWorkspace = new(capi, owner, imGuiWorkspace);
         floatingEditorDialog = new DirectorWorkspaceFloatingEditorDialog(capi, this);
         exportDialog = new DirectorReplayExportDialog(capi, owner, this);
         solidTextureRenderer = new DirectorSolidTextureRenderer(capi);
@@ -442,6 +444,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         previewReplayTime = owner.ReplayTimeSeconds;
         SynchronizeReplaySelectionWithActivePlayback(force: true);
         imGuiWorkspace.Add(DrawReplayCameraTools);
+        imGuiWorkspace.AddCreation(creationWorkspace.Draw);
+        creationWorkspace.LeaveRequested = LeaveCreationWorkspace;
         ComposeAll();
     }
 
@@ -453,9 +457,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override bool UnregisterOnClose => true;
 
-    public override bool PrefersUngrabbedMouse => !layout.NavigationMode;
+    public override bool PrefersUngrabbedMouse => !layout.NavigationMode && !(creationWorkspace?.Active == true && owner.Creation.ControllingActor);
 
-    public override bool DisableMouseGrab => !layout.NavigationMode;
+    public override bool DisableMouseGrab => !layout.NavigationMode && !(creationWorkspace?.Active == true && owner.Creation.ControllingActor);
 
     public override bool ShouldReceiveKeyboardEvents() => IsOpened() && !layout.NavigationMode;
 
@@ -611,6 +615,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public void Refresh()
     {
+        // Creation panels read their session each frame. Replay state events
+        // must not rebuild the hidden legacy workspace over its viewport.
+        if (creationWorkspace?.Active == true) return;
         // The native ImGui layer can dispose the inspector before our LeaveWorld handler. Pending edits
         // still save on close, but their callbacks must not rebuild destroyed documents.
         if (disposed || owner.IsShuttingDown || rmlInspectorWindow?.Document?.IsDisposed == true) return;
@@ -636,6 +643,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override bool OnEscapePressed()
     {
+        if (creationWorkspace?.Active == true) { creationWorkspace.RequestEscape(); return true; }
         if (cameraDragOriginal is not null) { FinishCameraToolDrag(cancel: true); return true; }
         if (DirectorToolWindows.HasOpenTool) { DirectorToolWindows.Close(); return true; }
         if (resourceMenuSection is not null) { CloseResourceMenu(); return true; }
@@ -663,6 +671,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnGuiClosed()
     {
+        creationWorkspace.Suspend();
         FinishCameraTransform(cancel: false);
         rmlTransformWindow?.Close();
         CloseReplayCameraPreview();
@@ -700,6 +709,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnRenderGUI(float deltaTime)
     {
+        if (creationWorkspace?.Active == true) { UpdateCreationViewport(); DirectorWorkspaceViewportRuntime.UseGameHudViewport(); return; }
         CheckPaneSplitRelease();
         UpdateRmlTimelineFrame();
         UpdateInspectorBounds();
@@ -759,6 +769,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnMouseDown(MouseEvent args)
     {
+        if (creationWorkspace?.Active == true) { CreationMouseDown(args); return; }
         if (args.Handled)
         {
             return;
@@ -1166,6 +1177,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnMouseMove(MouseEvent args)
     {
+        if (creationWorkspace?.Active == true && owner.Creation.ControllingActor) return;
+        if (creationWorkspace?.Active == true) { if (!replayViewportFreeCameraPointerActive) args.Handled = true; return; }
         CheckPaneSplitRelease();
         if (MoveCameraToolDrag(args.X, args.Y)) { args.Handled = true; return; }
         if (GuiElementDirectorNumberInput.Captured is { } number)
@@ -1445,6 +1458,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnMouseUp(MouseEvent args)
     {
+        if (creationWorkspace?.Active == true && owner.Creation.ControllingActor) return;
+        if (creationWorkspace?.Active == true) { EndReplayViewportFreeCameraPointerInput(); args.Handled = true; return; }
         if (GuiElementDirectorNumberInput.Captured is { } number)
         {
             number.OnMouseUp(capi, args);
@@ -1761,6 +1776,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnMouseWheel(MouseWheelEventArgs args)
     {
+        if (creationWorkspace?.Active == true && owner.Creation.ControllingActor) return;
+        if (creationWorkspace?.Active == true) { args.SetHandled(); return; }
         if (args.IsHandled)
         {
             return;
@@ -2021,6 +2038,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnKeyDown(KeyEvent args)
     {
+        if (creationWorkspace?.Active == true) { if (args.KeyCode == (int)GlKeys.Escape) { creationWorkspace.RequestEscape(); args.Handled = true; } else args.Handled = !owner.Creation.ControllingActor; return; }
         if (!args.Handled && args.KeyCode == (int)GlKeys.Escape)
         {
             args.Handled = OnEscapePressed();
@@ -2195,6 +2213,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         CloseReplayCameraPreview();
         CloseReplayCameraObservation();
         imGuiWorkspace.Remove(DrawReplayCameraTools);
+        imGuiWorkspace.RemoveCreation(creationWorkspace.Draw);
+        creationWorkspace.Suspend();
         DisposeTimelineMedia();
         owner.SetWorkspaceInputOverride(false);
         rmlTimeline?.Dispose(); rmlTimeline = null;

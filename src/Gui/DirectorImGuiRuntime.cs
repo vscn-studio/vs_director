@@ -51,6 +51,15 @@ internal static class DirectorImGuiRuntime
         // ImGui.Render, then its swallowed exception leaves subsequent frames blank.
         harmony.Patch(AccessTools.Method(AccessTools.TypeByName("VSImGui.DrawCallbacksManager"), "Draw"),
             transpiler: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(StableDrawCallbacks)));
+        // The backend queues physical keys but only assigns legacy modifier fields.
+        // NewFrame replaces those fields from Mod* events, losing Ctrl+A/C/V/X.
+        harmony.Patch(AccessTools.Method(AccessTools.TypeByName("ImGuiController_OpenTK.ImGuiController"), "CollectKeysInputs"),
+            postfix: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(QueueModifierEvents)));
+        foreach (string method in new[] { "KeyboardCaptured", "MouseCaptured", "MouseMovesCaptured" })
+            harmony.Patch(AccessTools.Method(AccessTools.TypeByName("VSImGui.Controller"), method),
+                prefix: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(PerformanceInput)));
+        harmony.Patch(AccessTools.PropertyGetter(AccessTools.TypeByName("VSImGui.VSImGuiDialog"), "PrefersUngrabbedMouse"),
+            postfix: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(PerformanceMouseGrab)));
         // VSImGui 1.2.7 always adds the native window's desktop location, even
         // with ViewportsEnable off. Normalize the shared origin in input,
         // projection and clipping so moving the game window cannot offset UI.
@@ -62,6 +71,22 @@ internal static class DirectorImGuiRuntime
         })
             harmony.Patch(AccessTools.Method(AccessTools.TypeByName(type), method),
                 transpiler: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(ClientCoordinates)));
+    }
+
+    private static bool PerformanceInput(ref bool __result)
+    {
+        if (VSDirector.Runtime.DirectorCreationRuntime.Current?.ControllingActor != true) return true;
+        __result = false; return false;
+    }
+    private static void PerformanceMouseGrab(ref bool __result)
+    { if (VSDirector.Runtime.DirectorCreationRuntime.Current?.ControllingActor == true) __result = false; }
+    private static void QueueModifierEvents()
+    {
+        var io = ImGui.GetIO();
+        io.AddKeyEvent(ImGuiKey.ModCtrl, io.KeyCtrl);
+        io.AddKeyEvent(ImGuiKey.ModShift, io.KeyShift);
+        io.AddKeyEvent(ImGuiKey.ModAlt, io.KeyAlt);
+        io.AddKeyEvent(ImGuiKey.ModSuper, io.KeySuper);
     }
 
     private static IEnumerable<CodeInstruction> StableDrawCallbacks(IEnumerable<CodeInstruction> instructions)

@@ -2,6 +2,8 @@ using System.Reflection;
 using HarmonyLib;
 using Vintagestory.API.Common;
 using VSDirector.Data;
+using Vintagestory.API.Common.Entities;
+using VSDirector.Runtime;
 
 namespace VSDirector.Replay;
 
@@ -82,7 +84,7 @@ internal static class DirectorReplayVisualEffectsPatch
     {
         List<MethodBase> patched = new();
         Add(harmony, logger, patched, "Vintagestory.Client.NoObf.SystemRenderEntities", "OnRenderFrame2D", RenderNameTagsPrefix);
-        Add(harmony, logger, patched, "Vintagestory.GameContent.EntityBehaviorNameTag", "OnRenderFrame", RenderNameTagsPrefix);
+        Add(harmony, logger, patched, "Vintagestory.GameContent.EntityBehaviorNameTag", "OnRenderFrame", AccessTools.Method(typeof(DirectorReplayVisualEffectsPatch), nameof(PrefixEntityNameTag)));
         return patched;
     }
 
@@ -111,4 +113,10 @@ internal static class DirectorReplayVisualEffectsPatch
 
     private static bool PrefixRenderNameTags()
         => DirectorReplayVisualRuntime.Current?.World.ShowNameTags != false;
+    private static bool PrefixEntityNameTag(EntityBehavior __instance) => ShouldRenderNameTag(__instance.entity);
+    internal static bool ShouldRenderNameTag(Entity entity)
+        => PrefixRenderNameTags() && DirectorCreationRuntime.Current?.ShouldHideEntity(entity) != true
+            && DirectorReplayRuntime.Manager?.IsLiveEntitySuppressed(entity) != true
+            && DirectorReplayRuntime.Manager?.IsReplacedByCreation(entity.EntityId) != true
+            && DirectorReplayRuntime.Manager?.ShouldRenderReplayEntity(entity.EntityId) != false;
 }

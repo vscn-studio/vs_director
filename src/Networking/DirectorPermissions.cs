@@ -18,6 +18,7 @@ public enum DirectorPermission : long
     PresetPackages = 1L << 13,
     SharedCameras = 1L << 14,
     RemoteChunkAccess = 1L << 15,
+    ActorRecording = 1L << 16,
     All = OffscreenCurrentView
         | OffscreenSavedSources
         | FreeCamera
@@ -28,6 +29,7 @@ public enum DirectorPermission : long
         | ReplayPlayback
         | SharedCameras
         | RemoteChunkAccess
+        | ActorRecording
 }
 
 public sealed record DirectorPermissionDefinition(
@@ -56,6 +58,7 @@ public static class DirectorPermissions
             Define(DirectorPermission.ReplayPlayback, "replay-playback"),
             Define(DirectorPermission.SharedCameras, "shared-cameras"),
             Define(DirectorPermission.RemoteChunkAccess, "remote-chunks"),
+            Define(DirectorPermission.ActorRecording, "actor-recording"),
         };
 
     public static bool IsAdminRole(string? roleCode)

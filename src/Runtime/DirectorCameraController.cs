@@ -56,7 +56,7 @@ internal sealed class DirectorCameraController : IDisposable
 
     public bool IsActive => activeCamera != null;
 
-    public bool ShouldLockPlayerInput => externalInputLocked || (IsActive && config.LockPlayerInput);
+    public bool ShouldLockPlayerInput => externalInputLocked || (IsActive && (config.LockPlayerInput || DirectorCreationRuntime.Current?.Enabled == true));
 
     public string? ActiveCameraName => activeFollow?.Rig.Name ?? activePath?.Path.Name ?? activeCamera?.Name;
 

@@ -615,13 +615,14 @@ internal sealed class DirectorImGuiForm
             {
                 string caption = Caption(labels[i], buttons[i].Icon);
                 float width = ImGui.CalcTextSize(caption).X + ImGui.GetStyle().FramePadding.X * 2;
-                float reserve = i < buttons.Length - 1 ? ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X : 0;
+                string more = Vintagestory.API.Config.Lang.Get("vsdirector:workspace-more");
+                float reserve = i < buttons.Length - 1 ? ImGui.CalcTextSize(more).X + ImGui.GetStyle().FramePadding.X * 2 + ImGui.GetStyle().ItemSpacing.X : 0;
                 float left = i == 0 ? ImGui.GetCursorScreenPos().X : ImGui.GetItemRectMax().X + ImGui.GetStyle().ItemSpacing.X;
                 if (toolbar && left + width + reserve > right)
                 {
                     if (i > 0) ImGui.SameLine();
                     using var overflowTone = DirectorImGuiTheme.Button(quiet: true);
-                    if (DirectorImGuiIcons.Button(Icon("chevron-down") + "###overflow", new Vector2(ImGui.GetFrameHeight(), 0)))
+                    if (ImGui.Button(more + "###overflow"))
                         ImGui.OpenPopup("overflow");
                     UpdateItemBounds("toolbar-overflow");
                     if (ImGui.BeginPopup("overflow"))

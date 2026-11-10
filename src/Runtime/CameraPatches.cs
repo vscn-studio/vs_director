@@ -76,6 +76,7 @@ internal static class LocalPlayerRenderPatch
     [HarmonyPriority(Priority.First)]
     private static void Prefix()
     {
+        DirectorCreationRuntime.Current?.RestoreEntities();
         DirectorCameraRuntime.Controller?.RestoreFollowTargetForFrame();
     }
 
@@ -85,6 +86,7 @@ internal static class LocalPlayerRenderPatch
     {
         DirectorReplayRuntime.Manager?.EnforceEntityVisibilityAfterCulling();
         DirectorCameraRuntime.Controller?.HideLocalPlayerForFrame();
+        DirectorCreationRuntime.Current?.HideReplacedEntities();
     }
 }
 

@@ -20,6 +20,7 @@ using VSDirector.Networking;
 using ProtoBuf;
 
 const string harmonyId = "vscn.vsdirector.patch-probe";
+DirectorPerformanceChecks.Run();
 Harmony harmony = new(harmonyId);
 
 Type indexedWorldType = typeof(VSDirectorModSystem).Assembly.GetType("VSDirector.Replay.DirectorReplayWorldPlayback", true)!;
@@ -89,6 +90,8 @@ _ = AccessTools.Field(typeof(PlayerHeadController), "entityPlayer")
 
 MethodBase[] targets =
 {
+    AccessTools.Method(typeof(EntityPlayer), "updateEyeHeight"),
+    AccessTools.Method(typeof(EntityPlayer), "canStandUp"),
     AccessTools.Method(typeof(ModelDataPoolLocation), nameof(ModelDataPoolLocation.IsVisible)),
     AccessTools.PropertyGetter(typeof(EntityPlayer), nameof(EntityPlayer.AnimManager)),
     AccessTools.Method(typeof(ClientSystemEntities), "OnGameTick", new[] { typeof(float) }),
@@ -8123,6 +8126,8 @@ try
 
     object[] networkMessages =
     {
+        new DirectorPerformanceRequest { Session = Guid.NewGuid().ToString(), Action = 3, X = 12, Y = 34, Z = 56, Yaw = 1.25f },
+        new DirectorPerformanceStatus { Session = Guid.NewGuid().ToString(), Phase = "sample", X = 12, Y = 34, Z = 56, Seconds = 3.5, Sequence = 17 },
         new DirectorPermissionRequest
         {
             Action = (int)DirectorPermissionRequestAction.Update,

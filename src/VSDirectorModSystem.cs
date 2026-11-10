@@ -78,6 +78,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
     private DirectorReplayPreloadPlan? previewChunkPreloadPlan;
     private DirectorAnchorServer? anchorServer;
     private DirectorPermissionServer? permissionServer;
+    private DirectorPerformanceServer? performanceServer;
     private DirectorPermissionClient? permissionClient;
     private DirectorSharedCameraClient? sharedCameraClient;
     private DirectorSharedCameraServer? sharedCameraServer;
@@ -939,6 +940,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         => replay?.ViewportTimeline ?? new DirectorReplayViewportTimeline();
     internal IReadOnlyList<DirectorReplayVoiceFrame>? OpenTimelineVoiceView() => replay?.OpenTimelineVoiceView();
     internal object? TimelineDocumentIdentity => replay?.TimelineDocumentIdentity;
+    internal DirectorReplayDocument? ActiveReplayDocument => replay?.ActiveDocument;
 
     internal bool IsReplayExporting => replay?.IsExporting == true;
     private DirectorWorkspaceHud? replayExportWorkspace;
@@ -1457,10 +1459,12 @@ public sealed partial class VSDirectorModSystem : ModSystem
     {
         sapi = api;
         serverHarmony = new Harmony(ServerHarmonyId);
+        DirectorPlayerBodyRuntime.InstallServer(serverHarmony);
         DirectorAnchorChunkUnloadPatch.TryPatch(serverHarmony, api.Logger);
         DirectorAnchorEntityTrackingPatch.TryPatch(serverHarmony, api.Logger);
         DirectorAnchorSoundBroadcastPatch.TryPatch(serverHarmony, api.Logger);
         permissionServer = new DirectorPermissionServer(api);
+        performanceServer = new DirectorPerformanceServer(api, permissionServer);
         anchorServer = new DirectorAnchorServer(api, permissionServer);
         sharedCameraServer = new DirectorSharedCameraServer(api, permissionServer);
     }
@@ -1535,6 +1539,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         sharedCameraServer = null;
         anchorServer?.Dispose();
         anchorServer = null;
+        performanceServer?.Dispose(); performanceServer = null;
         permissionServer?.Dispose();
         permissionServer = null;
         if (serverHarmony is not null)
@@ -11088,7 +11093,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
     internal bool TryEnableReplayFreeCamera(out string message)
         => TryToggleReplayFreeCamera(out message);
 
-    private bool EnterReplayFreeCamera(out string message, bool showNotification = true)
+    private bool EnterReplayFreeCamera(out string message, bool showNotification = true, bool refreshWorkspace = true)
     {
         if (replay?.IsPlaying != true || controller is null)
         {
@@ -11112,8 +11117,11 @@ public sealed partial class VSDirectorModSystem : ModSystem
         ClearReplayActorAttachment();
         replayCameraState = DirectorReplayCameraState.Free;
         replayViewportCameraAuthority = DirectorReplayCameraAuthority.ManualFree;
-        workspace?.Refresh();
-        _ = workspace?.KeepReplayWorkspaceVisible();
+        if (refreshWorkspace)
+        {
+            workspace?.Refresh();
+            _ = workspace?.KeepReplayWorkspaceVisible();
+        }
         message = Lang.Get("vsdirector:replay-free-enabled");
         if (showNotification) Show(message);
         return true;
@@ -12856,6 +12864,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
 
     private void OnLeaveWorld()
     {
+        creation?.Dispose();
+        creation = null;
         BeginWorldShutdown();
         vsmc2FileWatcher?.Stop();
         pendingVsmc2Shapes.Clear();

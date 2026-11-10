@@ -10,10 +10,11 @@ internal static class DirectorReplayVisualRuntime
 {
     private static DirectorReplayVisualSettings? current;
     private static double replaySpeed = 1d;
+    internal static DirectorReplayVisualSettings? Applied => Volatile.Read(ref current);
 
     internal static DirectorReplayVisualSettings? Current
     {
-        get => Volatile.Read(ref current);
+        get => VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals ?? Volatile.Read(ref current);
         set => Volatile.Write(ref current, value);
     }
 
@@ -115,7 +116,7 @@ internal sealed class DirectorReplayVisualEnvironmentController
     internal void Apply(DirectorReplayVisualSettings visuals)
     {
         DirectorReplayVisualSettings normalized = DirectorReplayVisualSettings.Normalize(visuals);
-        DirectorReplayVisualSettings? previousVisuals = DirectorReplayVisualRuntime.Current;
+        DirectorReplayVisualSettings? previousVisuals = DirectorReplayVisualRuntime.Applied;
         if (previousVisuals is null
             || previousVisuals.Environment.Weather != normalized.Environment.Weather)
         {

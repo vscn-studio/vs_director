@@ -425,6 +425,7 @@ public sealed class DirectorOffscreenMultiViewRenderer : IDisposable
             double dz = entity.Pos.Z - view.Pose.Z;
             bool isLocalPlayer = ReferenceEquals(entity, game.EntityPlayer);
             bool visible = view.RenderEntities
+                && VSDirector.Runtime.DirectorCreationRuntime.Current?.ShouldHideEntity(entity) != true
                 && entity.Pos.Dimension == view.Pose.Dimension
                 && (!isLocalPlayer || view.RenderLocalPlayer)
                 && (replay is null

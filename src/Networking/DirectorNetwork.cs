@@ -20,7 +20,9 @@ public static class DirectorNetwork
             .RegisterMessageType<DirectorChunkPreloadRequest>()
             .RegisterMessageType<DirectorChunkPreloadStatus>()
             .RegisterMessageType<DirectorSharedCameraRequest>()
-            .RegisterMessageType<DirectorSharedCameraCatalog>();
+            .RegisterMessageType<DirectorSharedCameraCatalog>()
+            .RegisterMessageType<DirectorPerformanceRequest>()
+            .RegisterMessageType<DirectorPerformanceStatus>();
     }
 }
 

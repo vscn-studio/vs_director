@@ -12,6 +12,15 @@ internal static class SmokeTests
 {
     private static readonly (string Name, Func<Task> Run)[] Cases =
     {
+        ("creation two-bone IK, unreachable targets, isolation and reference remapping", RunSync(CreationActorChecks.Ik)),
+        ("creation performance migration, reload, deterministic seeking and duplication", RunSync(CreationActorChecks.PerformanceStorage)),
+        ("creation clip gesture allocation, undo isolation, recording beyond ten seconds and world coordinates", RunSync(CreationChecks.InteractionAndRecording)),
+        ("creation editing workflow, auto key, drafts and isolated action clock", RunSync(CreationChecks.EditingWorkflow)),
+        ("creation transform matrices and native bone pose inverses", RunSync(CreationChecks.Transforms)),
+        ("creation independent actors, bone bindings, interpolation and clip boundaries", RunSync(CreationChecks.ActorsAndTimeline)),
+        ("creation native Shape preserves unknown fields and animation units", RunSync(CreationChecks.ShapeRoundTrip)),
+        ("creation atomic saves, recovery, undo, gestures and asset isolation", RunSync(CreationChecks.StoreAndSession)),
+        ("creation continuous particles remain deterministic across seeks", RunSync(CreationChecks.Particles)),
         ("editor camera pivot, world rotation, precision and pointer intersections", RunSync(CameraManipulationChecks.Run)),
         ("observation cardinal views, orbit, zoom, large coordinates and image orientation", RunSync(CameraObservationChecks.Run)),
         ("timeline row geometry and indexed voice waveforms preserve clipping, amplitude and cancellation", RunSync(TimelineMediaChecks.Run)),

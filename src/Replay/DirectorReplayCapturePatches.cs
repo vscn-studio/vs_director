@@ -76,8 +76,13 @@ internal static class ReplayAnimationFrameIsolationPatch
     private static readonly FieldInfo? EntityField = AccessTools.Field(typeof(AnimationManager), "entity");
 
     [HarmonyPrefix]
-    private static bool Prefix(AnimationManager __instance)
+    private static bool Prefix(AnimationManager __instance, out (Entity? Entity, bool Rendered) __state)
     {
+        __state = default;
+        if (EntityField?.GetValue(__instance) is Entity source && DirectorCreationRuntime.Current?.NeedsActorAnimation(source) == true)
+        {
+            __state = (source, source.IsRendered); source.IsRendered = true;
+        }
         if (EntityField?.GetValue(__instance) is not Entity entity
             || DirectorReplayRuntime.Manager is not { } manager)
         {
@@ -93,6 +98,11 @@ internal static class ReplayAnimationFrameIsolationPatch
 
         return manager.ShouldDriveReplayAnimation(entity.EntityId) != true;
     }
+    [HarmonyPostfix]
+    private static void Postfix((Entity? Entity, bool Rendered) __state)
+    { if (__state.Entity is { } entity) entity.IsRendered = __state.Rendered; }
+    [HarmonyFinalizer]
+    private static void Finalizer((Entity? Entity, bool Rendered) __state) => Postfix(__state);
 }
 
 [HarmonyPatch(typeof(EntityPlayer), nameof(EntityPlayer.AnimManager), MethodType.Getter)]
@@ -675,6 +685,7 @@ internal static class ReplayPlayerShapeRendererPatch
             __state = null;
             return false;
         }
+        if (DirectorCreationRuntime.Current?.ShouldHideEntity(entity) == true) return false;
 
         if (DirectorReplayRuntime.Manager is { } manager
             && (manager.IsLiveEntitySuppressed(entity)
@@ -1405,7 +1416,7 @@ internal static class ReplaySimpleParticleCapturePatch
             gravityEffect,
             scale,
             model);
-        return manager?.ShouldSuppressLiveParticleSpawns != true;
+        return DirectorCreationRuntime.Current?.ActiveVisuals?.Particles.ShowParticles != false && manager?.ShouldSuppressLiveParticleSpawns != true;
     }
 }
 
@@ -1420,7 +1431,7 @@ internal static class ReplayProviderParticleCapturePatch
     {
         DirectorReplayManager? manager = DirectorReplayRuntime.Manager;
         manager?.CaptureParticle(particlePropertiesProvider);
-        return manager?.ShouldSuppressLiveParticleSpawns != true;
+        return DirectorCreationRuntime.Current?.ActiveVisuals?.Particles.ShowParticles != false && manager?.ShouldSuppressLiveParticleSpawns != true;
     }
 }
 
@@ -1440,8 +1451,8 @@ internal static class ReplayAsyncParticleCapturePatch
     }
 
     internal static bool ShouldAllowParticleSpawn(bool suppressLiveParticleSpawns)
-        => !suppressLiveParticleSpawns
-            || DirectorReplayWeatherVisualPatch.AllowsLiveParticleSpawns;
+        => DirectorCreationRuntime.Current?.ActiveVisuals?.Particles.ShowParticles != false
+            && (!suppressLiveParticleSpawns || DirectorReplayWeatherVisualPatch.AllowsLiveParticleSpawns);
 }
 
 [HarmonyPatch(

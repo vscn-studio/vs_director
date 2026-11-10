@@ -23,6 +23,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         EmptyMenuComposer(ToolbarKey);
         var commands = new List<DirectorWorkspaceMenus.Command>();
+        commands.Add(new("creation", DirectorCreationText.L("creation-creation"), EnterCreationWorkspace));
         if (SceneSections().Any()) commands.Add(new("scene", Lang.Get("vsdirector:workspace-scene"), OpenSceneWindow));
         if (IsSectionAvailable(DirectorWorkspaceSection.Replay))
             commands.Add(new("tab-replay", SectionLabel(DirectorWorkspaceSection.Replay), () => OpenRmlResourceMenu(DirectorWorkspaceSection.Replay), Selected: resourceMenuSection == DirectorWorkspaceSection.Replay));

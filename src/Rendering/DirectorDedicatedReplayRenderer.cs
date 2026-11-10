@@ -872,7 +872,8 @@ internal sealed class DirectorDedicatedReplayRenderer : IDisposable
                     entity.IsRendered,
                     entity.IsShadowRendered,
                     fallingBlockRendered));
-                bool visible = cached[index];
+                bool visible = cached[index] && replay?.IsReplacedByCreation(entity.EntityId) != true
+                    && VSDirector.Runtime.DirectorCreationRuntime.Current?.ShouldHideEntity(entity) != true;
                 if (shadowPass)
                 {
                     entity.IsShadowRendered = visible;
