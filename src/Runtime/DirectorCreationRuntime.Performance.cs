@@ -25,6 +25,7 @@ internal sealed partial class DirectorCreationRuntime
     private double pendingBackgroundTime;
     private void LoadPerformanceBackground(Guid id, double time)
     {
+        RestoreVisualEnvironment();
         var replay = DirectorReplayRuntime.Manager;
         if (replay is null || !replay.StartPlayback(id.ToString(), out _, out var error, pauseAfterLoad: true))
         { Status = L("creation-load-the-linked-background-replay-first"); return; }
@@ -58,10 +59,8 @@ internal sealed partial class DirectorCreationRuntime
     internal void UsePerformanceBackground(CreationClip clip)
     {
         if (Session.Project is not { } project || !project.Performances.TryGetValue(clip.PerformanceAssetId, out var take) || take.BackgroundReplayId == Guid.Empty) return;
-        var replay = DirectorReplayRuntime.Manager;
-        if (replay is null || !replay.StartPlayback(take.BackgroundReplayId.ToString(), out _, out var error, pauseAfterLoad: true)) throw new InvalidOperationException(L("creation-load-the-linked-background-replay-first"));
-        Session.Edit(L("creation-performance-background"), p => { p.BackgroundReplayId = take.BackgroundReplayId; p.BackgroundClipId = clip.Id; p.BackgroundOffset = take.BackgroundStart + clip.SourceStart - clip.Start; });
-        owner.TryEnableCreationFreeCamera(out _); Seek(Session.Time);
+        Session.Edit(L("creation-performance-background"), p => p.SetBackground(take.BackgroundReplayId, clip.Id, take.BackgroundStart + clip.SourceStart - clip.Start));
+        LoadLinkedBackground();
     }
     internal bool ReplacesReplayActor(Guid replayId, string actorKey)
     {
@@ -69,7 +68,9 @@ internal sealed partial class DirectorCreationRuntime
         return project.Clips.Any(c => c.Enabled && c.PerformanceAssetId != Guid.Empty
             && project.Performances.TryGetValue(c.PerformanceAssetId, out var take)
             && take.BackgroundReplayId == replayId && take.Action.SourceActorKey == actorKey
-            && Session.Frame?.Objects.GetValueOrDefault(c.ObjectId) is { HasPerformance: true });
+            // Ghost ownership is independent of pose sampling. Keep one scene
+            // actor outside the take, without extending the take's keyframes.
+            && Session.Frame?.Objects.GetValueOrDefault(c.ObjectId) is { Visible: true });
     }
     private double BackgroundTime(double time)
     {
@@ -80,20 +81,17 @@ internal sealed partial class DirectorCreationRuntime
         source = clip.Loop ? source % Math.Max(1d / 30, take.Action.DurationSeconds) : Math.Min(source, take.Action.DurationSeconds);
         return take.BackgroundStart + source;
     }
-    internal void BakePerformance(CreationClip clip)
+    internal CreationAnimation BakePerformance(CreationClip clip)
     {
-        if (Session.Project is not { } project || !project.Performances.TryGetValue(clip.PerformanceAssetId, out var take)) return;
-        Session.Edit(L("creation-performance-bake"), p =>
-        {
-            var animation = new CreationAnimation { Name = clip.Name, ModelId = p.Objects.First(o => o.Id == clip.ObjectId).ModelId,
-                Duration = Math.Max(1d / 30, take.Action.DurationSeconds), Tracks = take.Tracks.Select(CreationJson.Clone).ToList() };
-            foreach (var track in animation.Tracks)
-            {
-                track.Id = Guid.NewGuid(); track.ObjectId = Guid.Empty;
-                foreach (var key in track.Keys) key.Id = Guid.NewGuid();
-            }
-            p.Animations.Add(animation); clip.AnimationId = animation.Id; clip.BakedPose = true;
-        });
+        var project = Session.Project ?? throw new InvalidOperationException(L("creation-performance-unavailable"));
+        if (clip.BakedPose && project.Animations.Find(a => a.Id == clip.AnimationId) is { } existing) return existing;
+        Session.Store.LoadPerformances(project, retry: true);
+        if (!project.Performances.TryGetValue(clip.PerformanceAssetId, out var take))
+            throw new InvalidOperationException(L("creation-performance-unavailable"));
+        if (!take.Tracks.Any(t => t.Keys.Count > 0)) throw new InvalidOperationException(L("creation-performance-no-keys"));
+        CreationAnimation result = null!;
+        Session.Edit(L("creation-performance-bake"), p => result = DirectorCreationEdits.BakePerformance(p, clip));
+        return result;
     }
     private double lastBoneSample = -1;
     private void CapturePerformanceBones()

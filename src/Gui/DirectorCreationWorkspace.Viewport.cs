@@ -14,18 +14,33 @@ internal sealed partial class DirectorCreationWorkspace
     private OPERATION operation = OPERATION.TRANSLATE;
     private MODE transformMode = MODE.WORLD;
     private bool gizmoUsing, gizmoHover;
+    private bool posePull;
+    private Guid hoveredPosePart, hoveredSceneObject;
     // VSImGui 1.2.7's managed IsOver() imports ImGuizmo_IsOverNil, but its bundled
     // native library exports ImGuizmo_IsOver_Nil.
     [DllImport("cimguizmo", EntryPoint = "ImGuizmo_IsOver_Nil", CallingConvention = CallingConvention.Cdecl)]
     private static extern byte IsGizmoOver();
     private readonly List<(Guid Id, Vector2 Point)> objectPoints = new();
-    internal bool CapturePointer(int x, int y) => Active && Project is not null && (gizmoUsing || gizmoHover || objectPoints.Any(p => Vector2.Distance(p.Point, new(x, y)) < 12 * DirectorImGuiTheme.Scale));
+    private readonly List<(Guid Id, Vector2 Point)> bonePoints = new();
+    private bool showBones = true;
+    internal bool CapturePointer(int x, int y) => Active && Project is not null && (hoveredPosePart != Guid.Empty || hoveredSceneObject != Guid.Empty || gizmoUsing || gizmoHover || objectPoints.Concat(bonePoints).Any(p => Vector2.Distance(p.Point, new(x, y)) < 12 * DirectorImGuiTheme.Scale));
     internal bool Manipulating => Active && gizmoUsing;
+    private (Vector2 Position, Vector2 Size) GameImageRect()
+    {
+        // The world image is letterboxed inside the dock, not stretched to it.
+        // Use the same physical mapping as the final framebuffer blit.
+        if (DirectorWorkspaceViewportRuntime.TryMapGamePointToPhysical(0, 0, out double x, out double y)
+            && DirectorWorkspaceViewportRuntime.TryMapGamePointToPhysical(api.Render.FrameWidth, api.Render.FrameHeight, out double right, out double bottom))
+            return (new((float)x, (float)y), new((float)(right - x), (float)(bottom - y)));
+        return (host.ViewportPosition, host.ViewportSize);
+    }
     private void DrawViewportTools()
     {
-        gizmoHover = false; objectPoints.Clear();
+        if(gizmoUsing && ImGui.IsKeyPressed(ImGuiKey.Escape,false)) { Session.CancelGesture();gizmoUsing=false;handleAxis=-1;return; }
+        if (gizmoUsing && !ImGui.IsMouseDown(ImGuiMouseButton.Left)) { Session.EndGesture(L("creation-gizmo-transform")); gizmoUsing=false; handleAxis=-1; }
+        gizmoHover = false; hoveredPosePart = hoveredSceneObject = Guid.Empty; objectPoints.Clear(); bonePoints.Clear();
         if (Project is not { } project || Session.Frame is not { } frame || !Runtime.Enabled || host.ViewportSize.X < 1) return;
-        Vector2 min = host.ViewportPosition, size = host.ViewportSize;
+        var (min, size) = GameImageRect();
         var draw = ImGui.GetWindowDrawList(); draw.PushClipRect(min, min + size, true);
         try
         {
@@ -40,55 +55,170 @@ internal sealed partial class DirectorCreationWorkspace
                 if (c.W <= .001f) return null;
                 return min + new Vector2((c.X/c.W+1)*.5f*size.X,(1-c.Y/c.W)*.5f*size.Y);
             }
-            void Line(Vector3 a, Vector3 b, uint color) { if (Screen(a) is { } s && Screen(b) is { } e) draw.AddLine(s,e,color); }
+            void Line(Vector3 a, Vector3 b, uint color) { if (Screen(a) is { } s && Screen(b) is { } e) draw.AddLine(s,e,color,1.5f*DirectorImGuiTheme.Scale); }
+            var rigActor = RigActor;
+            if (PosePicking && rigActor is not null && frame.Objects.TryGetValue(rigActor.Id, out var pickState)
+                && project.Models.Find(m => m.Id == rigActor.ModelId) is { } pickModel)
+            {
+                bool hover = !ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel)
+                    && ImGui.IsMouseHoveringRect(min, min + size)
+                    && (!ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow) || ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows));
+                if (hover && !gizmoUsing && Matrix4x4.Invert(vp, out var inverseVp))
+                {
+                    var mouse = (ImGui.GetIO().MousePos - min) / size;
+                    var a = Vector4.Transform(new Vector4(mouse.X * 2 - 1, 1 - mouse.Y * 2, -1, 1), inverseVp);
+                    var b = Vector4.Transform(new Vector4(mouse.X * 2 - 1, 1 - mouse.Y * 2, .9f, 1), inverseVp);
+                    var near = new Vector3(a.X,a.Y,a.Z) / a.W; var far = new Vector3(b.X,b.Y,b.Z) / b.W;
+                    hoveredPosePart = DirectorCreationPoseGeometry.Pick(pickModel,pickState,near,Vector3.Normalize(far-near));
+                    if (!exactPoseParts) hoveredPosePart = DirectorCreationPoseGeometry.PoseTarget(project,pickModel,hoveredPosePart);
+                }
+                Guid selectedPosePart = Session.SelectedObject == rigActor.Id ? Session.SelectedPart : Guid.Empty;
+                if (!exactPoseParts)
+                {
+                    Runtime.Renderer.AdditionalSelectedParts=selectedBones;
+                    int texture = Runtime.Renderer.PoseSelectionTexture(pickModel, pickState, selectedPosePart,
+                        gizmoUsing ? Guid.Empty : hoveredPosePart, view, projection, size, DirectorImGuiTheme.Scale);
+                    if (texture > 0) draw.AddImage((nint)texture, min, min + size, new(0, 1), new(1, 0));
+                }
+                else if (pickState.Visible && pickModel.Parts.Find(p => p.Id == selectedPosePart && !p.Group && p.Visible
+                    && !pickState.HiddenParts.Contains(p.Id)) is { } part && pickState.Bones.TryGetValue(part.Id, out var bone))
+                {
+                    // Precision mode exposes only the selected cube, never all
+                    // descendants, and uses the same deformed geometry as rendering.
+                    var deformations = DirectorCreationJointSeams.Deformations(pickModel, pickState);
+                    var extent = ((part.To - part.From) * (1d / 16)).Float();
+                    float inflate = (float)part.Inflate / 16;
+                    var points = new Vector2?[8];
+                    for (int i = 0; i < 8; i++)
+                    {
+                        var local = new Vector3((i & 1) == 0 ? -inflate : extent.X + inflate,
+                            (i & 2) == 0 ? -inflate : extent.Y + inflate, (i & 4) == 0 ? -inflate : extent.Z + inflate);
+                        if (deformations.TryGetValue(part.Id, out var vertices) && vertices.TryGetValue(local, out var deformed)) local = deformed;
+                        points[i] = Screen(Vector3.Transform(local, bone * pickState.World));
+                    }
+                    for (int i = 0; i < 8; i++)
+                    for (int bit = 1; bit <= 4; bit *= 2)
+                        if ((i & bit) == 0 && points[i] is { } a && points[i | bit] is { } b)
+                            draw.AddLine(a, b, 0xff70d1ff, 1.5f * DirectorImGuiTheme.Scale);
+                }
+                if (!gizmoUsing && pickState.Visible && pickModel.Parts.Find(p => p.Id == hoveredPosePart) is { } hoveredPart)
+                {
+                    float scale = DirectorImGuiTheme.Scale;
+                    Vector2 padding = new(5 * scale, 3 * scale), textSize = ImGui.CalcTextSize(hoveredPart.Name);
+                    Vector2 position = Vector2.Max(min + padding, Vector2.Min(ImGui.GetIO().MousePos + new Vector2(14, 18) * scale, min + size - textSize - padding * 2));
+                    draw.AddRectFilled(position - padding, position + textSize + padding, 0xe6222222, 3 * scale);
+                    draw.AddText(position, hoveredPosePart == selectedPosePart ? 0xff70d1ff : 0xffeed080, hoveredPart.Name);
+                }
+            }
+            if (!PosePicking && modelContext.Length == 0 && Matrix4x4.Invert(vp,out var sceneInverse) && ImGui.IsMouseHoveringRect(min,min+size))
+            {
+                var mouse=(ImGui.GetIO().MousePos-min)/size;
+                var a=Vector4.Transform(new Vector4(mouse.X*2-1,1-mouse.Y*2,-1,1),sceneInverse);
+                var b=Vector4.Transform(new Vector4(mouse.X*2-1,1-mouse.Y*2,.9f,1),sceneInverse);
+                var near=new Vector3(a.X,a.Y,a.Z)/a.W; var far=new Vector3(b.X,b.Y,b.Z)/b.W;
+                float best=float.PositiveInfinity;
+                foreach(var state in frame.Objects.Values.Where(s=>s.Visible))
+                {
+                    if(project.Models.Find(m=>m.Id==state.Source.ModelId) is not { } model) continue;
+                    if(DirectorCreationPoseGeometry.Pick(model,state,near,Vector3.Normalize(far-near),out float distance)!=Guid.Empty && distance<best)
+                    { best=distance; hoveredSceneObject=state.Source.Id; }
+                }
+            }
+            var activeChain = rigActor is null ? null : ActiveIkChain(rigActor);
+            bool ShowControl(Guid id) => showBones && rigActor is not null && (showAllBones
+                ? rigActor.IkChains.Any(c => c.Enabled && (c.Target == id || c.Pole == id))
+                : activeChain?.Enabled == true && (activeChain.Target == id || activeChain.Pole == id));
             foreach (var state in frame.Objects.Values.Where(s => s.Visible || s.Source.Kind == CreationObjectKind.Camera))
             {
+                if (IsIkControl(state.Source.Id) && !ShowControl(state.Source.Id)) continue;
                 if (Screen(state.World.Translation) is not { } point || point.X < min.X || point.Y < min.Y || point.X > min.X+size.X || point.Y > min.Y+size.Y) continue;
                 objectPoints.Add((state.Source.Id,point));
-                bool selected = state.Source.Id == Session.SelectedObject;
-                draw.AddCircleFilled(point, selected ? 5 : 4, selected ? 0xfff6c565 : 0xffbcbcbc);
-                if (selected) draw.AddText(point + new Vector2(8,8),0xffeeeeee,state.Source.Name);
+                bool selected = ObjectSelected(state.Source.Id);
+                bool target = project.Objects.Any(o => o.IkChains.Any(c => c.Target == state.Source.Id));
+                bool pole = project.Objects.Any(o => o.IkChains.Any(c => c.Pole == state.Source.Id));
+                if (target || pole)
+                {
+                    float radius = 7 * DirectorImGuiTheme.Scale; uint color = target ? 0xff70d1ff : 0xffd788eb;
+                    draw.AddRect(point - new Vector2(radius), point + new Vector2(radius), color, 0, ImDrawFlags.None, selected ? 2 : 1);
+                    draw.AddCircleFilled(point, 3, color);
+                }
+                else if (state.Source.Kind != CreationObjectKind.Camera) draw.AddCircleFilled(point, selected ? 5 : 4, selected ? 0xfff6c565 : 0xffbcbcbc);
+                else if (selected)
+                {
+                    draw.AddCircleFilled(point,4*DirectorImGuiTheme.Scale,0xff55d9ff);
+                    uint[] colors=[0xff6666ee,0xff77cf75,0xffedaa62];
+                    for(int axis=0;axis<3;axis++) Line(state.World.Translation,state.World.Translation+(axis==0?Vector3.UnitX:axis==1?Vector3.UnitY:Vector3.UnitZ)*.35f,colors[axis]);
+                }
+                if (selected) draw.AddText(point + new Vector2(8,8),0xffeeeeee,ObjectName(state.Source));
                 if (state.Source.Kind == CreationObjectKind.Camera)
                 {
-                    Vector3[] corners = [new(-.22f,-.15f,-.4f),new(.22f,-.15f,-.4f),new(.22f,.15f,-.4f),new(-.22f,.15f,-.4f)];
-                    for (int i = 0; i < 4; i++) { Vector3 a = Vector3.Transform(corners[i],state.World), b = Vector3.Transform(corners[(i+1)%4],state.World); Line(a,b,selected?0xffffffff:0xff111111); Line(state.World.Translation,a,selected?0xffffffff:0xff111111); }
+                    foreach (var edge in DirectorEditorGeometry.CameraOutline)
+                        Line(Vector3.Transform(edge.A,state.World),Vector3.Transform(edge.B,state.World),selected?0xffffffff:0xff000000);
+
+                }
+            }
+            if (PosePicking && showBones && rigActor is not null && project.Models.Find(m => m.Id == rigActor.ModelId) is { } rig
+                && frame.Objects.TryGetValue(rigActor.Id, out var rigState))
+            {
+                bool InScope(CreationPart part) => showAllBones || (Session.SelectedPart != Guid.Empty && Session.SelectedObject == rigActor.Id
+                    ? posePull && Session.PoseEditing ? DirectorCreationPoseGeometry.Chain(rig,Session.SelectedPart).Any(p => p.Id == part.Id) : part.Id == Session.SelectedPart
+                    : activeChain is not null && (part.Id == activeChain.Upper || part.Id == activeChain.Lower));
+                foreach (var part in rig.Parts.Where(InScope))
+                {
+                    var joint = Vector3.Transform(DirectorCreationIk.Joint(part, rigState, rig.AnimationVersion), rigState.World);
+                    if (rig.Parts.Find(p => p.Id == part.ParentId) is { } parentPart && InScope(parentPart))
+                        Line(Vector3.Transform(DirectorCreationIk.Joint(parentPart, rigState, rig.AnimationVersion), rigState.World), joint, 0xff85c6e8);
+                    if (Screen(joint) is not { } point || point.X < min.X || point.Y < min.Y || point.X > min.X + size.X || point.Y > min.Y + size.Y) continue;
+                    bonePoints.Add((part.Id, point));
+                    bool selected = part.Id == Session.SelectedPart;
+                    draw.AddCircleFilled(point, (selected ? 5 : 3) * DirectorImGuiTheme.Scale, selected ? 0xff70d1ff : 0xffe8e8e8);
+                }
+                foreach (var chain in rigActor.IkChains.Where(c => c.Enabled && (showAllBones || c == activeChain)))
+                {
+                    if (rig.Parts.Find(p => p.Id == chain.Lower) is not { } lower) continue;
+                    var joint = Vector3.Transform(DirectorCreationIk.Joint(lower, rigState, rig.AnimationVersion), rigState.World);
+                    var end = Vector3.Transform(chain.EndOffset.Float(), rigState.Bones[lower.Id] * rigState.World);
+                    if (frame.Objects.TryGetValue(chain.Target, out var targetState)) Line(end, targetState.World.Translation, 0xff70d1ff);
+                    if (frame.Objects.TryGetValue(chain.Pole, out var poleState)) Line(joint, poleState.World.Translation, 0xffd788eb);
                 }
             }
             bool popup = ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel);
-            if (!popup && modelContext.Length == 0 && SelectedObject is { } obj && frame.Objects.TryGetValue(obj.Id, out var selectedState))
+            if (!popup && modelContext.Length == 0 && SelectedObject is { } obj && (!PosePicking || Session.SelectedPart != Guid.Empty || IsIkControl(obj.Id)) && (!IsIkControl(obj.Id) || ShowControl(obj.Id)) && frame.Objects.TryGetValue(obj.Id, out var selectedState))
             {
                 ImGuizmo.SetImGuiContext(ImGui.GetCurrentContext());
                 ImGuizmo.BeginFrame(); ImGuizmo.SetDrawlist(draw); ImGuizmo.SetRect(min.X,min.Y,size.X,size.Y);
                 Matrix4x4 parent = Matrix4x4.Identity;
                 if (frame.Objects.TryGetValue(obj.ParentId,out var parentState)) { parent = parentState.World; if (parentState.Bones.TryGetValue(obj.ParentPartId,out var attachment)) parent = attachment * parent; }
                 var baseline = EvaluatedTransform(obj);
-                Matrix4x4 world = selectedState.World;
+                Matrix4x4 world = Matrix4x4.CreateTranslation(baseline.Pivot.Float()) * selectedState.World;
                 bool bone = Session.SelectedPart != Guid.Empty;
-                if (bone && selectedState.Bones.TryGetValue(Session.SelectedPart,out var boneMatrix)) world = boneMatrix * world;
-                float[] values = DirectorCreationRenderer.Array(world);
-                bool changed = ImGuizmo.Manipulate(ref view[0],ref projection[0],operation,transformMode,ref values[0]);
-                bool usingNow = ImGuizmo.IsUsing(); gizmoHover = IsGizmoOver() != 0;
-                if (usingNow && !gizmoUsing) Session.BeginGesture();
-                if (changed && usingNow)
+                if (bone && selectedState.Bones.TryGetValue(Session.SelectedPart,out var boneMatrix) && SelectedPart is { } selectedPart && CurrentModel is { } selectedModel)
+                    world = posePull && Session.PoseEditing
+                        ? Matrix4x4.CreateTranslation(Vector3.Transform(selectedPart.Group ? DirectorCreationMath.BonePivot(selectedPart,baseline,selectedModel.AnimationVersion) : ((selectedPart.To-selectedPart.From)*(1d/32)).Float(), boneMatrix * selectedState.World))
+                        : DirectorCreationMath.BoneHandle(selectedPart, baseline, selectedModel.AnimationVersion, boneMatrix * selectedState.World);
+                bool changed=ManipulateCreation(draw,world,view,projection,min,size,!bone&&obj.Kind==CreationObjectKind.Camera,out var manipulated);
+                bool usingNow=handleAxis>=0;gizmoHover=handleHover>=0;
+                if(usingNow&&!gizmoUsing) Session.BeginGesture();
+                if(changed&&usingNow)
                 {
-                    Matrix4x4 manipulated = Matrix(values);
-                    if (!bone && Matrix4x4.Invert(parent,out var inverse))
-                    {
-                        var tr = DirectorCreationMath.FromMatrix(manipulated * inverse,baseline.Rotation);
-                        tr.Pivot = baseline.Pivot;
-                        // Decomposition returns matrix translation; compensate for the stored pivot.
-                        Vector3 pivotShift = Vector3.TransformNormal(baseline.Pivot.Float(), Matrix4x4.CreateScale(tr.Scale.Float()) * CreationTransform.RotationMatrix(tr.Rotation));
-                        tr.Position -= baseline.Pivot - CreationVector.From(pivotShift);
-                        SetTransform(obj, tr);
-                    }
+                    if(!bone) TransformObjectSelection(selectedState,Matrix4x4.CreateTranslation(-baseline.Pivot.Float())*manipulated);
                     else if (bone)
                     {
                         if (CurrentModel is { } model && SelectedPart is { } part)
                         {
+                            if (posePull && Session.PoseEditing)
+                            {
+                                var result = DirectorCreationPoseGeometry.Pull(model,selectedState,part.Id,manipulated.Translation);
+                                foreach (var pair in result) Session.SetPosePart(pair.Key,pair.Value);
+                            }
+                            else
+                            {
                             Matrix4x4 boneParent = selectedState.World;
                             if (selectedState.Bones.TryGetValue(part.ParentId, out var parentBone)) boneParent = parentBone * boneParent;
                             if (Matrix4x4.Invert(boneParent, out var inverseBoneParent))
-                                SetTransform(obj, DirectorCreationMath.PoseFromMatrix(part, manipulated * inverseBoneParent, baseline, model.AnimationVersion));
+                                SetTransform(obj, DirectorCreationMath.PoseFromMatrix(part,
+                                    DirectorCreationMath.BoneFromHandle(part, baseline, model.AnimationVersion, manipulated) * inverseBoneParent, baseline, model.AnimationVersion));
+                            }
                         }
                     }
                     Session.Changed();
@@ -96,10 +226,19 @@ internal sealed partial class DirectorCreationWorkspace
                 if (!usingNow && gizmoUsing) Session.EndGesture(L("creation-gizmo-transform")); gizmoUsing = usingNow;
             }
             if (!popup && !gizmoUsing && !gizmoHover && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
-                && ImGui.IsMouseHoveringRect(min, min + size) && ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows))
+                && ImGui.IsMouseHoveringRect(min, min + size)
+                && (!ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow) || ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows)))
             {
                 var nearest = objectPoints.OrderBy(p => Vector2.DistanceSquared(p.Point,ImGui.GetIO().MousePos)).FirstOrDefault();
-                if (nearest.Id != Guid.Empty && Vector2.Distance(nearest.Point,ImGui.GetIO().MousePos) < 12 * DirectorImGuiTheme.Scale && project.Objects.Find(o => o.Id == nearest.Id) is { } picked) Select(picked);
+                var nearestBone = bonePoints.OrderBy(p => Vector2.DistanceSquared(p.Point, ImGui.GetIO().MousePos)).FirstOrDefault();
+                bool controlHit = project.Objects.Any(o => o.IkChains.Any(c => c.Target == nearest.Id || c.Pole == nearest.Id))
+                    && Vector2.Distance(nearest.Point, ioMouse()) < 10 * DirectorImGuiTheme.Scale;
+                if (!controlHit && rigActor is not null && hoveredPosePart != Guid.Empty) SelectBone(rigActor.Id,hoveredPosePart);
+                else if (!controlHit && rigActor is not null && nearestBone.Id != Guid.Empty && Vector2.Distance(nearestBone.Point, ioMouse()) < 10 * DirectorImGuiTheme.Scale)
+                    SelectBone(rigActor.Id, nearestBone.Id);
+                else if (hoveredSceneObject != Guid.Empty && project.Objects.Find(o=>o.Id==hoveredSceneObject) is { } sceneObject) SelectObjectClick(sceneObject);
+                else if (nearest.Id != Guid.Empty && Vector2.Distance(nearest.Point, ioMouse()) < 12 * DirectorImGuiTheme.Scale && project.Objects.Find(o => o.Id == nearest.Id) is { } picked) SelectObjectClick(picked);
+                Vector2 ioMouse() => ImGui.GetIO().MousePos;
             }
         }
         finally { draw.PopClipRect(); }
@@ -109,20 +248,23 @@ internal sealed partial class DirectorCreationWorkspace
             && (!ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow) || ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows)))
         {
             var nearest = objectPoints.OrderBy(p => Vector2.DistanceSquared(p.Point, ImGui.GetIO().MousePos)).FirstOrDefault();
-            if (nearest.Id != Guid.Empty && Vector2.Distance(nearest.Point, ImGui.GetIO().MousePos) < 18 * DirectorImGuiTheme.Scale)
-                if (project.Objects.Find(o => o.Id == nearest.Id) is { } picked) Select(picked);
+            if (hoveredSceneObject != Guid.Empty && project.Objects.Find(o=>o.Id==hoveredSceneObject) is { } surface) SelectObjectClick(surface,true);
+            else if (nearest.Id != Guid.Empty && Vector2.Distance(nearest.Point, ImGui.GetIO().MousePos) < 18 * DirectorImGuiTheme.Scale)
+                if (project.Objects.Find(o => o.Id == nearest.Id) is { } picked) SelectObjectClick(picked,true);
             ImGui.OpenPopup("creation-viewport-context");
         }
         ConstrainMenu();
         if (ImGui.BeginPopup("creation-viewport-context"))
         {
+            if (ImGui.MenuItem(L("creation-show-bones"), "", showBones)) showBones = !showBones;
             foreach (var tool in new[] { (L("creation-move"), OPERATION.TRANSLATE), (L("creation-rotation"), OPERATION.ROTATE), (L("creation-scale"), OPERATION.SCALE) })
-                if (ImGui.MenuItem(tool.Item1, "", operation == tool.Item2)) operation = tool.Item2;
+                if (ImGui.MenuItem(tool.Item1, "", operation == tool.Item2, !Session.PoseEditing||freePoseTransform||tool.Item2!=OPERATION.SCALE)) { operation = tool.Item2;posePull=Session.PoseEditing&&!freePoseTransform&&operation==OPERATION.TRANSLATE; }
             if (ImGui.MenuItem(L("creation-local-axes"), "", transformMode == MODE.LOCAL)) transformMode = transformMode == MODE.WORLD ? MODE.LOCAL : MODE.WORLD;
             Item(L("creation-preview"), () => Runtime.Preview = !Runtime.Preview);
             if (SelectedObject is { } obj)
             {
-                Item(L("creation-add-transform-key"), () => { var tr = EvaluatedTransform(obj); AddKey(CreationChannel.Position, tr.Position); AddKey(CreationChannel.Rotation, tr.Rotation); AddKey(CreationChannel.Scale, tr.Scale); });
+                if (Session.PoseEditing) { if (ImGui.MenuItem(L("creation-save-pose"))) Run(Session.SavePose); }
+                else Item(L("creation-add-transform-key"), () => { var tr = EvaluatedTransform(obj); AddKey(CreationChannel.Position, tr.Position); AddKey(CreationChannel.Rotation, tr.Rotation); AddKey(CreationChannel.Scale, tr.Scale); });
                 ImGui.Separator(); DrawObjectContext(obj);
             }
             ImGui.EndPopup();

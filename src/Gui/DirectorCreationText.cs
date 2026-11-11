@@ -27,6 +27,17 @@ internal static class DirectorCreationText
             return L("creation-data-invalid-project-list") + Message(message[invalidList.Length..]);
         return message switch
         {
+            "Resolve the preview before changing editing tasks." => L("creation-unrecorded"),
+            "Pose transform is singular." => L("creation-pose-singular"),
+            "Pose chain has no usable length." => L("creation-pose-zero-chain"),
+            "Pose cannot represent this transform without shear." => L("creation-pose-shear"),
+            "Native Shape export cannot preserve joint seams. Export video or disable joint seams first." => L("creation-joint-seam-export"),
+            "Recorded performance owns this pose time." => L("creation-scene-pose-recorded"),
+            "Invalid scene pose keys." => L("creation-data-invalid-scene-poses"),
+            "Invalid joint seam." => L("creation-data-invalid-joint-seam"),
+            "Bake IK controls to bone keys before exporting this animation." => L("creation-ik-export-bake-first"),
+            "Native animation export does not support visibility keys. Keep this animation in the creation project or export video." => L("creation-pose-export-visibility"),
+            "IK requires two nonzero bones." => L("creation-ik-invalid"),
             "骨骼基础缩放为零，无法变换。" => L("creation-data-the-bone-s-base-scale-is-zero-it-cannot-be-transformed"),
             "骨骼缩放为零，无法变换。" => L("creation-data-the-bone-s-scale-is-zero-it-cannot-be-transformed"),
             "变换矩阵不可分解。" => L("creation-data-the-transform-matrix-cannot-be-decomposed"),

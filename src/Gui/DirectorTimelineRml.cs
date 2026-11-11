@@ -39,6 +39,8 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     private double panelX, panelY, panelWidth, panelHeight;
     private double playheadX, playheadLeft, playheadRight, playheadHeight;
     private bool playheadVisible;
+    private string cursorLabel = "";
+    private double cursorDragX = double.NaN, cursorOriginalX = double.NaN;
     private bool disposed;
 
     private readonly record struct Rect(float X, float Y, float Width, float Height)
@@ -83,6 +85,8 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         commands.Clear();
         interactive.Clear();
         playheadVisible = false;
+        cursorLabel = "";
+        cursorDragX = cursorOriginalX = double.NaN;
     }
 
     internal void End() { }
@@ -115,6 +119,13 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         playheadLeft = left;
         playheadRight = right;
         playheadHeight = height;
+    }
+
+    internal void CursorFeedback(string label, double targetX, double originalX)
+    {
+        cursorLabel = label;
+        cursorDragX = targetX;
+        cursorOriginalX = originalX;
     }
 
     protected override CallbackGUIStatus Draw(float deltaSeconds)
@@ -178,6 +189,15 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
             draw.AddTriangleFilled(origin + new Vector2(x - 5, 0) * Scale,
                 origin + new Vector2(x + 5, 0) * Scale, origin + new Vector2(x, 7) * Scale, DirectorImGuiTheme.Accent);
         }
+        Vector2 cursorMin = origin + new Vector2((float)playheadLeft, 0) * Scale;
+        Vector2 cursorMax = origin + new Vector2((float)playheadRight, (float)playheadHeight) * Scale;
+        bool movingKey = double.IsFinite(cursorDragX);
+        if (movingKey)
+            DirectorTimelineCursor.DragLines(draw, cursorMin, cursorMax, origin.X + (float)cursorDragX * Scale,
+                origin.X + (float)cursorOriginalX * Scale, Scale);
+        DirectorTimelineCursor.Label(draw, cursorMin, cursorMax,
+            origin.X + (float)(movingKey ? cursorDragX : playheadX) * Scale, cursorLabel,
+            movingKey ? DirectorTimelineCursor.Destination : DirectorImGuiTheme.Accent, Scale);
 
         if (!inputEnabled) return;
         Vector2 mouse = ImGui.GetMousePos();
@@ -265,7 +285,8 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
                 ? DirectorImGuiTheme.Muted : DirectorImGuiTheme.Text, text);
             draw.PopClipRect();
             string tooltip = shape.Title.Length > 0 ? shape.Title : shape.Text;
-            if (tooltip.Length > 0 && ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, max))
+            if (tooltip.Length > 0 && !shape.Classes.Contains("timeline-ruler-label", StringComparison.Ordinal)
+                && ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, max))
                 ImGui.SetTooltip(tooltip);
         }
     }

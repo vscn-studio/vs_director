@@ -81,6 +81,7 @@ public sealed class CreationModel
     public string Folder { get; set; } = "";
     public int TextureWidth { get; set; } = 16;
     public int TextureHeight { get; set; } = 16;
+    public CreationRigEditingSettings RigEditing { get; set; } = new();
     public int AnimationVersion { get; set; }
     public List<CreationPart> Parts { get; set; } = new();
     public Dictionary<string, string> Textures { get; set; } = new();
@@ -90,6 +91,7 @@ public sealed class CreationModel
 
 public sealed class CreationSceneObject
 {
+    public List<CreationScenePoseKey> PoseKeys { get; set; } = new();
     public CreationActorSource? ActorSource { get; set; }
     public CreationPlayerBody PlayerBody { get; set; } = new();
     public CreationRecordingChannels RecordingChannels { get; set; } = CreationRecordingChannels.All;
@@ -152,6 +154,7 @@ public sealed class CreationKeyframe
 
 public sealed class CreationTrack
 {
+    public bool ShortestRotation { get; set; } = true;
     internal CreationTrack Copy() { var copy = (CreationTrack)MemberwiseClone(); copy.Keys = Keys.Select(k => k.Copy()).ToList(); return copy; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid ObjectId { get; set; }
@@ -163,6 +166,7 @@ public sealed class CreationTrack
 
 public sealed class CreationAnimation
 {
+    public bool PoseEditing { get; set; }
     internal CreationAnimation Copy() { var copy = (CreationAnimation)MemberwiseClone(); copy.Tracks = Tracks.Select(t => t.Copy()).ToList(); copy.Extra = (JsonObject)Extra.DeepClone(); return copy; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "Animation";
@@ -219,6 +223,7 @@ public sealed class CreationOutput
 public sealed partial class DirectorCreationProject
 {
     [JsonIgnore] public Dictionary<Guid, CreationPerformance> Performances { get; } = new();
+    public CreationPoseSnapshot? PoseRecovery { get; set; }
     public const int CurrentSchemaVersion = 2;
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -228,6 +233,7 @@ public sealed partial class DirectorCreationProject
     public int Dimension { get; set; }
     public CreationVector Origin { get; set; }
     public double Duration { get; set; } = 10;
+    public CreationTimeDisplay TimeDisplay { get; set; } = CreationTimeDisplay.Frames;
     public double LoopStart { get; set; }
     public double LoopEnd { get; set; } = 10;
     public bool Loop { get; set; }
@@ -251,18 +257,23 @@ public sealed partial class DirectorCreationProject
         // Native actors can include hundreds of thousands of keys. Do not turn
         // that graph into a huge JSON string on the UI thread for every gesture.
         var copy = new DirectorCreationProject { SchemaVersion = SchemaVersion, Id = Id, Name = Name, Folder = Folder, WorldId = WorldId, Dimension = Dimension,
-            Origin = Origin, Duration = Duration, LoopStart = LoopStart, LoopEnd = LoopEnd, Loop = Loop, CameraId = CameraId,
+            Origin = Origin, Duration = Duration, TimeDisplay = TimeDisplay, LoopStart = LoopStart, LoopEnd = LoopEnd, Loop = Loop, CameraId = CameraId,
             BackgroundReplayId = BackgroundReplayId, BackgroundClipId = BackgroundClipId, BackgroundOffset = BackgroundOffset, ModifiedUtc = ModifiedUtc,
             Folders = new(Folders), Assets = CreationJson.Clone(Assets), Models = CreationJson.Clone(Models), Objects = CreationJson.Clone(Objects),
             Tracks = Tracks.Select(t => t.Copy()).ToList(), Animations = Animations.Select(a => a.Copy()).ToList(),
             Clips = CreationJson.Clone(Clips), Presets = CreationJson.Clone(Presets), Output = CreationJson.Clone(Output), Visuals = Visuals.DeepClone() };
+        // Published recordings are read-only; editing/baking copies their tracks.
+        // Retain the cache across history snapshots instead of rereading takes.
+        foreach (var take in Performances) copy.Performances.Add(take.Key, take.Value);
         return copy;
     }
     public void Validate()
     {
+        if (!Enum.IsDefined(TimeDisplay)) TimeDisplay = CreationTimeDisplay.Frames;
         Visuals = DirectorReplayVisualSettings.Normalize(Visuals);
         if (SchemaVersion == 1) SchemaVersion = CurrentSchemaVersion;
         ValidateDocument();
+        NormalizeBackground();
         if (Objects is null || Models is null || Assets is null || Animations is null || Clips is null || Tracks is null || Presets is null || Output is null || Name is null || WorldId is null || Folder is null)
             throw new InvalidDataException("作品数据缺少必要字段。");
         if (SchemaVersion != CurrentSchemaVersion) throw new InvalidDataException("Unsupported creation project version.");

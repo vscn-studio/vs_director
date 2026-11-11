@@ -8,15 +8,26 @@ public sealed record CreationProjectEntry(Guid Id, string Name, string Folder, D
 /// <summary>Independent project storage; replay files and workspace settings are never rewritten.</summary>
 public sealed class DirectorCreationStore
 {
-    public void LoadPerformances(DirectorCreationProject project)
+    private readonly Dictionary<(Guid Project, string Source), string> performanceErrors = new();
+    public string? PerformanceError(DirectorCreationProject project, string source)
+        => performanceErrors.GetValueOrDefault((project.Id, source));
+    public void LoadPerformances(DirectorCreationProject project, bool all = false, bool retry = false)
     {
-        foreach (var asset in project.Assets.Where(a => a.Kind == CreationAssetKind.Performance))
+        var needed = DirectorCreationDependencies.PerformanceClips(project).Select(c => c.PerformanceAssetId).ToHashSet();
+        foreach (var asset in project.Assets.Where(a => a.Kind == CreationAssetKind.Performance && (all || needed.Contains(a.Id))))
         {
             if (project.Performances.ContainsKey(asset.Id)) continue;
-            string path = AssetPath(project.Id, asset.Source);
-            if (!File.Exists(path)) continue;
-            var take = JsonSerializer.Deserialize<CreationPerformance>(File.ReadAllText(path), CreationJson.Options);
-            if (take is not null) { take.Validate(); project.Performances[asset.Id] = take; }
+            var key = (project.Id, asset.Source);
+            if (!retry && performanceErrors.ContainsKey(key)) continue;
+            try
+            {
+                string path = AssetPath(project.Id, asset.Source);
+                var take = JsonSerializer.Deserialize<CreationPerformance>(File.ReadAllText(path), CreationJson.Options)
+                    ?? throw new InvalidDataException("Invalid recorded performance.");
+                take.Validate(); project.Performances[asset.Id] = take; performanceErrors.Remove(key);
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or System.Text.Json.JsonException or ArgumentException or UnauthorizedAccessException)
+            { performanceErrors[key] = e.Message; }
         }
     }
     public string Root { get; }
@@ -95,7 +106,7 @@ public sealed class DirectorCreationStore
     }
     public DirectorCreationProject Duplicate(DirectorCreationProject project)
     {
-        LoadPerformances(project);
+        LoadPerformances(project, all: true, retry: true);
         var copy = DirectorCreationEdits.Duplicate(project);
         string assets = Path.Combine(DirectoryFor(project.Id), "assets");
         if (Directory.Exists(assets))
@@ -112,7 +123,7 @@ public sealed class DirectorCreationStore
             foreach (var track in take.Tracks) if (track.PartId != Guid.Empty) track.PartId = partMap.GetValueOrDefault(track.PartId, track.PartId);
             AtomicWrite(AssetPath(copy.Id, pair.Second.Source), JsonSerializer.Serialize(take, CreationJson.Options));
         }
-        LoadPerformances(copy); Save(copy); return copy;
+        LoadPerformances(copy, all: true); Save(copy); return copy;
     }
     public void Delete(Guid id)
     {
@@ -143,8 +154,8 @@ public sealed partial class DirectorCreationSession
     private Task? recoverySave;
     public void FlushRecovery() { recoverySave?.GetAwaiter().GetResult(); recoverySave = null; }
     private readonly Dictionary<(Guid Object, Guid Part), CreationTransform> drafts = new();
-    public bool HasTransformDraft => drafts.Count > 0 || propertyDrafts.Count > 0;
-    public void ClearTransformDrafts() { drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Refresh(); }
+    public bool HasTransformDraft => HasPoseDraft || drafts.Count > 0 || propertyDrafts.Count > 0;
+    public void ClearTransformDrafts() { ResetPoseDraft(); drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Refresh(); }
 
     private DirectorCreationProject? gesture;
     private long gestureRevision;
@@ -163,8 +174,9 @@ public sealed partial class DirectorCreationSession
         DocumentGeneration++;
         StopRecording();
         if (Project is not null && Dirty) Save();
-        project.Validate(); Project = project; History.Clear(); SelectedObject = SelectedPart = SelectedAnimation = Guid.Empty;
-        Time = 0; Playing = Recording = Dirty = ExternalRecording = false; AutoKey = false; AnimationTime = 0; AnimationObject = Guid.Empty; gesture = null; clipGesture = null; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Revision++; Refresh();
+        ScenePoseActor=Guid.Empty; ResetPoseDraft(); project.Validate(); Project = project; History.Clear(); SelectedObject = SelectedPart = SelectedAnimation = Guid.Empty;
+        Time = 0; Playing = Recording = Dirty = ExternalRecording = false; EditTask = CreationEditTask.Placement; AutoKey = true; AnimationTime = 0; AnimationObject = Guid.Empty; gesture = null; clipGesture = null; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Revision++; Refresh();
+        RestorePoseRecovery(project.PoseRecovery); project.PoseRecovery = null;
     }
     public void Edit(string label, Action<DirectorCreationProject> edit)
     {
@@ -175,9 +187,25 @@ public sealed partial class DirectorCreationSession
         catch { Project = before; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Revision++; Refresh(); throw; }
         History.Record(before, label); Changed();
     }
-    public void BeginGesture() { if (gesture is null && clipGesture is null && Project is not null) { gesture = Project.Clone(); gestureRevision = Revision; } }
+    private Dictionary<(Guid Object,Guid Part),CreationTransform>? gestureDrafts;
+    private Dictionary<(Guid Object,Guid Part),HashSet<CreationChannel>>? gestureChannels;
+    private Dictionary<(Guid Object,Guid Part,CreationChannel Channel),CreationVector>? gestureProperties;
+    public void BeginGesture()
+    {
+        BeginPoseGesture();
+        if (gesture is null && clipGesture is null && Project is not null)
+        {
+            gesture = Project.Clone(); gestureRevision = Revision;
+            gestureDrafts=drafts.ToDictionary(p=>p.Key,p=>p.Value with{});
+            gestureChannels=draftChannels.ToDictionary(p=>p.Key,p=>new HashSet<CreationChannel>(p.Value));
+            gestureProperties=new(propertyDrafts);
+        }
+    }
     public void EndGesture(string label)
     {
+        gestureDrafts=null;gestureChannels=null;gestureProperties=null;
+        CommitAutoPose();
+        bool poseChanged = EndPoseGesture();
         if (clipGesture is { } before && Project is not null)
         {
             clipGesture = null;
@@ -194,19 +222,19 @@ public sealed partial class DirectorCreationSession
         if (Revision == gestureRevision) { gesture = null; return; }
         try { Project.Validate(); }
         catch { Project = gesture; gesture = null; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Revision++; Refresh(); throw; }
-        History.Record(gesture, label);
+        if ((!poseChanged && !PoseEditing) || JsonSerializer.Serialize(gesture, CreationJson.Options) != JsonSerializer.Serialize(Project, CreationJson.Options)) History.Record(gesture, label);
         gesture = null;
     }
     public void Changed() { Dirty = true; Revision++; Refresh(); }
-    public void Undo() { if (Project is null) return; EndGesture("编辑"); if (!History.CanUndo) return; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Project = History.Undo(Project); Changed(); }
-    public void Redo() { if (Project is null || !History.CanRedo) return; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Project = History.Redo(Project); Changed(); }
+    public void Undo() { if (UndoPose(false)) return; if (Project is null) return; EndGesture("编辑"); if (!History.CanUndo) return; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Project = History.Undo(Project); Changed(); }
+    public void Redo() { if (UndoPose(true)) return; if (Project is null || !History.CanRedo) return; drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Project = History.Redo(Project); Changed(); }
     public void Save() { if (Project is null) return; FlushRecovery(); StopRecording(); EndGesture("编辑"); Store.Save(Project); Dirty = false; sinceSave = 0; }
-    public void Seek(double time) { drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); if (EditingAnimation is { } a) AnimationTime = Math.Clamp(double.IsFinite(time) ? time : 0, 0, a.Duration); else Time = Math.Clamp(double.IsFinite(time) ? time : 0, 0, Project?.Duration ?? 0); Refresh(); }
+    public void Seek(double time) { ResetPoseDraft(); drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); if (EditingAnimation is { } a) AnimationTime = Math.Clamp(double.IsFinite(time) ? time : 0, 0, a.Duration); else Time = Math.Clamp(double.IsFinite(time) ? time : 0, 0, Project?.Duration ?? 0); Refresh(); }
     public void Play(bool value)
     {
         if (!value && Recording) { StopRecording(); return; }
         if (value && Project is not null && EditTime >= EditDuration) Seek(EditingAnimation is null && Project.Loop ? Project.LoopStart : 0);
-        if (value) { drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Refresh(); }
+        if (value) { ResetPoseDraft(); drafts.Clear(); draftChannels.Clear(); propertyDrafts.Clear(); Refresh(); }
         Playing = value;
     }
     public void Tick(double delta)
@@ -226,6 +254,7 @@ public sealed partial class DirectorCreationSession
         if (Dirty && gesture is null && clipGesture is null && !ExternalRecording && sinceSave >= 30 && recoverySave is null)
         {
             var snapshot = Project.Clone();
+            snapshot.PoseRecovery = poseDraft is null ? null : CreationJson.Clone(poseDraft);
             recoverySave = Task.Run(() => Store.Save(snapshot, recovery: true)); sinceSave = 0;
         }
     }
@@ -236,7 +265,7 @@ public sealed partial class DirectorCreationSession
         if (time >= Project.Duration)
         {
             bool extendLoop = Project.LoopEnd >= Project.Duration;
-            Project.Duration = Math.Min(86400, Math.Max(Project.Duration, time + 1d / Project.Output.Fps));
+            Project.Duration = Math.Min(86400, Math.Max(Project.Duration, time + DirectorCreationTiming.FrameDuration));
             if (extendLoop) Project.LoopEnd = Project.Duration;
             Dirty = true;
         }
@@ -245,6 +274,10 @@ public sealed partial class DirectorCreationSession
     public Action<DirectorCreationProject, CreationFrame>? FrameReady { get; set; }
     public void Refresh()
     {
+        if(SelectedAnimation!=Guid.Empty && (EditingAnimation is null || Project?.Objects.Any(o=>o.Id==AnimationObject)!=true))
+        { SelectedAnimation=AnimationObject=Guid.Empty;AnimationTime=0;ResetPoseDraft(); }
+        if (ScenePoseEditing && Project?.Objects.Any(o=>o.Id==ScenePoseActor && o.ModelId!=Guid.Empty)!=true)
+        { ScenePoseActor=Guid.Empty; SelectedPart=Guid.Empty; ResetPoseDraft(); }
         if (Project is not null) Store.LoadPerformances(Project);
         Frame = Project is null ? null : EvaluateEditingFrame();
         if (Project is not null && Frame is not null) FrameReady?.Invoke(Project, Frame);

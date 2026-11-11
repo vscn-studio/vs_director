@@ -57,6 +57,9 @@ internal sealed partial class DirectorImGuiWorkspace
                 SplitNode(center, ImGuiDir.Right, .30f, out creationRight, out _);
                 DockWindow("###vsdirector-creation-browser", creationLeft);
                 DockWindow("###vsdirector-creation-properties", creationRight);
+                DockWindow("###vsdirector-creation-bones", creationRight);
+                DockWindow("###vsdirector-creation-ik", creationRight);
+                DockWindow("###vsdirector-creation-actions", creationRight);
                 DockWindow("###vsdirector-creation-view", creationRight);
                 DockWindow("###vsdirector-creation-timeline", creationBottom);
                 creationPreview = 0; resetCreationLayout = false; Finish(creationDock);

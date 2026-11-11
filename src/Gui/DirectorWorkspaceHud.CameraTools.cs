@@ -21,7 +21,7 @@ internal sealed partial class DirectorWorkspaceHud
     private readonly List<(Guid Id, Vector2 Screen)> cameraToolHeads = new();
     private readonly record struct CameraToolLine(Vector2 A, Vector2 B, int Axis, Guid CameraId);
     private readonly record struct CameraToolTriangle(Vector2 A, Vector2 B, Vector2 C, int Axis);
-    private static readonly (Vector3 A, Vector3 B)[] CameraOutline = CreateCameraOutline();
+    private static readonly (Vector3 A, Vector3 B)[] CameraOutline = DirectorEditorGeometry.CameraOutline;
     private const uint CameraOutlineColor = 0xffffffff;
     private const int ScreenRotationAxis = 6;
     private CameraPreset? cameraDragOriginal, cameraDragPose;
@@ -166,102 +166,22 @@ internal sealed partial class DirectorWorkspaceHud
     private static (Vector3 Right, Vector3 Up, Vector3 Back) CameraHeadBasis(CameraPreset pose)
         => DirectorCameraManipulation.CameraHeadBasis(pose);
 
-    private static (Vector3 A, Vector3 B)[] CreateCameraOutline()
-    {
-        // Simple camera body, flared lens and two film reels, facing local -Z.
-        // Keep only the recognisable silhouette within a one-block diameter.
-        var lines = new List<(Vector3 A, Vector3 B)>();
-        Vector3[] Rectangle(float x, float y, float z) =>
-            [new(-x, -y, z), new(x, -y, z), new(x, y, z), new(-x, y, z)];
-        void JoinRings(Vector3[] a, Vector3[] b)
-        {
-            for (int i = 0; i < a.Length; i++)
-            {
-                lines.Add((a[i], a[(i + 1) % a.Length]));
-                lines.Add((b[i], b[(i + 1) % b.Length]));
-                lines.Add((a[i], b[i]));
-            }
-        }
-        void Box(Vector3 min, Vector3 max)
-        {
-            Vector3[] Face(float z) => [new(min.X, min.Y, z), new(max.X, min.Y, z),
-                new(max.X, max.Y, z), new(min.X, max.Y, z)];
-            JoinRings(Face(min.Z), Face(max.Z));
-        }
-        Box(new(-.18f, -.16f, -.12f), new(.18f, .16f, .28f));
-        JoinRings(Rectangle(.09f, .07f, -.12f), Rectangle(.17f, .13f, -.42f));
-        const int reelSegments = 12;
-        foreach (float z in new[] { -.045f, .185f })
-        for (int i = 0; i < reelSegments; i++)
-        {
-            Vector3 At(float angle) => new(0, .255f + .10f * MathF.Cos(angle), z + .10f * MathF.Sin(angle));
-            lines.Add((At(i * MathF.Tau / reelSegments), At((i + 1) * MathF.Tau / reelSegments)));
-        }
-        return lines.ToArray();
-    }
-
+    private DirectorEditorHandles? replayHandles;
     private void DrawCameraHandles(ImDrawListPtr draw, CameraPreset pose)
     {
-        Vec3d pivot = CameraPivot(pose);
-        if (!ProjectCameraPoint(pivot, out var center)) return;
-        float length = CameraGizmoRadius(pose);
-        Vector3 view = cameraTool == CameraTool.Rotate ? CameraScreenRotationAxis() : CameraViewDirection(pivot);
-        uint[] colors = [0xff6666ee, 0xff77cf75, 0xffedaa62];
-        for (int axis = 0; axis < 3; axis++)
+        var pivot=CameraPivot(pose); if(!ProjectCameraPoint(pivot,out var center)) return;
+        float radius=CameraGizmoRadius(pose);
+        replayHandles ??= new();
+        replayHandles.Draw(draw,center,CameraWorldUnitsPerPixel(pivot),radius,capi.Render.PerspectiveViewMat,
+            [Vector3.UnitX,Vector3.UnitY,Vector3.UnitZ],cameraTool==CameraTool.Rotate,cameraTool==CameraTool.Pivot,cameraDragAxisIndex,false,cameraHoverAxis);
+        foreach(var line in replayHandles.Lines) cameraToolLines.Add(new(line.A,line.B,line.Axis,line.CameraId));
+        foreach(var face in replayHandles.Triangles) cameraToolTriangles.Add(new(face.A,face.B,face.C,face.Axis));
+        cameraToolHeads.Add((cameraToolSelection,center));
+        if(cameraTool==CameraTool.Rotate)
         {
-            bool active = cameraDragAxisIndex == axis;
-            uint color = active || cameraDragAxisIndex < 0 && cameraHoverAxis == axis ? 0xff55d9ff : colors[axis];
-            if (cameraTool == CameraTool.Rotate)
-            {
-                // Render all rear arcs first, so they never cover another axis' front arc.
-                DrawCameraRotationRingLayer(draw, pivot, length, axis, color, view, false);
-            }
+            if(cameraDragAxisIndex>=0) DrawCameraRotationArc(draw,pivot,cameraDragAxisIndex==ScreenRotationAxis?radius+CameraWorldUnitsPerPixel(pivot)*22*DirectorImGuiTheme.Scale:radius);
+            DrawCameraAngleReadout(draw,pose);
         }
-        for (int axis = 0; axis < 3; axis++)
-        {
-            bool active = cameraDragAxisIndex == axis;
-            uint color = active || cameraDragAxisIndex < 0 && cameraHoverAxis == axis ? 0xff55d9ff : colors[axis];
-            if (cameraTool == CameraTool.Rotate)
-            {
-                DrawCameraRotationRingLayer(draw, pivot, length, axis, color, view, true);
-                if (active) DrawCameraRotationArc(draw, pivot, length);
-            }
-            else
-            {
-                var m = capi.Render.PerspectiveViewMat;
-                Vector3 axisDirection = CameraAxis(axis);
-                float projectedLength = new Vector2((float)(m[0] * axisDirection.X + m[4] * axisDirection.Y + m[8] * axisDirection.Z),
-                    (float)(m[1] * axisDirection.X + m[5] * axisDirection.Y + m[9] * axisDirection.Z)).Length();
-                float axisLength = length / Math.Max(.15f, projectedLength);
-                Vec3d end = Add(pivot, axisDirection * axisLength);
-                Vec3d shaftEnd = cameraTool == CameraTool.Move
-                    ? Add(pivot, axisDirection * (axisLength - CameraMoveConeLength(pivot, axisLength))) : end;
-                CameraHandleLine(draw, pivot, pivot, shaftEnd, color, axis, 1.5f);
-                if (cameraTool == CameraTool.Move) DrawCameraMoveCone(draw, pivot, axisLength, axis, color);
-                if (cameraTool == CameraTool.Pivot) DrawCameraPivotBox(draw, pivot, axisLength, axis, color);
-                if (ProjectCameraHandlePoint(pivot, end, out var tip))
-                {
-                    float radius = 4 * DirectorImGuiTheme.Scale;
-                    draw.AddText(tip + new Vector2(radius + 2, -radius), color, "XYZ"[axis].ToString());
-                }
-            }
-        }
-        if (cameraTool != CameraTool.Rotate)
-            for (int normal = 0; normal < 3; normal++)
-            {
-                int handle = normal + 3;
-                bool highlighted = cameraDragAxisIndex == handle || cameraDragAxisIndex < 0 && cameraHoverAxis == handle;
-                DrawCameraMovePlane(draw, pivot, length, normal, highlighted ? 0xff55d9ff : colors[normal], view);
-            }
-        else
-        {
-            float outerRadius = length + CameraWorldUnitsPerPixel(pivot) * 22 * DirectorImGuiTheme.Scale;
-            DrawCameraScreenRotationRing(draw, pivot, outerRadius);
-            if (cameraDragAxisIndex == ScreenRotationAxis) DrawCameraRotationArc(draw, pivot, outerRadius);
-        }
-        DrawCameraCenter(draw, center);
-        cameraToolHeads.Add((cameraToolSelection, center));
-        if (cameraTool == CameraTool.Rotate) DrawCameraAngleReadout(draw, pose);
     }
 
     private static void DrawCameraCenter(ImDrawListPtr draw, Vector2 center, uint color = 0xff55d9ff)

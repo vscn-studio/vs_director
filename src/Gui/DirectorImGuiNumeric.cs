@@ -84,14 +84,14 @@ internal static class DirectorImGuiNumeric
             float fontSize = ImGui.GetFontSize() * .9f;
             var font = ImGui.GetFont();
             float available = Math.Max(0, max.X - min.X - 2 * arrowWidth - 4 * scale);
-            Vector2 Measure(string s) => ImGui.CalcTextSize(s) * .9f;
+            Vector2 Measure(string s) => s.Length == 0 ? Vector2.Zero : ImGui.CalcTextSize(s) * .9f;
             while (text.Length > 0 && Measure(text).X > available)
             {
                 string prefix = text.EndsWith('…') ? text[..^1] : text;
                 text = prefix.Length > 1 ? prefix[..^1] + "…" : "";
             }
             draw.PushClipRect(min, max, true);
-            draw.AddText(font, fontSize, (min + max - Measure(text)) / 2, textColor, text);
+            if (text.Length > 0) draw.AddText(font, fontSize, (min + max - Measure(text)) / 2, textColor, text);
             float corner = Math.Min(7 * scale, (max.Y - min.Y) * .25f);
             draw.AddTriangleFilled(new(max.X - corner, min.Y), new(max.X, min.Y), new(max.X, min.Y + corner),
                 ImGui.GetColorU32(axisColor));
@@ -110,7 +110,7 @@ internal static class DirectorImGuiNumeric
             if (hovered)
             {
                 ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEW);
-                if (!active) ImGui.SetTooltip(tooltip);
+                if (!active) ImGui.SetTooltip(text == full ? tooltip : tooltip + ": " + full);
             }
         }
         if (changed && double.IsFinite(edited)) value = edited;

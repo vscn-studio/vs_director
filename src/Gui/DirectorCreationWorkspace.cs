@@ -20,6 +20,8 @@ internal sealed partial class DirectorCreationWorkspace
     private DirectorCreationProject? Project => Session.Project;
     internal bool Active { get; private set; }
     private bool browser = true, properties = true, timeline = true, view = true;
+    private bool bonesPanel = true, ikPanel = false, actionsPanel = true;
+    private string focusRigPanel = "";
     private string requestedMenu = "", search = "", name = L("creation-new-project"), path = "", modal = "", modalRequest = "", error = "";
     private string modelContext = "";
     private Guid clipId, keyId, trackId;
@@ -31,7 +33,7 @@ internal sealed partial class DirectorCreationWorkspace
     private long displayedGeneration;
     private bool revealPanels;
     internal DirectorCreationWorkspace(ICoreClientAPI api, VSDirectorModSystem owner, DirectorImGuiWorkspace host)
-    { this.api = api; this.owner = owner; this.host = host; }
+    { this.api = api; this.owner = owner; this.host = host; try { editorPreferences=api.LoadModConfig<EditorPreferences>("vsdirector-creation-editor.json")??new(); } catch { editorPreferences=new(); } }
     internal void Menu(string menu) { Enter(); requestedMenu = menu; browser = properties = timeline = true; }
     internal void Suspend() { if (Active) { Runtime.Suspend(force: true); owner.LeaveCreationMode(); Active = false; host.SetCreationMode(false); } host.CreationPreviewVisible = false; }
     internal void Draw()
@@ -61,39 +63,53 @@ internal sealed partial class DirectorCreationWorkspace
         }
         if (displayedProject != Project.Id || displayedGeneration != Session.DocumentGeneration)
         {
+            if(activeViewKey is not null)SaveTimelineView();
             displayedProject = Project.Id;
             displayedGeneration = Session.DocumentGeneration;
+            draggingPose = poseContextTime = null; copiedPose = null; selectedObjects.Clear();
+            scenePoseDrag = scenePoseOwner = contextScenePose = Guid.Empty; handleAxis = -1;
+            draggedKey = draggedClip = Guid.Empty;
             browser = properties = timeline = revealPanels = true;
             modelContext = ""; timelineZoom = 1; timelineStart = 0; timelineEditor = false;
-            clipId = keyId = trackId = Guid.Empty;
+            clipId = keyId = trackId = poseEditorActor = editingSourceClip = Guid.Empty; actionPoseEditorTime=null;
             if (SelectedObject is null) Session.SelectedObject = Project.CameraId;
+            Session.AutoKey=editorPreferences.AutoKey; RestoreTimelineView(); sceneContext=null;selectedBones.Clear();
         }
+        SyncSelection();
         ImGui.BeginDisabled(Runtime.Exporting || Runtime.PerformanceActive);
         if (browser) Panel(L("creation-objects") + "###vsdirector-creation-browser", ref browser, host.LeftDockId, DrawBrowser, revealPanels);
         if (view) Panel(L("creation-view") + "###vsdirector-creation-view", ref view, host.InspectorDockId, DrawView);
         if (properties) Panel(modelContext.Length > 0 ? L("creation-model-properties") + "###vsdirector-creation-properties" : L("creation-creation-properties") + "###vsdirector-creation-properties", ref properties, host.InspectorDockId, DrawProperties, revealPanels);
+        if (modelContext.Length == 0)
+        {
+            if (bonesPanel) Panel(L("creation-bones-tab") + "###vsdirector-creation-bones", ref bonesPanel, host.InspectorDockId, DrawBonesPanel, focusRigPanel == "bones");
+            if (ikPanel) Panel("IK###vsdirector-creation-ik", ref ikPanel, host.InspectorDockId, DrawIkPanel, focusRigPanel == "ik");
+            if (actionsPanel) Panel(L("creation-actions-tab") + "###vsdirector-creation-actions", ref actionsPanel, host.InspectorDockId, DrawActionsPanel, focusRigPanel == "actions");
+            focusRigPanel = "";
+        }
         ImGui.EndDisabled();
-        if (timeline && modelContext.Length == 0) Panel((SelectedAnimation is null ? L("creation-creation-timeline") : L("creation-action-prefix") + SelectedAnimation.Name) + "###vsdirector-creation-timeline", ref timeline, host.TimelineDockId, DrawTimeline, revealPanels);
+        if (timeline && modelContext.Length == 0) Panel((SelectedAnimation is null ? L("creation-creation-timeline") : L("creation-action-prefix") + SelectedAnimation.Name) + "###vsdirector-creation-timeline", ref timeline, host.TimelineDockId, DrawTimeline, revealPanels, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         revealPanels = false;
         // Viewport tools must not prevent the document panels from being submitted.
         if (!Runtime.Exporting && !Runtime.PerformanceActive) { try { DrawViewportTools(); } catch (Exception e) { error = Message(e.Message); } }
         host.CreationAspect = Project.Output.Width / (float)Math.Max(1, Project.Output.Height);
         host.CreationPreviewVisible = Runtime.Preview;
         if (Runtime.Preview) DrawPreview();
-        if (!ImGui.GetIO().WantTextInput && ImGui.IsWindowFocused(ImGuiFocusedFlags.AnyWindow) && !Runtime.Exporting && !Runtime.PerformanceActive)
+        if (!ImGui.GetIO().WantTextInput && !ImGui.IsAnyItemActive() && !ImGui.IsPopupOpen("",ImGuiPopupFlags.AnyPopupId|ImGuiPopupFlags.AnyPopupLevel) && ImGui.IsWindowFocused(ImGuiFocusedFlags.AnyWindow) && !Runtime.Exporting && !Runtime.PerformanceActive)
         {
+            HandleSelectionKeys();
             var io = ImGui.GetIO();
             if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.S)) Continue(Session.Save);
-            if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Z)) { if (io.KeyShift) Continue(Session.Redo); else Continue(Session.Undo); }
-            if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Y)) Continue(Session.Redo);
+            if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Z, false)) { if (io.KeyShift) Run(Session.Redo); else Run(Session.Undo); }
+            if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Y, false)) Run(Session.Redo);
         }
     }
-    private void Panel(string title, ref bool open, uint dock, Action draw, bool reveal = false)
+    private void Panel(string title, ref bool open, uint dock, Action draw, bool reveal = false, ImGuiWindowFlags flags = ImGuiWindowFlags.None)
     {
         if (dock != 0) ImGui.SetNextWindowDockID(dock, reveal ? ImGuiCond.Always : ImGuiCond.FirstUseEver);
         if (reveal) { ImGui.SetNextWindowCollapsed(false); ImGui.SetNextWindowFocus(); }
         ImGui.SetNextWindowSize(new(320, 320), ImGuiCond.FirstUseEver);
-        bool visible = ImGui.Begin(title, ref open);
+        bool visible = ImGui.Begin(title, ref open, flags);
         ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         host.TrackCreationDock(title);
         try { if (visible) draw(); } finally { ImGui.End(); }
@@ -148,12 +164,12 @@ internal sealed partial class DirectorCreationWorkspace
             if (ImGui.BeginMenu(L("creation-animation"), CurrentModel is not null)) { DrawMenu("动画"); ImGui.EndMenu(); }
             Item(L("creation-undo"), Session.Undo, Session.History.CanUndo); Item(L("creation-redo"), Session.Redo, Session.History.CanRedo);
             Item(L("creation-duplicate-selected-object"), DuplicateObject, SelectedObject is not null);
-            Item(L("creation-delete-selected-object"), () => Session.Edit(L("creation-delete-object"), p => DirectorCreationEdits.DeleteObject(p, Session.SelectedObject)), SelectedObject is not null);
+            Item(L("creation-delete-selected-object"), DeleteSelection, SelectedObject is not null);
             Item(L("creation-move-scene-to-observer"), () => Session.Edit(L("creation-move-scene-origin"), p => p.Origin += Runtime.CursorPosition()));
             Item(L("creation-apply-preset"), () => auxiliary = "presets", SelectedObject is not null);
             Item(L("creation-save-pose-preset"), SavePreset, SelectedObject is not null);
-            Item(L("creation-link-current-replay-as-background"), () => Session.Edit(L("creation-link-background-replay"), p => p.BackgroundReplayId = owner.ActiveReplayId), owner.ActiveReplayId != Guid.Empty);
-            Item(L("creation-unlink-background-replay"), () => Session.Edit(L("creation-unlink-background-replay"), p => p.BackgroundReplayId = Guid.Empty));
+            Item(L("creation-link-current-replay-as-background"), Runtime.LinkCurrentBackground, owner.ActiveReplayId != Guid.Empty);
+            Item(L("creation-use-current-world"), Runtime.UseCurrentWorld);
         }
         if (menu == "创建")
         {
@@ -189,7 +205,17 @@ internal sealed partial class DirectorCreationWorkspace
         }
         if (menu == "窗口")
         {
+            if (ImGui.BeginMenu(L("creation-timeline-display"), ready))
+            {
+                foreach (var display in Enum.GetValues<CreationTimeDisplay>())
+                    Item(L(display == CreationTimeDisplay.Frames ? "creation-display-frames" : "creation-display-time"),
+                        () => Session.Edit(L("creation-timeline-display"), p => p.TimeDisplay = display), selected: TimeDisplay == display);
+                ImGui.EndMenu();
+            }
             Item(L("creation-view"), () => view = true, selected: view);
+            Item(L("creation-bones-tab"), () => { bonesPanel = true; focusRigPanel = "bones"; }, selected: bonesPanel);
+            Item("IK", () => { ikPanel = true; focusRigPanel = "ik"; }, selected: ikPanel);
+            Item(L("creation-actions-tab"), () => { actionsPanel = true; focusRigPanel = "actions"; }, selected: actionsPanel);
             Item(L("creation-creation-list"), () => browser = true, selected: browser);
             Item(L("creation-creation-properties"), () => properties = true, selected: properties);
             Item(L("creation-creation-timeline"), () => timeline = true, enabled: modelContext.Length == 0, selected: timeline && modelContext.Length == 0);
@@ -205,7 +231,21 @@ internal sealed partial class DirectorCreationWorkspace
     private bool structureCapture;
     private CreationVector structureFirst;
     private void Select(CreationSceneObject obj)
-    { Continue(() => { if (SelectedAnimation is not null && Session.AnimationObject != obj.Id) Session.LeaveAnimation(); Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; modelId = obj.ModelId; modelContext = ""; clipId = keyId = trackId = Guid.Empty; properties = true; }); }
+    { SelectWithinPose(obj.Id, () => { if(Session.ScenePoseEditing && Session.ScenePoseActor!=obj.Id) Session.EndScenePose(); if (SelectedAnimation is not null && Session.AnimationObject != obj.Id && !Session.IsAnimationControl(obj.Id)) Session.LeaveAnimation(); selectedObjects.Clear(); selectedObjects.Add(obj.Id); selectedBones.Clear();selectionArea=SelectionArea.Objects;Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; modelId = obj.ModelId; modelContext = ""; clipId = keyId = trackId = Guid.Empty; RevealTimelineSelection(obj.Id,Guid.Empty);
+        if (IsIkControl(obj.Id)) { operation = ImGuizmoNET.OPERATION.TRANSLATE; if(ikPanel) focusRigPanel = "ik"; } }); }
+    private void SelectBone(Guid actor, Guid part) => SelectWithinPose(actor, () =>
+    {
+        if (Session.AnimationEditing && SelectedAnimation is null && Session.ScenePoseActor != actor) Session.BeginScenePose(actor);
+        if (SelectedAnimation is not null && Session.AnimationObject != actor) Session.LeaveAnimation();
+        if(!ImGui.GetIO().KeyCtrl || Session.SelectedObject!=actor)selectedBones.Clear();
+        if(!selectedBones.Add(part) && selectedBones.Count>1)selectedBones.Remove(part);
+        selectedObjects.Clear(); selectedObjects.Add(actor); Session.SelectedObject = actor; Session.SelectedPart = selectedBones.Contains(part)?part:selectedBones.First();
+        selectionArea=SelectionArea.Bones;ClearTimelineSelection(); RevealTimelineSelection(actor,part);
+        if(bonesPanel) focusRigPanel = "bones"; selectedIkChain = Guid.Empty;
+        posePull = false; operation = ImGuizmoNET.OPERATION.ROTATE; transformMode = ImGuizmoNET.MODE.LOCAL;
+    });
+    private void SelectWithinPose(Guid actor, Action action)
+    { if (Session.PoseEditing && actor == Session.PoseActor) Run(action); else Continue(action); }
     private void AddObject(CreationObjectKind kind, Guid asset = default)
     {
         var obj = new CreationSceneObject { Kind = kind, AssetId = asset, ResourceCode = kind == CreationObjectKind.Item ? "game:torch" : "", Name = kind switch { CreationObjectKind.Camera => L("creation-camera"), CreationObjectKind.Group => L("creation-group"), CreationObjectKind.Text => L("creation-text"), CreationObjectKind.Particle => L("creation-particles"), CreationObjectKind.Item => L("creation-item-block"), _ => L("creation-image") }, Transform = new() { Position = Runtime.CursorPosition() } };
@@ -242,6 +282,7 @@ internal sealed partial class DirectorCreationWorkspace
     {
         if (SelectedObject is not { } source) return;
         var copy = CreationJson.Clone(source); copy.Id = Guid.NewGuid(); copy.Name += L("creation-copy"); copy.Transform.Position += new CreationVector(1, 0, 0);
+        foreach(var key in copy.PoseKeys) key.Id=Guid.NewGuid();
         Session.Edit(L("creation-duplicate-object"), p =>
         {
             p.Objects.Add(copy);
@@ -303,10 +344,14 @@ internal sealed partial class DirectorCreationWorkspace
             throw new InvalidDataException(L("creation-the-animation-version-differs-from-this-model-import-an-animation-usin"));
         Session.Edit(L("creation-import-animation"), p => { foreach (var node in nodes.OfType<JsonObject>()) p.Animations.Add(DirectorCreationShape.ImportAnimation(node, model)); });
     }
+    private double newActionDuration = 3;
+    private bool newActionLoop;
     private void NewAnimation(string name)
     {
         if (CurrentModel is not { } model || SelectedObject is not { } obj) return;
-        var animation = new CreationAnimation { Name = name, ModelId = model.Id, Duration = Math.Min(3, Project!.Duration) };
+        var animation = new CreationAnimation { Name = name, ModelId = model.Id, Duration = newActionDuration, Loop = newActionLoop, PoseEditing = true };
+        var source = Session.Frame!.Objects[obj.Id];
+        DirectorCreationSession.WritePose(animation, new() { Bones = model.Parts.ToDictionary(p => p.Id, p => (source.Pose.GetValueOrDefault(p.Id) ?? new()) with { }), Hidden = new(source.HiddenParts) }, 0);
         Session.Edit(L("creation-new-animation"), p => p.Animations.Add(animation));
         EditAnimation(animation);
     }
@@ -326,7 +371,7 @@ internal sealed partial class DirectorCreationWorkspace
     {
         ImGui.TextWrapped(Project!.Name + (Session.Dirty ? " *" : ""));
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##search", L("creation-search-names"), ref search, 256);
-        if (modelContext.Length > 0 || SelectedAnimation is not null)
+        if (modelContext.Length > 0)
         {
             if (Button(L("creation-back-project"))) ReturnToProject();
             if (SelectedAnimation is { } action && Button(L("creation-add-animation-clip"))) Continue(() => AddAnimationClip(action));
@@ -343,24 +388,31 @@ internal sealed partial class DirectorCreationWorkspace
     private void DrawObjects()
     {
         if (Project is null) return;
-        void Children(Guid parent, int depth)
+        if(selectedObjects.Count>1) ImGui.TextUnformatted(string.Format(L("creation-multiple-selection"),selectedObjects.Count));
+        void Children(Guid parent, int depth, bool attachments = false)
         {
             if (depth > 64) return;
-            foreach (var obj in Project.Objects.Where(o => o.ParentId == parent).ToArray())
+            foreach (var obj in Project.Objects.Where(o => o.ParentId == parent && !IsIkControl(o.Id) && (parent==Guid.Empty || attachments == (o.ActorHand is 1 or 2))).ToArray())
             {
-                if (search.Length > 0 && !Match(obj.Name)) continue;
-                bool hasChildren = Project.Objects.Any(o => o.ParentId == obj.Id) || Project.Models.Any(m => m.Id == obj.ModelId && m.Parts.Count > 0);
-                var flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth | (obj.Id == Session.SelectedObject ? ImGuiTreeNodeFlags.Selected : 0)
+                if (search.Length > 0 && !Match(ObjectName(obj))) continue;
+                bool hasChildren = Project.Objects.Any(o => o.ParentId == obj.Id) || PosePicking && Project.Models.Any(m => m.Id == obj.ModelId && m.Parts.Count > 0);
+                var flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth | (ObjectSelected(obj.Id) ? ImGuiTreeNodeFlags.Selected : 0)
                     | (hasChildren ? 0 : ImGuiTreeNodeFlags.Leaf);
                 ImGui.PushID(obj.Id.ToString());
-                bool open = ImGui.TreeNodeEx(obj.Name + "###" + obj.Id, flags);
-                if (ImGui.IsItemClicked()) Select(obj);
+                bool open = ImGui.TreeNodeEx(ObjectName(obj) + "###" + obj.Id, flags);
+                if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen()) SelectObjectClick(obj);
                 if (ImGui.BeginPopupContextItem("object-menu"))
                 {
                     DrawObjectContext(obj);
                     ImGui.EndPopup();
                 }
-                if (open) { if (Project.Models.Find(m => m.Id == obj.ModelId) is { } m) DrawParts(m, obj.Id); Children(obj.Id, depth + 1); ImGui.TreePop(); }
+                if (open)
+                {
+                    if (PosePicking && Project.Models.Find(m => m.Id == obj.ModelId) is { } m) DrawParts(m, obj.Id);
+                    Children(obj.Id, depth + 1);
+                    if(Project.Objects.Any(o=>o.ParentId==obj.Id&&o.ActorHand is 1 or 2) && ImGui.TreeNode(L("creation-attachments"))) { Children(obj.Id,depth+1,true);ImGui.TreePop(); }
+                    ImGui.TreePop();
+                }
                 ImGui.PopID();
             }
         }
@@ -375,16 +427,11 @@ internal sealed partial class DirectorCreationWorkspace
     }
     private void DrawObjectContext(CreationSceneObject obj)
     {
+        Item(L("creation-scene-pose"),()=>StartScenePose(obj),obj.ModelId!=Guid.Empty);
         if (obj.Kind == CreationObjectKind.Model) Item(L("creation-record-player-to-selected-actor"), () => { Session.SelectedObject = obj.Id; Runtime.TogglePerformance(); });
         Item(L("creation-rename-object"), () => Ask(L("creation-rename-object"), value => Session.Edit(L("creation-rename-object"), p => p.Objects.First(o => o.Id == obj.Id).Name = value), obj.Name));
         Item(L("creation-duplicate-selected-object"), () => { Session.SelectedObject = obj.Id; DuplicateObject(); });
-        Item(L("creation-delete-selected-object"), () =>
-        {
-            if (Session.AnimationObject == obj.Id) Session.LeaveAnimation();
-            Session.Edit(L("creation-delete-object"), p => DirectorCreationEdits.DeleteObject(p, obj.Id));
-            if (Session.SelectedObject == obj.Id) Session.SelectedObject = Session.SelectedPart = Guid.Empty;
-            clipId = keyId = trackId = Guid.Empty;
-        });
+        Item(L("creation-delete-selected-object"), () => { SelectObjectClick(obj, true); Session.SelectedPart = Guid.Empty; DeleteSelection(); });
         ImGui.Separator();
         Item(L("creation-edit-selected-model"), () => { Session.LeaveAnimation(); Session.SelectedObject = obj.Id; modelContext = "model"; modelId = obj.ModelId; }, obj.ModelId != Guid.Empty);
         Item(L("creation-new-animation"), () => { Session.SelectedObject = obj.Id; Ask(L("creation-animation-name"), NewAnimation); }, obj.ModelId != Guid.Empty);
@@ -400,7 +447,7 @@ internal sealed partial class DirectorCreationWorkspace
                 bool open = ImGui.TreeNodeEx(part.Name + "###part-" + part.Id, ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth
                     | (part.Id == Session.SelectedPart && actor == Session.SelectedObject ? ImGuiTreeNodeFlags.Selected : 0)
                     | (model.Parts.Any(p => p.ParentId == part.Id) ? 0 : ImGuiTreeNodeFlags.Leaf));
-                if (ImGui.IsItemClicked()) Continue(() => { if (SelectedAnimation is not null && Session.AnimationObject != actor) Session.LeaveAnimation(); Session.SelectedObject = actor; Session.SelectedPart = part.Id; clipId = keyId = trackId = Guid.Empty; properties = true; });
+                if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen()) SelectBone(actor, part.Id);
                 if (open) { Parts(part.Id, depth + 1); ImGui.TreePop(); }
                 ImGui.PopID();
             }
@@ -416,11 +463,11 @@ internal sealed partial class DirectorCreationWorkspace
             if (ImGui.Selectable(model.Name + "##model-" + model.Id, model.Id == modelId, ImGuiSelectableFlags.AllowDoubleClick))
             { modelId = model.Id; if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)) Continue(() => { AddActor(model); auxiliary = ""; }); }
         }
-        ImGui.SeparatorText(L("creation-animations-double-click-to-add-clip"));
+        ImGui.SeparatorText(L("creation-actions-tab"));
         foreach (var a in Project.Animations.Where(a => Match(a.Name + a.Folder)))
         {
             ImGui.PushID(a.Id.ToString());
-            if (ImGui.Selectable(a.Name, a.Id == Session.SelectedAnimation)) EditAnimation(a);
+            if (ImGui.Selectable(a.Name, a.Id == actionResource,ImGuiSelectableFlags.AllowDoubleClick)) { actionResource=a.Id;if(ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))EditAnimation(a); }
             if (ImGui.BeginPopupContextItem("action-menu"))
             {
                 Item(L("creation-add-animation-clip"), () => AddAnimationClip(a));
@@ -478,13 +525,13 @@ internal sealed partial class DirectorCreationWorkspace
             }
         }
     }
-    private void Ask(string title, Action<string> accept, string initial = "") { modalRequest = title; name = initial; acceptPath = accept; pathDialog = false; }
+    private void Ask(string title, Action<string> accept, string initial = "") { if (title == L("creation-animation-name")) { newActionDuration = 3; newActionLoop = false; } modalRequest = title; name = initial; acceptPath = accept; pathDialog = false; }
     private void FileDialog(string title, Action<string> accept, string filename = "")
     { modalRequest = title; path = filename.Length > 0 ? Path.Combine(dialogDirectory, filename) : ""; acceptPath = accept; pathDialog = true; }
     private void DrawModal()
     {
         if (modalRequest.Length > 0) { modal = modalRequest; modalRequest = ""; ImGui.OpenPopup(L("creation-creation") + "###creation-dialog"); }
-        ImGui.SetNextWindowSize(new Vector2(580, pathDialog ? 500 : 150) * DirectorImGuiTheme.Scale, ImGuiCond.Appearing);
+        ImGui.SetNextWindowSize(new Vector2(580, pathDialog ? 500 : modal == L("creation-animation-name") ? 260 : 150) * DirectorImGuiTheme.Scale, ImGuiCond.Appearing);
         bool open = true;
         if (!ImGui.BeginPopupModal(L("creation-creation") + "###creation-dialog", ref open, ImGuiWindowFlags.NoSavedSettings)) return;
         ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
@@ -507,7 +554,20 @@ internal sealed partial class DirectorCreationWorkspace
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { ImGui.TextWrapped(e.Message); }
                 finally { ImGui.EndChild(); }
             }
-            else { ImGui.SetNextItemWidth(-1); ImGui.InputText("##name", ref name, 256); }
+            else
+            {
+                ImGui.SetNextItemWidth(-1); ImGui.InputText("##name", ref name, 256);
+                if (modal == L("creation-animation-name"))
+                {
+                    ImGui.TextUnformatted(TimeLabel(L("creation-animation-duration"))); ImGui.SetNextItemWidth(-1);
+                    double displayedDuration = DirectorCreationTiming.ToDisplay(newActionDuration, TimeDisplay);
+                    if (DirectorImGuiNumeric.Double("##new-action-duration", ref displayedDuration,
+                        (float)DirectorCreationTiming.ToDisplay(DirectorCreationTiming.FrameDuration, TimeDisplay),
+                        DirectorCreationTiming.ToDisplay(DirectorCreationTiming.FrameDuration, TimeDisplay), DirectorCreationTiming.ToDisplay(86400, TimeDisplay)))
+                        newActionDuration = Math.Clamp(DirectorCreationTiming.Snap(DirectorCreationTiming.FromDisplay(displayedDuration, TimeDisplay)), DirectorCreationTiming.FrameDuration, 86400);
+                    Checkbox(L("creation-loop-animation"), ref newActionLoop);
+                }
+            }
             if (error.Length > 0) ImGui.TextWrapped(error);
             if (Button(L("creation-ok")))
             {

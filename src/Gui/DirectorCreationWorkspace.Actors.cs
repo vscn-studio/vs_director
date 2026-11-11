@@ -39,9 +39,10 @@ internal sealed partial class DirectorCreationWorkspace
     }
 
     private Guid ikUpper, ikLower;
+    private string boneSearch = "";
     private void DrawActorRig(CreationSceneObject obj)
     {
-        if (CurrentModel is not { } model) return;
+        if (Project?.Models.Find(m => m.Id == obj.ModelId) is not { } model) return;
         if (Header(L("creation-player-body")))
         {
             var body = obj.PlayerBody;
@@ -60,52 +61,8 @@ internal sealed partial class DirectorCreationWorkspace
             foreach (var channel in new[] { CreationRecordingChannels.Position, CreationRecordingChannels.Rotation, CreationRecordingChannels.Pose, CreationRecordingChannels.Equipment })
                 Toggle(L("creation-record-" + channel.ToString().ToLowerInvariant()), obj.RecordingChannels.HasFlag(channel), v =>
                     obj.RecordingChannels = v ? obj.RecordingChannels | channel : obj.RecordingChannels & ~channel);
-            if (Button(L("creation-record-player-to-selected-actor"))) Continue(Runtime.TogglePerformance);
+            if (Button(L("creation-record-player-to-selected-actor"))) Continue(() => { Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; Runtime.TogglePerformance(); });
         }
-        if (Header(L("creation-native-actions")))
-            foreach (var animation in Project!.Animations.Where(a => a.ModelId == model.Id))
-            {
-                ImGui.PushID(animation.Id.ToString());
-                if (ImGui.Selectable(animation.Name)) Continue(() => AddAnimationClip(animation));
-                if (ImGui.BeginPopupContextItem()) { Item(L("creation-edit"), () => EditAnimation(animation)); ImGui.EndPopup(); }
-                ImGui.PopID();
-            }
-        if (!Header(L("creation-ik"))) return;
-        if (Button(L("creation-ik-detect"))) Run(() =>
-        {
-            int added = 0;
-            foreach (var pair in DirectorCreationIk.SuggestChains(model))
-            {
-                if (obj.IkChains.Any(c => c.Upper == pair.Upper.Id)) continue;
-                ikUpper = pair.Upper.Id; ikLower = pair.Lower.Id; CreateIk(obj, model); added++;
-            }
-            if (added == 0) Runtime.SetStatus(L("creation-ik-no-segments"));
-        });
-        double weight = Session.Frame?.Objects.GetValueOrDefault(obj.Id)?.IkWeight ?? obj.IkWeight;
-        Number(L("creation-ik-weight"), weight, v => Session.SetProperty(obj.Id, Guid.Empty, CreationChannel.IkWeight, new(v, 0, 0), () => obj.IkWeight = v), 0, 1, .01f);
-        if (Button(L("creation-ik-weight-key"))) Session.Edit(L("creation-ik-weight-key"), _ => Session.WriteKey(obj.Id, Guid.Empty, CreationChannel.IkWeight, new(weight, 0, 0)));
-        void Bone(string title, ref Guid selection, Func<CreationPart,bool> filter)
-        {
-            Guid selected = selection;
-            if (!Combo(title, model.Parts.Find(p => p.Id == selected)?.Name ?? L("creation-none"))) return;
-            foreach (var part in model.Parts.Where(filter)) if (ImGui.Selectable(part.Name + "##" + part.Id)) selection = part.Id;
-            ImGui.EndCombo();
-        }
-        Bone(L("creation-ik-upper"), ref ikUpper, _ => true);
-        Bone(L("creation-ik-lower"), ref ikLower, p => p.ParentId == ikUpper);
-        if (Button(L("creation-ik-create"))) Run(() => CreateIk(obj, model));
-        foreach (var chain in obj.IkChains.ToArray())
-        {
-            ImGui.PushID(chain.Id.ToString());
-            Toggle(chain.Name, chain.Enabled, v => chain.Enabled = v);
-            VectorField(L("creation-ik-end"), chain.EndOffset, v => chain.EndOffset = v, .01f);
-            if (Button(L("creation-ik-target"))) Select(Project!.Objects.First(o => o.Id == chain.Target));
-            SameLineIfFits(L("creation-ik-pole"));
-            if (Button(L("creation-ik-pole"))) Select(Project!.Objects.First(o => o.Id == chain.Pole));
-            if (Button(L("creation-delete-selected-object"))) Session.Edit(L("creation-delete-selected-object"), _ => obj.IkChains.Remove(chain));
-            ImGui.PopID();
-        }
-        if (obj.IkChains.Count > 0 && Button(L("creation-ik-bake"))) Run(() => BakeIk(obj));
     }
 
     private void CreateIk(CreationSceneObject obj, CreationModel model)
@@ -113,35 +70,33 @@ internal sealed partial class DirectorCreationWorkspace
         var upper = model.Parts.Find(p => p.Id == ikUpper); var lower = model.Parts.Find(p => p.Id == ikLower && p.ParentId == ikUpper);
         if (upper is null || lower is null || Session.Frame is not { } frame) throw new InvalidOperationException(L("creation-ik-invalid"));
         if (obj.IkChains.Any(c => c.Upper == upper.Id || c.Lower == lower.Id)) throw new InvalidOperationException(L("creation-ik-invalid"));
-        var state = frame.Objects[obj.Id];
-        var offset = ((lower.To - lower.From) * (1d / 16)).Float();
-        int axis = Math.Abs(offset.X) > Math.Abs(offset.Y) ? 0 : 1; if (Math.Abs(offset.Z) > Math.Abs(axis == 0 ? offset.X : offset.Y)) axis = 2;
-        var pivot = DirectorCreationIk.Pivot(lower);
-        var end = pivot; end[axis] = Math.Abs(pivot[axis]) < Math.Abs(offset[axis] - pivot[axis]) ? offset[axis] : 0;
-        if (System.Numerics.Vector3.DistanceSquared(System.Numerics.Vector3.Transform(DirectorCreationIk.Pivot(upper), state.Bones[upper.Id]), System.Numerics.Vector3.Transform(pivot, state.Bones[lower.Id])) < 1e-10f
-            || System.Numerics.Vector3.DistanceSquared(end, pivot) < 1e-10f) throw new InvalidOperationException(L("creation-ik-invalid"));
-        var target = new CreationSceneObject { Kind = CreationObjectKind.Group, Name = lower.Name + " · " + L("creation-ik-target"), Transform = new() { Position = CreationVector.From(System.Numerics.Vector3.Transform(end, state.Bones[lower.Id] * state.World)) } };
-        var pole = new CreationSceneObject { Kind = CreationObjectKind.Group, Name = lower.Name + " · " + L("creation-ik-pole"), Transform = new() { Position = CreationVector.From(System.Numerics.Vector3.Transform(pivot, state.Bones[lower.Id] * state.World)) + new CreationVector(0, 0, 1) } };
-        Session.Edit(L("creation-ik-create"), p => { p.Objects.Add(target); p.Objects.Add(pole); obj.IkChains.Add(new() { Name = upper.Name, Upper = upper.Id, Lower = lower.Id, Target = target.Id, Pole = pole.Id, EndOffset = CreationVector.From(end) }); });
+        var controls = DirectorCreationIk.CreateControls(obj, model, frame.Objects[obj.Id], upper, lower);
+        controls.Target.Name = lower.Name + " · " + L("creation-ik-target");
+        controls.Pole.Name = lower.Name + " · " + L("creation-ik-pole");
+        Session.Edit(L("creation-ik-create"), p => { p.Objects.Add(controls.Target); p.Objects.Add(controls.Pole); obj.IkChains.Add(controls.Chain); });
     }
 
     private void BakeIk(CreationSceneObject obj)
     {
         var project = Project!;
         var bones = obj.IkChains.Where(c => c.Enabled).SelectMany(c => new[] { c.Upper, c.Lower }).Distinct().ToArray();
-        double start = project.Loop ? project.LoopStart : 0, end = project.Loop ? project.LoopEnd : project.Duration;
-        var animation = new CreationAnimation { Name = obj.Name + " · IK", ModelId = obj.ModelId, Duration = end - start };
+        var editing = Session.EditingAnimation;
+        double start = editing is not null ? 0 : project.Loop ? project.LoopStart : 0, end = editing?.Duration ?? (project.Loop ? project.LoopEnd : project.Duration);
+        if (bones.Length == 0 || end <= start) throw new InvalidOperationException(L("creation-ik-invalid"));
+        var animation = new CreationAnimation { Name = (editing?.Name ?? obj.Name) + " · IK", ModelId = obj.ModelId, Duration = end - start, Loop = editing?.Loop ?? false };
+        if (editing is not null) animation.Tracks.AddRange(editing.Tracks.Where(t => t.ObjectId == Guid.Empty && t.Channel != CreationChannel.IkWeight
+            && (!bones.Contains(t.PartId) || t.Channel is not (CreationChannel.Position or CreationChannel.Rotation or CreationChannel.Scale))).Select(t => t.Copy()));
         void Key(Guid bone, CreationChannel channel, double time, CreationVector value)
         {
             var track = animation.Tracks.Find(t => t.PartId == bone && t.Channel == channel);
             if (track is null) { track = new() { PartId = bone, Channel = channel }; animation.Tracks.Add(track); }
             DirectorCreationEdits.SetKey(track, time - start, value);
         }
-        if ((end - start) * project.Output.Fps > 250000) throw new InvalidOperationException(L("creation-ik-bake-limit"));
-        for (int i = 0; i <= Math.Ceiling((end - start) * project.Output.Fps); i++)
+        if ((end - start) * DirectorCreationTiming.FramesPerSecond > 250000) throw new InvalidOperationException(L("creation-ik-bake-limit"));
+        for (int i = 0; i <= Math.Ceiling((end - start) * DirectorCreationTiming.FramesPerSecond); i++)
         {
-            double time = Math.Min(end, start + i / (double)project.Output.Fps);
-            var state = DirectorCreationEvaluator.Evaluate(project, time).Objects[obj.Id];
+            double time = Math.Min(end, start + i / (double)DirectorCreationTiming.FramesPerSecond);
+            var state = DirectorCreationEvaluator.Evaluate(project, editing is null ? time : Session.Time, editingAction: editing, actionActor: obj.Id, actionTime: time).Objects[obj.Id];
             foreach (var bone in bones) if (state.Pose.TryGetValue(bone, out var pose))
             {
                 Key(bone, CreationChannel.Rotation, time, pose.Rotation);
@@ -153,7 +108,8 @@ internal sealed partial class DirectorCreationWorkspace
         Session.Edit(L("creation-ik-bake"), p =>
         {
             p.Animations.Add(animation);
-            p.Clips.Add(new() { Name = animation.Name, ObjectId = obj.Id, AnimationId = animation.Id, Start = start, Duration = end - start, BakedPose = true });
+            if (editing is null) p.Clips.Add(new() { Name = animation.Name, ObjectId = obj.Id, AnimationId = animation.Id, Start = start, Duration = end - start, BakedPose = true });
         });
+        if (editing is not null) Session.EnterAnimation(animation.Id, obj.Id);
     }
 }

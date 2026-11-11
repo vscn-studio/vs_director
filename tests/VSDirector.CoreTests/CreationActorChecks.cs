@@ -76,6 +76,14 @@ internal static class CreationActorChecks
             var copy = store.Duplicate(session.Project!);
             var copiedFrame = DirectorCreationEvaluator.Evaluate(copy, 2);
             Check(Math.Abs(copiedFrame.Objects[copy.Objects[0].Id].Pose[copy.Models[0].Parts[0].Id].Rotation.Y - 45) < .001, "Copied performance retained old bone IDs");
+            var cached = session.Project!.Performances[asset.Id];
+            string takePath = store.AssetPath(project.Id, asset.Source);
+            File.WriteAllText(takePath, "invalid json");
+            session.Edit("rename", p => p.Name = "Renamed"); session.Undo(); session.Redo();
+            Check(ReferenceEquals(cached, session.Project!.Performances[asset.Id]), "Undo/redo discarded the immutable recording cache");
+            Check(Math.Abs(session.Frame!.Objects[actor.Id].Pose[bone.Id].Rotation.Y - 45) < .001, "Undo reread a recording from disk");
+            Check(!ReferenceEquals(cached, copy.Performances[copy.Assets[0].Id]), "Duplicated project shares remapped recording data");
+            DirectorCreationStore.AtomicWrite(takePath, JsonSerializer.Serialize(take, CreationJson.Options));
             var position = new CreationTrack { Channel = CreationChannel.Position };
             DirectorCreationEdits.SetKey(position, 0, new(4,0,0)); DirectorCreationEdits.SetKey(position, 2, new(8,0,0));
             var second = new CreationAsset { Kind = CreationAssetKind.Performance, Source = "assets/position.performance.json" };

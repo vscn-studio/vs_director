@@ -15,9 +15,15 @@ internal static partial class DirectorImGuiProbe
     {
         CheckActorTextures(assembly);
         CheckNativeActors();
+        CheckCreationRigMatrices();
+        CheckRigEditingWorkflow(assembly, api);
+        CheckRigViewportMapping(assembly, api);
         CheckCreationClipboard(assembly);
         CheckCreationActorVisibility(assembly);
         CheckPerformanceInput(assembly);
+        CheckCreationExport(assembly);
+        CheckCreationCalendar(assembly);
+        CheckPerformanceEditing(assembly, api);
         string directory = Path.Combine(Path.GetTempPath(), "vsdirector-creation-probe-" + Guid.NewGuid().ToString("N"));
         var session = new DirectorCreationSession(new(directory));
         var part = new CreationPart { Name = "头部", To = new(16, 16, 16) };
@@ -36,15 +42,20 @@ internal static partial class DirectorImGuiProbe
         AccessTools.Field(runtime.GetType(), "<Status>k__BackingField").SetValue(runtime, "");
         AccessTools.Field(objectRenderer.GetType(), "<Error>k__BackingField").SetValue(objectRenderer, "");
         var owner = new VSDirectorModSystem(); AccessTools.Field(owner.GetType(), "creation").SetValue(owner, runtime);
+        AccessTools.Field(runtime.GetType(), "owner").SetValue(runtime, owner);
         var host = Activator.CreateInstance(R("VSDirector.Gui.DirectorImGuiWorkspace"), api)!;
         var workspace = Activator.CreateInstance(R("VSDirector.Gui.DirectorCreationWorkspace"), BindingFlags.Instance | BindingFlags.NonPublic, null, [api, owner, host], null)!;
         var io = ImGui.GetIO(); Vector2 display = io.DisplaySize; io.DisplaySize = new(960, 640);
         string locale = Lang.CurrentLocale;
         try
         {
+            CheckCreationWorkflow(workspace,session);
             foreach (string language in new[] { "zh-cn", "en" })
             {
             LoadCreationProbeLanguage(language);
+            foreach (var displayMode in Enum.GetValues<CreationTimeDisplay>())
+            {
+            project.TimeDisplay = displayMode;
             foreach (float width in new[] { 220f, 320f, 520f })
             {
                 for (int frame = 0; frame < 3; frame++)
@@ -66,7 +77,7 @@ internal static partial class DirectorImGuiProbe
                                 ImGui.PushID(Lang.Get("vsdirector:replay-visual-group-" + key));
                                 ImGui.GetStateStorage().SetBool(ImGui.GetID("###header"), true); ImGui.PopID();
                             }
-                        AccessTools.Method(workspace.GetType(), method).Invoke(workspace, null);
+                        AccessTools.Method(workspace.GetType(), method).Invoke(workspace, method == "DrawProjectSettings" ? [true] : null);
                         // ImGui derives scrollbar widths from the previous frame's content size.
                         if (frame == 2 && ImGui.GetScrollMaxX() > 1) throw new Exception("Creation panel content overflowed horizontally: " + name + " width=" + width + " overflow=" + ImGui.GetScrollMaxX());
                         ImGui.End();
@@ -74,11 +85,15 @@ internal static partial class DirectorImGuiProbe
                     Panel("creation-browser-probe", new(0, 0), new(width, 380), "DrawBrowser");
                     Panel("creation-properties-probe", new(width, 0), new(width, 380), "DrawProperties");
                     Panel("creation-view-probe", new(width, 0), new(width, 380), "DrawView");
+                    Panel("creation-bones-probe", new(width, 0), new(width, 380), "DrawBonesPanel");
+                    Panel("creation-ik-probe", new(width, 0), new(width, 380), "DrawIkPanel");
+                    Panel("creation-actions-probe", new(width, 0), new(width, 380), "DrawActionsPanel");
+                    Panel("creation-output-probe", new(width, 0), new(width, 380), "DrawProjectSettings");
                     Panel("creation-timeline-probe", new(0, 380), new(960, 260), "DrawTimeline");
                     ImGui.Render();
                 }
                 if (ImGui.GetDrawData().TotalVtxCount < 100) throw new Exception("Creation panels produced no real ImGui geometry.");
-                capture("creation-" + language + "-" + width);
+                capture("creation-" + language + "-" + displayMode + "-" + width);
             }
             Console.WriteLine("PASS creation browser, transform inspector and timeline in real ImGui at 220/320/520px");
             var particle = new CreationSceneObject { Kind = CreationObjectKind.Particle };
@@ -104,20 +119,50 @@ internal static partial class DirectorImGuiProbe
             }
             Console.WriteLine("PASS " + language + " creation model/particle inspectors and selected clip/key timeline at 220/320/520px");
             }
+            }
+            project.TimeDisplay = CreationTimeDisplay.Frames;
             LoadCreationProbeLanguage("zh-cn");
             session.SelectedObject = actor.Id; session.SelectedPart = part.Id;
             AccessTools.Field(workspace.GetType(), "keyId").SetValue(workspace, Guid.Empty);
             AccessTools.Field(workspace.GetType(), "clipId").SetValue(workspace, Guid.Empty);
             Vector2 timelineOrigin = default;
+            List<(Vector2 Position, uint Color)> timelineHeader = [], timelineRows = [];
             void TimelineFrame()
             {
                 ImGui.NewFrame(); ImGui.SetNextWindowPos(Vector2.Zero); ImGui.SetNextWindowSize(new(960, 500));
                 ImGui.Begin("creation-interaction", ImGuiWindowFlags.NoSavedSettings);
-                timelineOrigin = ImGui.GetCursorScreenPos();
+                timelineOrigin = ImGui.GetCursorScreenPos() + new Vector2(0,ImGui.GetFrameHeightWithSpacing());
                 AccessTools.Method(workspace.GetType(), "DrawTimeline").Invoke(workspace, null);
+                var headerVertices = ImGui.GetWindowDrawList().VtxBuffer;
+                timelineHeader = Enumerable.Range(0, headerVertices.Size).Select(i => (headerVertices[i].pos, headerVertices[i].col)).ToList();
+                ImGui.BeginChild("timeline-rows");
+                var rowVertices = ImGui.GetWindowDrawList().VtxBuffer;
+                timelineRows = Enumerable.Range(0, rowVertices.Size).Select(i => (rowVertices[i].pos, rowVertices[i].col)).ToList();
+                ImGui.EndChild();
                 ImGui.End(); ImGui.Render();
             }
             TimelineFrame(); TimelineFrame();
+            foreach (int fps in new[] { 24, 30, 60, 120 })
+            {
+                project.Output.Fps = fps;
+                io.KeyAlt = false;
+                double snapped = (double)AccessTools.Method(workspace.GetType(), "Snap").Invoke(workspace, [.049])!;
+                if (Math.Abs(snapped - 1d / 30) > 1e-8) throw new Exception("Creation pointer snap followed export FPS");
+                io.KeyAlt = true;
+                double fine = (double)AccessTools.Method(workspace.GetType(), "Snap").Invoke(workspace, [.049])!;
+                if (Math.Abs(fine - .049) > 1e-8) throw new Exception("Creation Alt bypass lost subframe editing");
+                io.KeyAlt = false;
+                session.Seek(1);
+                float scale = (float)AccessTools.Property(R("VSDirector.Gui.DirectorImGuiTheme"), "Scale").GetValue(null)!;
+                io.MousePos = timelineOrigin + new Vector2(104 * scale, 14 * scale);
+                TimelineFrame(); TimelineFrame(); io.MouseDown[0] = true; TimelineFrame(); io.MouseDown[0] = false; TimelineFrame();
+                if (Math.Abs(session.Time - 31d / 30) > 1e-8) throw new Exception("Creation transport next frame followed export FPS or missed its button");
+                io.MousePos = timelineOrigin + new Vector2(44 * scale, 14 * scale);
+                TimelineFrame(); TimelineFrame(); io.MouseDown[0] = true; TimelineFrame(); io.MouseDown[0] = false; TimelineFrame();
+                if (Math.Abs(session.Time - 1) > 1e-8) throw new Exception("Creation transport previous frame followed export FPS or missed its button");
+            }
+            project.Output.Fps = 30;
+            Console.WriteLine("PASS real creation transport and pointer snap at 24/30/60/120 export FPS, with Alt subframe bypass");
             foreach (float x in new[] { 80f, 600f })
             {
                 io.MousePos = timelineOrigin + new Vector2(x, 100); TimelineFrame(); TimelineFrame();
@@ -137,6 +182,59 @@ internal static partial class DirectorImGuiProbe
             AccessTools.Field(workspace.GetType(), "timelineEditor").SetValue(workspace, false);
             TimelineFrame(); TimelineFrame(); capture("creation-timeline-controls");
             Console.WriteLine("PASS real Ctrl+wheel zoom below fit from labels and content, reversible zoom and floating key editor");
+
+            AccessTools.Field(workspace.GetType(), "keyId").SetValue(workspace, Guid.Empty);
+            TimelineFrame();
+            var glyphs = timelineRows.Where(v => v.Color == 0xffe6e0de).ToArray();
+            float rightmost = glyphs.Max(v => v.Position.X);
+            var lastKey = glyphs.Where(v => v.Position.X > rightmost - 26).ToArray();
+            Vector2 keyCenter = (new Vector2(lastKey.Min(v => v.Position.X), lastKey.Min(v => v.Position.Y))
+                + new Vector2(lastKey.Max(v => v.Position.X), lastKey.Max(v => v.Position.Y))) / 2;
+            io.MousePos = keyCenter; TimelineFrame(); TimelineFrame();
+            io.MouseDown[0] = true; TimelineFrame();
+            io.MousePos += new Vector2(65, 0); TimelineFrame();
+            double dragOriginal = (double)AccessTools.Field(workspace.GetType(), "timelineDragOrigin").GetValue(workspace)!;
+            double dragTarget = (double)AccessTools.Field(workspace.GetType(), "timelineDragTarget").GetValue(workspace)!;
+            if (Math.Abs(dragOriginal - 2) > 1e-6 || dragTarget <= dragOriginal
+                || !timelineRows.Any(v => v.Color == 0xff181818 && v.Position.Y > 450)
+                || timelineHeader.Any(v => v.Color == 0xff181818)
+                || !timelineRows.Any(v => v.Color == 0xff55d9ff) || !timelineRows.Any(v => v.Color == 0x88000000))
+                throw new Exception("Creation key pointer drag did not show inline time and original/destination guides");
+            capture("creation-key-drag-feedback");
+            project.TimeDisplay = CreationTimeDisplay.Time; TimelineFrame();
+            string label = (string)AccessTools.Method(workspace.GetType(), "FormatTime").Invoke(workspace, [dragTarget])!;
+            if (!label.EndsWith(" " + Lang.Get("vsdirector:creation-unit-seconds"))) throw new Exception("Creation drag feedback ignored seconds display mode");
+            io.MouseDown[0] = false; TimelineFrame();
+            if (timelineRows.Any(v => v.Color is 0xff55d9ff or 0x88000000)) throw new Exception("Creation key drag left stale guide lines");
+            session.Undo(); project = session.Project!;
+            if (project.Tracks[0].Keys.All(k => Math.Abs(k.Time - 2) > 1e-6)) throw new Exception("Creation key drag feedback broke undo");
+            project.TimeDisplay = CreationTimeDisplay.Frames;
+            io.MousePos = timelineOrigin + new Vector2(530, 12); TimelineFrame(); TimelineFrame();
+            io.MouseDown[0] = true; TimelineFrame();
+            double initialScrub = session.Time;
+            io.MousePos += new Vector2(65, 0); TimelineFrame();
+            if (session.Time <= initialScrub || !timelineRows.Any(v => v.Color == 0xff181818 && v.Position.Y > 450))
+                throw new Exception("Creation ruler scrubbing lost inline time label or seeking");
+            io.MouseDown[0] = false; TimelineFrame();
+            Console.WriteLine("PASS real creation key drag original/destination guides, frame/seconds label, undo, ruler scrubbing and release cleanup");
+            AccessTools.Field(workspace.GetType(), "timelineCurves").SetValue(workspace,true);
+            AccessTools.Field(workspace.GetType(), "curveAxis").SetValue(workspace,1);
+            AccessTools.Field(workspace.GetType(), "keyId").SetValue(workspace,Guid.Empty);
+            ((HashSet<Guid>)AccessTools.Field(workspace.GetType(), "selectedTimelineKeys").GetValue(workspace)!).Clear();
+            TimelineFrame();TimelineFrame();
+            var curveGlyphs=timelineRows.Where(v=>v.Color==0xffe6e0de).ToArray();
+            float curveRight=curveGlyphs.Max(v=>v.Position.X);
+            var curveKey=curveGlyphs.Where(v=>v.Position.X>curveRight-26).ToArray();
+            io.MousePos=(new Vector2(curveKey.Min(v=>v.Position.X),curveKey.Min(v=>v.Position.Y))+new Vector2(curveKey.Max(v=>v.Position.X),curveKey.Max(v=>v.Position.Y)))/2;
+            TimelineFrame();TimelineFrame();io.MouseDown[0]=true;TimelineFrame();io.MousePos+=new Vector2(24,24);TimelineFrame();
+            if(project.Tracks[0].Keys.Last().Time<=2||project.Tracks[0].Keys.Last().Value.Y>=60)
+                throw new Exception("Real curve key drag failed to change both time and value");
+            capture("creation-curve-drag");
+            io.MouseDown[0]=false;TimelineFrame();session.Undo();project=session.Project!;
+            if(project.Tracks[0].Keys.Last().Time!=2||project.Tracks[0].Keys.Last().Value.Y!=60)
+                throw new Exception("Curve time/value edit did not undo atomically");
+            AccessTools.Field(workspace.GetType(), "timelineCurves").SetValue(workspace,false);
+            Console.WriteLine("PASS real curve XY pointer drag edits time/value together and restores both with one undo");
             project.Tracks.Clear(); project.Objects.Clear(); project.Objects.Add(actor); project.Clips.Clear();
             var draggable = new CreationClip { ObjectId = actor.Id, Name = "剪辑1", Start = 1, Duration = 2 };
             project.Clips.Add(draggable); session.SelectedPart = Guid.Empty; session.ClearTransformDrafts(); session.Changed();
@@ -176,6 +274,7 @@ internal static partial class DirectorImGuiProbe
         finally { Lang.ChangeLanguage(locale); io.DisplaySize = display; ((IDisposable)host).Dispose(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
         CheckCreationProjectLifecycle(assembly, api, capture);
         CheckCreationShaderAndState(assembly);
+        CheckCreationSelectionContour(assembly);
     }
     private static void CheckPerformanceInput(Assembly assembly)
     {
@@ -213,6 +312,27 @@ internal static partial class DirectorImGuiProbe
             var project = new DirectorCreationProject { Models = [imported.Model], Objects = [actor], Animations = imported.Animations };
             project.Validate();
             if (!DirectorCreationIk.SuggestChains(imported.Model).Any()) throw new Exception("Native limb discovery failed: " + relative);
+            var rest = DirectorCreationEvaluator.Evaluate(project, 0).Objects[actor.Id];
+            foreach (var pair in DirectorCreationIk.SuggestChains(imported.Model))
+            {
+                var controls = DirectorCreationIk.CreateControls(actor, imported.Model, rest, pair.Upper, pair.Lower);
+                project.Objects.Add(controls.Target); project.Objects.Add(controls.Pole); actor.IkChains.Add(controls.Chain);
+            }
+            var rigged = DirectorCreationEvaluator.Evaluate(project, 0).Objects[actor.Id];
+            foreach (var chain in actor.IkChains)
+            {
+                var end = Vector3.Transform(chain.EndOffset.Float(), rigged.Bones[chain.Lower] * rigged.World);
+                var target = project.Objects.First(o => o.Id == chain.Target).Transform.Position.Float();
+                if (Vector3.Distance(end, target) > .005f) throw new Exception("Creating native IK moved its end effector: " + relative + " / " + chain.Name);
+            }
+            actor.IkChains.Clear();
+            foreach (var pair in DirectorCreationIk.SuggestChains(imported.Model))
+            {
+                var endPart = pair.Lower;
+                var centre = Vector3.Transform(((endPart.To-endPart.From)*(1d/32)).Float(),rest.Bones[endPart.Id]);
+                var result = DirectorCreationPoseGeometry.Pull(imported.Model,rest,endPart.Id,centre+new Vector3(.025f,.015f,.02f));
+                if (result.Values.Any(t => !t.Rotation.Finite() || !t.Position.Finite())) throw new Exception("Native actor direct pose pull produced invalid values: " + relative);
+            }
             foreach (var animation in imported.Animations)
             {
                 var frame = DirectorCreationEvaluator.Evaluate(project, 0, editingAction: animation, actionActor: actor.Id, actionTime: animation.Duration / 2);
@@ -389,6 +509,15 @@ internal static partial class DirectorImGuiProbe
                 var project = new DirectorCreationProject { Name = "New project", Objects = [camera], CameraId = camera.Id };
                 session.Open(project);
                 Frame(); Frame(true); Frame(true);
+                bool toolbarSurface = false;
+                var drawData = ImGui.GetDrawData();
+                for (int list = 0; list < drawData.CmdListsCount; list++)
+                {
+                    var vertices = drawData.CmdLists[list].VtxBuffer;
+                    for (int vertex = 0; vertex < vertices.Size; vertex++)
+                        if (vertices[vertex].col == 0xff242424 && vertices[vertex].pos.Y <= 40) toolbarSurface = true;
+                }
+                if (!toolbarSurface) throw new Exception("Creation toolbar does not match the legacy RGB 36 backdrop");
                 if (session.SelectedObject != camera.Id) throw new Exception("New project did not select its shooting camera.");
                 if (((string)AccessTools.Field(workspace.GetType(), "error").GetValue(workspace)!).Length > 0)
                     throw new Exception("Creation full draw failed: " + AccessTools.Field(workspace.GetType(), "error").GetValue(workspace));
@@ -422,6 +551,16 @@ internal static partial class DirectorImGuiProbe
             if (ImGui.GetWindowDockID() != propertiesDock) throw new Exception("Reopening View changed its dock");
             ImGui.End(); ImGui.Render();
             Console.WriteLine("PASS creation View shares the inspector dock and closes/reopens without changing replay layout");
+            foreach (var entry in new[] { ("bonesPanel", "bones"), ("ikPanel", "ik"), ("actionsPanel", "actions") })
+            {
+                AccessTools.Field(workspace.GetType(), entry.Item1).SetValue(workspace, false); Frame();
+                AccessTools.Field(workspace.GetType(), entry.Item1).SetValue(workspace, true);
+                AccessTools.Field(workspace.GetType(), "focusRigPanel").SetValue(workspace, entry.Item2); Frame(); Frame();
+                ImGui.NewFrame(); Call(host, "Draw", 1f / 60); ImGui.Begin("###vsdirector-creation-" + entry.Item2);
+                uint rigDock = ImGui.GetWindowDockID(); ImGui.End(); ImGui.Render();
+                if (rigDock != propertiesDock) throw new Exception("Rig tab did not reopen beside properties: " + entry.Item2);
+            }
+            Console.WriteLine("PASS independent Bones/IK/Actions native dock tabs close and reopen beside Properties");
             uint creationDock = (uint)AccessTools.Field(host.GetType(), "creationDock").GetValue(host)!;
             if (creationDock == 0 || creationDock == legacyDock) throw new Exception("Creation shares the legacy dock root.");
             Call(host, "ResetLayout"); Frame(); Frame(true);
@@ -449,7 +588,7 @@ internal static partial class DirectorImGuiProbe
             io.AddKeyEvent(ImGuiKey.Escape, true); Frame(); io.AddKeyEvent(ImGuiKey.Escape, false); Frame();
             io.MousePos = new(20, 350); io.MouseDown[0] = true; Frame(); io.MouseDown[0] = false; Frame();
             io.DisplaySize = new(1280, 800); Frame();
-            session.AutoKey = true; session.Edit("seed key", _ => session.WriteKey(selected.Id, Guid.Empty, CreationChannel.Position, default)); session.AutoKey = false;
+            session.SetEditTask(CreationEditTask.Animation); session.AutoKey = true; session.Edit("seed key", _ => session.WriteKey(selected.Id, Guid.Empty, CreationChannel.Position, default)); session.AutoKey = false;
             void Draft() { session.SetTransform(selected.Id, Guid.Empty, new() { Position = new(5, 0, 0) }); session.Changed(); }
             bool continued = false;
             Action next = () => continued = true;

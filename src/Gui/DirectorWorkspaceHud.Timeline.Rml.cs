@@ -121,13 +121,45 @@ internal sealed partial class DirectorWorkspaceHud
         double time = replay ? (scrubbingReplay ? previewReplayTime : owner.ReplayTimeSeconds)
             : owner.IsPathPlaying ? owner.ActivePathTimeSeconds : pathEditorPlayhead;
         double label = ReplayTimelineLabelColumnWidth(panel.Width);
-        double x = label + (time * ReplayTimelineTicksPerSecond - (replay ? replayTimelineScrollTicks : pathTimelineScrollTicks))
+        double X(double seconds) => label + (seconds * ReplayTimelineTicksPerSecond - (replay ? replayTimelineScrollTicks : pathTimelineScrollTicks))
             * (replay ? ReplayTimelinePixelsPerTick : PathTimelinePixelsPerTick);
-        rmlTimeline.Playhead(x, label, panel.Width, panel.Height - 14);
+        rmlTimeline.Playhead(X(time), label, panel.Width, panel.Height - 14);
+        double target = replay ? replayKeyframeDragTime : pathTimelineDragTime;
+        double original = double.NaN;
+        if (replay && double.IsFinite(target))
+        {
+            original = replayAuxiliaryKeyframeDragKind switch
+            {
+                ReplayAuxiliaryKeyframeDragKind.Marker => owner.ReplayMarkers.FirstOrDefault(k => k.Id == replayAuxiliaryKeyframeDragId)?.TimeSeconds ?? double.NaN,
+                ReplayAuxiliaryKeyframeDragKind.Speed => owner.ReplaySpeedKeyframes.FirstOrDefault(k => k.Id == replayAuxiliaryKeyframeDragId)?.TimeSeconds ?? double.NaN,
+                ReplayAuxiliaryKeyframeDragKind.Element => CurrentReplayViewportTimeline().ElementKeyframes.FirstOrDefault(k => k.Id == replayAuxiliaryKeyframeDragId)?.TimeSeconds ?? double.NaN,
+                _ => double.NaN
+            };
+            if (replayViewportDragMode != ReplayViewportDragMode.None)
+            {
+                original = replayViewportDragOriginalStart;
+                if (replayViewportDragMode == ReplayViewportDragMode.ResizeEnd)
+                {
+                    original += replayViewportDragOriginalDuration;
+                    var clip = replayViewportDraftTimeline?.Clips.FirstOrDefault(c => c.Id == replayViewportDragClipId);
+                    if (clip is not null) target = clip.TimelineStartSeconds + clip.DurationSeconds;
+                }
+            }
+        }
+        else if (!replay && pathTimelineDragBefore is { } before)
+        {
+            if (pathTimelineDragKind == PathTimelineDragKind.Camera && pathTimelineCameraDragIndex >= 0 && pathTimelineCameraDragIndex < before.Keyframes.Count)
+                original = before.Keyframes[pathTimelineCameraDragIndex].TimeSeconds;
+            else if (pathTimelineDragKind == PathTimelineDragKind.Element)
+                original = before.ElementKeyframes.FirstOrDefault(k => k.Id == pathTimelineElementDragId)?.TimeSeconds ?? double.NaN;
+        }
+        string text = ReplayTimelineTickAt(double.IsFinite(target) ? target : time) + " " + Lang.Get("vsdirector:creation-unit-frames");
+        rmlTimeline.CursorFeedback(text, double.IsFinite(target) ? X(target) : double.NaN,
+            double.IsFinite(original) ? X(original) : double.NaN);
     }
 
     private void RmlTimelineRuler(double width, double label, int duration, double scroll,
-        double pixels, int minor, int major, double drag)
+        double pixels, int minor, int major)
     {
         var view = rmlTimeline!;
         view.Shape("ruler", "timeline-ruler", label, 0, width - label, ReplayTimelineRulerHeight);
@@ -140,14 +172,8 @@ internal sealed partial class DirectorWorkspaceHud
             double x = label + (tick - scroll) * pixels;
             bool large = tick % major == 0;
             view.Shape("tick-" + tick, "timeline-tick" + (large ? " major" : ""), x, large ? 22 : 29, 1, large ? 13 : 6);
-            if (large && x + 80 <= width && (!double.IsFinite(drag) || Math.Abs(drag * ReplayTimelineTicksPerSecond - tick) * pixels >= 80))
+            if (large && x + 80 <= width)
                 view.Shape("tick-label-" + tick, "timeline-ruler-label", x + 3, 0, 77, 21, FormatReplayTimelineTick(tick));
-        }
-        if (double.IsFinite(drag))
-        {
-            int tick = ReplayTimelineTickAt(drag);
-            double x = Math.Clamp(label + (tick - scroll) * pixels + 3, label + 2, Math.Max(label + 2, width - 80));
-            view.Shape("drag-time", "timeline-ruler-label", x, 0, 78, 21, FormatReplayTimelineTick(tick));
         }
     }
 
@@ -239,7 +265,7 @@ internal sealed partial class DirectorWorkspaceHud
         int duration = PathTimelineDurationTicks();
         double pixels = PathTimelinePixelsPerTick;
         pathTimelineScrollTicks = Math.Clamp(pathTimelineScrollTicks, 0, Math.Max(0, duration - (width - label) / pixels));
-        RmlTimelineRuler(width, label, duration, pathTimelineScrollTicks, pixels, PathTimelineMinorTickStep, PathTimelineLabelTickStep, pathTimelineDragTime);
+        RmlTimelineRuler(width, label, duration, pathTimelineScrollTicks, pixels, PathTimelineMinorTickStep, PathTimelineLabelTickStep);
         RmlTimelineTransport(false);
         if (pathEdit is null) return;
         DirectorPathElementTimeline.Normalize(pathEdit);
@@ -288,7 +314,7 @@ internal sealed partial class DirectorWorkspaceHud
         double X(double seconds) => label + (seconds * ReplayTimelineTicksPerSecond - replayTimelineScrollTicks) * pixels;
         double Time(DirectorReplayElementKeyframe frame) => replayAuxiliaryKeyframeDragKind == ReplayAuxiliaryKeyframeDragKind.Element
             && frame.Id == replayAuxiliaryKeyframeDragId ? replayKeyframeDragTime : frame.TimeSeconds;
-        RmlTimelineRuler(width, label, duration, replayTimelineScrollTicks, pixels, ReplayTimelineMinorTickStep, ReplayTimelineLabelTickStep, replayKeyframeDragTime);
+        RmlTimelineRuler(width, label, duration, replayTimelineScrollTicks, pixels, ReplayTimelineMinorTickStep, ReplayTimelineLabelTickStep);
         RmlTimelineTransport(true);
         var (start, end) = CurrentReplayExportRange();
         double left = Math.Clamp(X(start), label, width), right = Math.Clamp(X(end), label, width);

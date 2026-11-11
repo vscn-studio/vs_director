@@ -12,8 +12,17 @@ internal static class SmokeTests
 {
     private static readonly (string Name, Func<Task> Run)[] Cases =
     {
+        ("creation explicit editing tasks, auto pose seed, atomic history, cancellation and manual preview", RunSync(CreationEditingContextChecks.Run)),
+        ("30 Hz creation clock, integer ruler ticks, legacy/source timing and independent export FPS", RunSync(CreationTimingChecks.Run)),
+        ("scene pose keys, synchronized clock, sparse storage, undo, recovery and remapping", RunSync(CreationScenePoseChecks.Run)),
+        ("explicit joint seams preserve matching corners, isolate actors and reject incompatible export", RunSync(CreationJointSeamChecks.Run)),
+        ("creation pose selection and cascading object deletion with shared controls and undo", RunSync(CreationSelectionChecks.Run)),
         ("creation two-bone IK, unreachable targets, isolation and reference remapping", RunSync(CreationActorChecks.Ik)),
         ("creation performance migration, reload, deterministic seeking and duplication", RunSync(CreationActorChecks.PerformanceStorage)),
+        ("creation rig controls, reflected actor IK, action playback and reference lifecycle", RunSync(CreationRigWorkflowChecks.Run)),
+        ("pose drafts, atomic save, undo, recovery, surface picking and generic CCD", RunSync(CreationPoseEditingChecks.Run)),
+        ("creation performance conversion, isolated bone editing and strict clip boundaries", RunSync(CreationPerformanceEditingChecks.Run)),
+        ("creation background lifecycle, used resources and recoverable recording dependencies", RunSync(CreationDependencyChecks.Run)),
         ("creation clip gesture allocation, undo isolation, recording beyond ten seconds and world coordinates", RunSync(CreationChecks.InteractionAndRecording)),
         ("creation editing workflow, auto key, drafts and isolated action clock", RunSync(CreationChecks.EditingWorkflow)),
         ("creation transform matrices and native bone pose inverses", RunSync(CreationChecks.Transforms)),

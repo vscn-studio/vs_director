@@ -28,6 +28,19 @@ public sealed partial class DirectorCreationProject
                 && model.Textures.All(t => t.Value is not null) && model.BodyMapping is not null
                 && model.AnimationVersion is 0 or 1 && model.TextureWidth is > 0 and <= 8192 && model.TextureHeight is > 0 and <= 8192, "模型字段无效。");
             Require(model.BodyMapping.Values.All(p => Part(model.Id, p)), "动作映射指向已删除的骨骼。");
+            Require(model.RigEditing is not null && model.RigEditing.Anchors is not null && model.RigEditing.Roots is not null, "Invalid rig editing settings.");
+            Require(model.RigEditing.Anchors.All(id => id != Guid.Empty && Part(model.Id,id)), "Invalid rig anchor.");
+            List(model.RigEditing.Seams,"Joint seams");
+            Require(model.RigEditing.Seams.Select(s=>s.Child).Distinct().Count()==model.RigEditing.Seams.Count
+                && model.RigEditing.Seams.All(s=>s.Parent!=Guid.Empty && s.Child!=Guid.Empty && model.Parts.Any(p=>p.Id==s.Parent&&!p.Group)
+                    && model.Parts.Any(p=>p.Id==s.Child&&p.ParentId==s.Parent&&!p.Group) && s.ParentFace is >=0 and <6 && s.ChildFace is >=0 and <6),"Invalid joint seam.");
+            foreach (var pair in model.RigEditing.Roots)
+            {
+                var node = model.Parts.Find(p => p.Id == pair.Key); bool found = false;
+                for (int depth = 0; node is not null && depth < 129; depth++)
+                { if (node.Id == pair.Value) { found = true; break; } node = model.Parts.Find(p => p.Id == node.ParentId); }
+                Require(found, "Rig root must be an ancestor of its endpoint.");
+            }
             foreach (var part in model.Parts)
             {
                 Require(part.Name is not null && part.Faces is not null && part.Extra is not null, "部件字段无效。");
@@ -42,6 +55,12 @@ public sealed partial class DirectorCreationProject
         }
         foreach (var obj in Objects)
         {
+            List(obj.PoseKeys, "Scene pose keys");
+            Require(obj.PoseKeys.Select(k=>k.Id).Distinct().Count()==obj.PoseKeys.Count && obj.PoseKeys.Select(k=>k.Time).Distinct().Count()==obj.PoseKeys.Count,"Invalid scene pose keys.");
+            foreach(var key in obj.PoseKeys)
+                Require(key.Id!=Guid.Empty && double.IsFinite(key.Time) && key.Time>=0 && key.Time<=86400 && Enum.IsDefined(key.Interpolation) && key.Interpolation!=CreationInterpolation.Bezier
+                    && key.Bones is not null && key.Hidden is not null && key.Bones.All(p=>p.Key!=Guid.Empty && Part(obj.ModelId,p.Key) && Transform(p.Value))
+                    && key.Hidden.All(p=>p!=Guid.Empty && Part(obj.ModelId,p)), "Invalid scene pose keys.");
             Require(obj.PlayerBody is not null && obj.PlayerBody.Valid(), "Invalid player collision settings.");
             Require(obj.ActorHand is >= 0 and <= 2 && (obj.RecordingChannels & ~CreationRecordingChannels.All) == 0, "Invalid actor recording options.");
             Require(obj.IkChains is not null && double.IsFinite(obj.IkWeight) && obj.IkWeight is >= 0 and <= 1, "Invalid IK configuration.");
@@ -81,7 +100,7 @@ public sealed partial class DirectorCreationProject
             List(track.Keys, "关键帧");
             Require(Enum.IsDefined(track.Channel), "轨道属性类型无效。");
             if (!animation) Require(objects.TryGetValue(track.ObjectId, out var obj) && Part(obj.ModelId, track.PartId), "轨道对象或骨骼不存在。");
-            else Require(Part(modelId, track.PartId), "动作骨骼不存在。");
+            else Require(track.ObjectId == Guid.Empty ? Part(modelId, track.PartId) : track.PartId == Guid.Empty && objects.ContainsKey(track.ObjectId), "动作骨骼不存在。");
             foreach (var key in track.Keys) Require(Enum.IsDefined(key.Interpolation), "关键帧插值类型无效。");
         }
         foreach (var track in Tracks) Track(track, Guid.Empty, false);

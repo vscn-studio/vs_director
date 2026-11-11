@@ -21,12 +21,12 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
     internal DirectorCreationSession Session { get; }
     internal DirectorCreationRenderer Renderer { get; }
     internal DirectorCreationExtensions Extensions { get; } = new();
-    internal bool Enabled { get => Renderer.Visible; set { if (!value && Exporting) CancelExport(); if (!value) FinishPerformanceBeforeTransition(); Renderer.Visible = value; if (!value) { Session.Play(false); RestoreEntities(); } } }
+    internal bool Enabled { get => Renderer.Visible; set { if (!value && Exporting) CancelExport(); if (!value) FinishPerformanceBeforeTransition(); Renderer.Visible = value; if (!value) { Session.Play(false); RestoreEntities(); RestoreVisualEnvironment(); } } }
     internal bool Preview { get; set; }
     internal bool Guides { get; set; } = true;
     internal int PreviewTexture { get; private set; }
     internal string Status { get; private set; } = "";
-    internal bool Exporting => fileSink is not null || finishing is not null;
+    internal bool Exporting => pendingExport is not null || fileSink is not null || finishing is not null;
     internal double ExportProgress => Session.Project is { } p ? exportFrame / Math.Max(1d, Math.Ceiling(p.Duration * p.Output.Fps)) : 0;
     private readonly Guid viewId = Guid.NewGuid();
     private DirectorOffscreenMultiViewRenderer? offscreen;
@@ -90,7 +90,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
     internal void Seek(double time)
     {
         Session.Seek(time);
-        if (fileSink is not null) exportGate.BeginSeek();
+        if (fileSink is not null) { exportGate.BeginSeek(); exportWaitStarted = Environment.TickCount64; }
         if (!PerformanceActive && Session.EditingAnimation is null && Session.Project is { BackgroundReplayId: var id } p && id != Guid.Empty)
         {
             if (id != owner.ActiveReplayId) { Status = L("creation-load-the-linked-background-replay-from-the-replay-list"); return; }
@@ -106,9 +106,13 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
             if (!Enabled) return;
             UpdateVisualEnvironment();
             TickPerformance(delta);
+            SyncBackgroundSelection();
             TickPerformanceBackground();
+            TickExportPreparation();
             if (fileSink is not null)
             {
+                if (!frameSubmitted && Environment.TickCount64 - exportWaitStarted > 60000)
+                    throw new InvalidOperationException(L("creation-export-frame-timeout"));
                 if (frameSubmitted)
                 {
                     frameSubmitted = false; exportFrame++;
@@ -187,13 +191,11 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         }
     }
     internal void Screenshot(string path) { screenshot = Path.GetFullPath(path); Directory.CreateDirectory(Path.GetDirectoryName(screenshot)!); UpdateView(); }
-    internal void Export(string path)
+    private void StartExport(string path)
     {
         if (PerformanceActive) throw new InvalidOperationException(L("creation-recording-unavailable"));
         if (Exporting || Session.Project is not { } p) return;
         p.Validate();
-        foreach (var asset in p.Assets) if (!File.Exists(Session.Store.AssetPath(p.Id, asset.Source)))
-            throw new FileNotFoundException(L("creation-missing-asset") + asset.Name);
         if (p.CameraId == Guid.Empty) throw new InvalidOperationException(L("creation-select-a-shooting-camera"));
         if (p.BackgroundReplayId != Guid.Empty && p.BackgroundReplayId != owner.ActiveReplayId) throw new InvalidOperationException(L("creation-load-the-linked-background-replay-first"));
         Enabled = true;
@@ -213,7 +215,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         sink.Start(); restoreTime = originalTime; Session.Play(false); StopSounds();
         fileSink = sink; frameSubmitted = stopRequested = false; exportFrame = 0; Seek(0); UpdateView(); Status = L("creation-exporting-frames");
     }
-    internal void CancelExport() { exportCancellation?.Cancel(); if (fileSink is not null) { stopRequested = true; FinishExport(); } Status = L("creation-export-cancelled"); }
+    internal void CancelExport() { pendingExport = null; exportCancellation?.Cancel(); if (fileSink is not null) { stopRequested = true; FinishExport(); } Status = L("creation-export-cancelled"); }
     private void FinishExport()
     {
         var sink = fileSink; if (sink is null || Session.Project is not { } project) return;

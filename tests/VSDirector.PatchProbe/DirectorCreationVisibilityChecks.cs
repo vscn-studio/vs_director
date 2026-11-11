@@ -53,10 +53,10 @@ internal static partial class DirectorImGuiProbe
                 if (!(bool)Call("ReplacesReplayActor", replay, "player:Jack")!) throw new Exception("Moving creation actor did not replace replay ghost");
             }
             session.Seek(2.1);
-            if (session.Frame!.Objects[actor.Id].World.Translation.X != 9) throw new Exception("Linked background actor did not hold its final pose");
+            if (session.Frame!.Objects[actor.Id].World.Translation.X != 1 || session.Frame.Objects[actor.Id].HasPerformance) throw new Exception("Linked background take overwrote keys outside its clip");
             if (!(bool)Call("ReplacesReplayActor", replay, "player:Jack")!) throw new Exception("Background ghost reappeared at clip end");
             session.Seek(project.Duration);
-            if (session.Frame!.Objects[actor.Id].World.Translation.X != 9) throw new Exception("Project end reset actor position");
+            if (session.Frame!.Objects[actor.Id].World.Translation.X != 1) throw new Exception("Project keys did not resume after the take");
             project.Clips[0].Enabled = false; session.Refresh();
             if ((bool)Call("ReplacesReplayActor", replay, "player:Jack")!) throw new Exception("Disabled take still owns background actor");
             project.Clips[0].Enabled = true;
@@ -80,11 +80,15 @@ internal static partial class DirectorImGuiProbe
                 foreach (double t in new[] { 0d, clip.Duration * .25, clip.Duration * .75, saved.Duration })
                 {
                     double source = clip.SourceStart + Math.Clamp(t - clip.Start, 0, clip.Duration) * clip.Speed;
-                    var expected = DirectorCreationEvaluator.Sample(root, source, default).Float();
                     var actual = DirectorCreationEvaluator.Evaluate(saved, t).Objects[clip.ObjectId];
-                    if (!actual.HasPerformance || Vector3.Distance(actual.World.Translation, expected) > .002) throw new Exception("Saved user take lost root motion or final actor ownership");
+                    if (DirectorCreationEvaluator.ClipActive(clip, t, saved.Duration))
+                    {
+                        var expected = DirectorCreationEvaluator.Sample(root, source, default).Float();
+                        if (!actual.HasPerformance || Vector3.Distance(actual.World.Translation, expected) > .002) throw new Exception("Saved user take lost root motion");
+                    }
+                    else if (actual.HasPerformance) throw new Exception("Saved user take leaked outside its clip");
                 }
-                Console.WriteLine("PASS read-only saved user project: placement keys do not override recorded movement and duration padding holds final actor");
+                Console.WriteLine("PASS read-only saved user project: placement keys and recorded movement respect clip bounds");
             }
         }
         finally { current.SetValue(null, previous); if (Directory.Exists(directory)) Directory.Delete(directory, true); }

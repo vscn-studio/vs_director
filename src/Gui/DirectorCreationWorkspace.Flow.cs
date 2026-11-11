@@ -13,7 +13,7 @@ internal sealed partial class DirectorCreationWorkspace
     internal void Enter()
     { Active = true; host.SetCreationMode(true); Runtime.Enabled = Project is not null; }
     internal void Exit()
-    { Runtime.Suspend(); Active = false; host.CreationPreviewVisible = false; host.SetCreationMode(false); }
+    { PersistEditorPreferences(); Runtime.Suspend(); Active = false; host.CreationPreviewVisible = false; host.SetCreationMode(false); }
     internal void RequestLeave()
     {
         if (pendingTransition is not null) return;
@@ -22,6 +22,8 @@ internal sealed partial class DirectorCreationWorkspace
     }
     internal void RequestEscape()
     {
+        if(gizmoUsing || draggedKey!=Guid.Empty || draggedClip!=Guid.Empty || scenePoseDrag!=Guid.Empty || draggingPose is not null)
+        { Session.CancelGesture();gizmoUsing=false;handleAxis=-1;draggedKey=draggedClip=scenePoseDrag=Guid.Empty;draggingPose=null;return; }
         if (Runtime.PerformanceActive) { Runtime.StopPerformance(); return; }
         if (pendingTransition is not null) { ResolvePendingTransition(null); return; }
         if (ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel)) return;
@@ -90,11 +92,15 @@ internal sealed partial class DirectorCreationWorkspace
         // Match the replay/settings toolbar's borderless child surface.
         ImGui.SetCursorScreenPos(System.Numerics.Vector2.Zero);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new System.Numerics.Vector2(8, 2) * DirectorImGuiTheme.Scale);
+        // The replay toolbar sits over RenderWorkspaceBackdrop (RGB 36,36,36).
+        // Creation's transparent host has no such backdrop.
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, 0xff242424);
         bool visible = ImGui.BeginChild("vsdirector-creation-toolbar", new(ImGui.GetIO().DisplaySize.X, height), false,
             ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize
             | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoBringToFrontOnFocus
             | ImGuiWindowFlags.AlwaysUseWindowPadding | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         ImGui.PopStyleVar();
+        ImGui.PopStyleColor();
         try
         {
             if (!visible) return;
@@ -147,23 +153,59 @@ internal sealed partial class DirectorCreationWorkspace
         }
         ImGui.End(); if (!open) auxiliary = "";
     }
-    private void ReturnToProject() => Continue(() => { Session.LeaveAnimation(); modelContext = ""; clipId = keyId = trackId = Guid.Empty; });
+    private void ReturnToProject() => Continue(() =>
+    {
+        var savedKeys=sceneContext?.Keys;
+        SaveTimelineView(); Session.LeaveAnimation();modelContext="";clipId=keyId=trackId=Guid.Empty;editingSourceClip=Guid.Empty;timelineEditor=false;
+        if(sceneContext is {} saved)
+        {
+            Session.SetEditTask(saved.Task);
+            if(saved.PoseActor!=Guid.Empty)Session.BeginScenePose(saved.PoseActor);
+            Session.SelectedObject=saved.Object;Session.SelectedPart=saved.Part;Session.Seek(saved.Time);
+            selectedObjects.Clear();selectedObjects.UnionWith(saved.Objects);
+            selectedBones.Clear();selectedBones.UnionWith(saved.Bones);
+            keyId=saved.Key;trackId=saved.Track;clipId=saved.Clip;sceneContext=null;
+        }
+        RestoreTimelineView();
+        if(savedKeys is not null)selectedTimelineKeys.UnionWith(savedKeys);
+    });
+    private void EditClipAnimation(Guid id) => Continue(() =>
+    {
+        var clip = Project!.Clips.First(c => c.Id == id);
+        RememberSceneContext();editingSourceClip=id;
+        var animation = clip.PerformanceAssetId != Guid.Empty ? Runtime.BakePerformance(clip)
+            : Project.Animations.First(a => a.Id == clip.AnimationId);
+        double sourceTime = clip.SourceStart + Math.Clamp(Session.Time - clip.Start, 0, clip.Duration) * clip.Speed;
+        if (clip.Loop || animation.Loop) sourceTime %= Math.Max(1e-6, animation.Duration);
+        Session.EnterAnimation(animation.Id, clip.ObjectId); Session.Seek(sourceTime);
+        modelContext = ""; clipId = keyId = trackId = Guid.Empty; timelineEditor = false;
+        timeline = true; RestoreTimelineView();
+    });
     private void EditAnimation(CreationAnimation animation) => Continue(() =>
     {
         if (SelectedObject is not { } obj || obj.ModelId != animation.ModelId) throw new InvalidOperationException(L("creation-data-the-animation-and-actor-use-different-models"));
-        modelContext = ""; Session.EnterAnimation(animation.Id, obj.Id); clipId = keyId = trackId = Guid.Empty; auxiliary = "";
+        RememberSceneContext(); editingSourceClip=Guid.Empty;modelContext = ""; Session.EnterAnimation(animation.Id, obj.Id); bonesPanel = timeline = true; focusRigPanel = "bones"; clipId = keyId = trackId = Guid.Empty; auxiliary = "";RestoreTimelineView();
     });
     private void AddAnimationClip(CreationAnimation animation)
     {
         if (SelectedObject is not { } obj || obj.ModelId != animation.ModelId) throw new InvalidOperationException(L("creation-data-the-animation-and-actor-use-different-models"));
+        if (animation.PoseEditing)
+        {
+            Session.Edit(L("creation-add-animation-clip"), p =>
+            {
+                bool extendLoop = p.LoopEnd >= p.Duration;
+                p.Duration = Math.Max(p.Duration, Session.Time + animation.Duration);
+                if (extendLoop) p.LoopEnd = p.Duration;
+                p.Clips.Add(new() { Name = animation.Name, ObjectId = obj.Id, AnimationId = animation.Id, Start = Session.Time, Duration = animation.Duration, Loop = animation.Loop });
+            });
+            return;
+        }
         if (Session.Time >= Project!.Duration) throw new InvalidOperationException(L("creation-insert-end-error"));
-        Session.Edit(L("creation-add-animation-clip"), p => p.Clips.Add(new() { Name = animation.Name, ObjectId = obj.Id, AnimationId = animation.Id, Start = Session.Time, Duration = Math.Min(animation.Duration, Math.Max(1d / p.Output.Fps, p.Duration - Session.Time)), Loop = animation.Loop }));
+        Session.Edit(L("creation-add-animation-clip"), p => p.Clips.Add(new() { Name = animation.Name, ObjectId = obj.Id, AnimationId = animation.Id, Start = Session.Time, Duration = Math.Min(animation.Duration, Math.Max(DirectorCreationTiming.FrameDuration, p.Duration - Session.Time)), Loop = animation.Loop }));
     }
     private void ExportProject(string path)
     {
         Session.LeaveAnimation();
-        if (Project is { BackgroundReplayId: var background } && background != Guid.Empty && background != owner.ActiveReplayId)
-            throw new InvalidOperationException(L("creation-load-the-linked-background-replay-from-the-replay-list"));
         Runtime.Export(path);
     }
 }

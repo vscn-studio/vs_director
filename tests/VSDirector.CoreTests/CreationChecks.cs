@@ -32,6 +32,15 @@ internal static class CreationChecks
             var clone = p.Clone(); clone.Animations[0].Tracks[0].Keys[0].Value = new(9, 0, 0);
             Check(animation.Tracks[0].Keys[0].Value == default, "History clone shares mutable keys");
             Check(clone.Id == p.Id && clone.Output.Fps == p.Output.Fps, "History clone lost settings");
+            session.Edit("rename", document => document.Name = "Changed");
+            allocation = GC.GetAllocatedBytesForCurrentThread();
+            session.Undo(); session.Redo();
+            allocation = GC.GetAllocatedBytesForCurrentThread() - allocation;
+            Check(allocation < 1000000, "Full undo/redo recopied the large animation library: " + allocation);
+            Check(session.Project.Name == "Changed", "Full redo lost its state");
+            session.Undo(); session.Edit("branch", document => document.Name = "Branched");
+            Check(!session.History.CanRedo, "Editing after undo retained the old branch");
+            session.Undo(); Check(session.Project.Name != "Branched", "History snapshot was mutated by a later edit");
             p.Visuals.World.ShowNameTags = false; p.Visuals.Environment.OverrideTime = true; p.Visuals.Environment.TimeOfDayTick = 18000;
             var visualCopy = p.Clone(); visualCopy.Visuals.World.ShowNameTags = true;
             Check(!p.Visuals.World.ShowNameTags, "History shares mutable view settings");
@@ -63,6 +72,11 @@ internal static class CreationChecks
                 large.Undo(); Near(large.Project!.Clips[0].Start, original, "Existing project clip undo");
                 watch.Restart(); _ = document.Clone();
                 Console.WriteLine($"Measured existing project full history snapshot: {watch.Elapsed.TotalMilliseconds:0.0} ms");
+                large.Edit("benchmark rename", project => project.Name += " benchmark");
+                watch.Restart(); large.Undo();
+                Console.WriteLine($"Measured existing project full undo: {watch.Elapsed.TotalMilliseconds:0.0} ms");
+                watch.Restart(); large.Redo();
+                Console.WriteLine($"Measured existing project full redo: {watch.Elapsed.TotalMilliseconds:0.0} ms");
             }
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
@@ -78,20 +92,20 @@ internal static class CreationChecks
             var action = new CreationAnimation { ModelId = model.Id, Duration = 2 };
             var project = new DirectorCreationProject { Objects = [actor, other], Models = [model], Animations = [action] };
             var session = new DirectorCreationSession(new(root)); session.Open(project); session.SelectedObject = actor.Id;
-            Check(!session.AutoKey, "Auto key must default off");
+            Check(session.AutoKey && session.EditTask == CreationEditTask.Placement, "Placement must default to base editing with automatic animation recording available");
             session.BeginGesture(); session.SetTransform(actor.Id, Guid.Empty, new() { Position = new(3, 0, 0) }); session.Changed(); session.EndGesture("place");
             Near(actor.Transform.Position.X, 3, "Static placement not saved"); Check(project.Tracks.Count == 0 && !session.HasTransformDraft, "Static placement created animation");
-            session.AutoKey = true; session.Seek(1); session.BeginGesture();
+            session.SetEditTask(CreationEditTask.Animation); session.AutoKey = true; session.Seek(1); session.BeginGesture();
             session.SetTransform(actor.Id, Guid.Empty, new() { Position = new(4, 0, 0) }); session.Changed();
             session.SetTransform(actor.Id, Guid.Empty, new() { Position = new(6, 0, 0) }); session.Changed(); session.EndGesture("drag");
-            Check(project.Tracks.Count == 1 && project.Tracks[0].Keys.Count == 1, "Auto key duplicated keys or unchanged channels");
+            Check(project.Tracks.Count == 1 && project.Tracks[0].Keys.Count == 2, "Auto key duplicated keys or unchanged channels");
             Near(actor.Transform.Position.X, 3, "Auto key changed base placement");
             session.Undo(); Check(session.Project!.Tracks.Count == 0, "Drag was not a single undo"); session.Redo();
             project = session.Project!; actor = project.Objects[0]; action = project.Animations[0];
             session.AutoKey = false; session.BeginGesture(); session.SetTransform(actor.Id, Guid.Empty, new() { Position = new(9, 0, 0) }); session.Changed(); session.EndGesture("preview");
             Check(session.HasTransformDraft, "Animated edit must be a pending preview"); Near(actor.Transform.Position.X, 3, "Preview changed base placement");
             session.CommitTransformDrafts(); Check(!session.HasTransformDraft, "Recording did not clear preview");
-            Near(project.Tracks[0].Keys[0].Value.X, 9, "Preview key not recorded");
+            Near(project.Tracks[0].Keys.First(k=>k.Time==1).Value.X, 9, "Preview key not recorded");
             session.Seek(7); session.EnterAnimation(action.Id, actor.Id); session.AutoKey = true; session.Seek(1.5);
             session.BeginGesture(); session.SetTransform(actor.Id, bone.Id, new() { Rotation = new(0, 45, 0) }); session.Changed(); session.EndGesture("bone key");
             Near(session.Time, 7, "Action editing moved project clock"); Near(session.AnimationTime, 1.5, "Action clock used clip offset");
@@ -112,7 +126,7 @@ internal static class CreationChecks
             Near(session.Frame.Objects[actor.Id].Transform.Scale.X, 2, "Static channel remained stale behind animated preview");
             session.ClearTransformDrafts();
             Near(session.Frame.Objects[actor.Id].Transform.Position.X, 9, "Revert failed to restore animated position");
-            Near(actor.Transform.Scale.X, 2, "Reverting animation preview discarded static placement");
+            Near(actor.Transform.Scale.X, 1, "Animation preview changed base scale");
             foreach (var channel in new[] { CreationChannel.Color, CreationChannel.Visible, CreationChannel.Fov })
             {
                 session.AutoKey = true;
@@ -121,7 +135,7 @@ internal static class CreationChecks
                 session.SetProperty(actor.Id, Guid.Empty, channel, new(0, 0, 0), () => throw new Exception("Animated preview changed base property"));
                 session.Changed(); Check(session.HasTransformDraft, "Property preview was not marked pending");
                 session.CommitTransformDrafts();
-                Near(project.Tracks.Single(t => t.Channel == channel).Keys.Single().Value.X, 0, "Property preview was not recorded");
+                Near(project.Tracks.Single(t => t.Channel == channel).Keys.First(k=>k.Time==session.EditTime).Value.X, 0, "Property preview was not recorded");
                 session.SetProperty(actor.Id, Guid.Empty, channel, new(2, 2, 2), () => { });
                 session.ClearTransformDrafts();
                 Check(!session.HasTransformDraft, "Revert retained a property preview");
@@ -243,7 +257,7 @@ internal static class CreationChecks
             session.Undo(); Near(session.Project.Objects[0].Transform.Position.X, 1, "Gesture was not a single undo step");
 
             session.Edit("key", p => DirectorCreationEdits.SetKey(p, actor.Id, Guid.Empty, CreationChannel.Position, 0, new(20, 0, 0)));
-            session.BeginGesture(); session.SetTransform(actor.Id, Guid.Empty, new() { Position = new(30, 0, 0) }); session.Changed(); session.EndGesture("draft");
+            session.SetEditTask(CreationEditTask.Animation); session.AutoKey=false; session.BeginGesture(); session.SetTransform(actor.Id, Guid.Empty, new() { Position = new(30, 0, 0) }); session.Changed(); session.EndGesture("draft");
             Near(session.Frame!.Objects[actor.Id].Transform.Position.X, 30, "Authored key hid the transform draft");
             session.Seek(0); Near(session.Frame!.Objects[actor.Id].Transform.Position.X, 20, "Seeking did not restore authored animation");
             session.Tick(31);

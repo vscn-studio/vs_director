@@ -17,6 +17,30 @@ Source: https://github.com/google/fonts/tree/main/ofl/notosanssc
 Distributed resource: assets/vsdirector/fonts/noto/NotoSansSC-Regular.ttf
 (static regular instance generated from the upstream variable font).
 
+InGameDevTools (Alodh and contributors)
+Source: https://github.com/Alodh1/InGameDevTools
+Reference revision: 499cd9d1a37cb687cbb421b1e93715344aa38446
+Adapted FromTo rotation safeguards from Animations/RigPoseEditor.cs;
+bone handle and IK workflow informed by VanillaAnimationEditor.Viewport.cs
+and VanillaAnimationEditor.IkSymmetry.cs. Used in DirectorCreationActors.cs
+and the creation rig editor. Direct pose picking and topology-based CCD workflow
+are informed by the same viewport/IK sources; implemented for Director transforms
+in DirectorCreationPoseGeometry.cs. License: MIT; full text: InGameDevTools-MIT.txt.
+Author authorization supplied by the project maintainer:
+https://discord.com/channels/302152934249070593/1510578112889622639/1569719241773416459
+
+BBS-FS (McHorse and Wemppy)
+Copyright 2025 McHorse
+Copyright 2026 Wemppy
+Source: https://github.com/Wemppy4/bbs-fs
+Reference revision: 13bd62dab1980b974b8ea0f78d037e8e82684b84
+License: MIT; full text: BBS-FS-MIT.txt.
+Creation editor workflow, shared timeline context, track filtering/folding and
+contextual property organization informed by UIReplaysEditor.java,
+UIKeyframeEditor.java and UIPoseEditor.java. Independently implemented for
+Vintage Story Shape, actor attachments and Director creation data; no Minecraft
+assets or BBS-FS runtime are bundled.
+
 Runtime dependencies
 Vintage Story and its game assemblies, Harmony, protobuf-net, cairo-sharp and
 OpenTK.Mathematics are supplied by the game installation and are not bundled

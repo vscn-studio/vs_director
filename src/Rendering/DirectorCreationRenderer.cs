@@ -11,7 +11,7 @@ using VSDirector.Data;
 namespace VSDirector.Rendering;
 
 /// <summary>Local visual objects; meshes and poses never modify the game's shared shapes.</summary>
-internal sealed class DirectorCreationRenderer : IRenderer
+internal sealed partial class DirectorCreationRenderer : IRenderer
 {
     private readonly ICoreClientAPI api;
     private readonly DirectorCreationSession session;
@@ -42,6 +42,7 @@ internal sealed class DirectorCreationRenderer : IRenderer
     }
     private bool ReloadShader()
     {
+        DisposeSelectionShaders();
         shader?.Dispose(); shader = api.Shader.NewShaderProgram(); shader.AssetDomain = "vsdirector";
         shader.VertexShader = api.Shader.NewShader(EnumShaderType.VertexShader);
         shader.FragmentShader = api.Shader.NewShader(EnumShaderType.FragmentShader);
@@ -86,7 +87,8 @@ internal sealed class DirectorCreationRenderer : IRenderer
                 else if (obj.Kind == CreationObjectKind.Model)
                 {
                     var model = project.Models.Find(m => m.Id == obj.ModelId); if (model is null) continue;
-                    foreach (var part in model.Parts.Where(p => !p.Group && !state.HiddenParts.Contains(p.Id)))
+                    var deformations=DirectorCreationJointSeams.Deformations(model,state);
+                    foreach (var part in model.Parts.Where(p => !p.Group && p.Visible && !state.HiddenParts.Contains(p.Id)))
                     {
                         if (!state.Bones.TryGetValue(part.Id, out var bone)) continue;
                         var matrix = bone * state.World * Matrix4x4.CreateTranslation(origin.Float());
@@ -94,9 +96,7 @@ internal sealed class DirectorCreationRenderer : IRenderer
                         foreach (var face in part.Faces)
                         {
                             if (face.Value is not JsonObject f || f["enabled"]?.ToString() == "false") continue;
-                            string key = model.Id + "/" + part.Id + "/" + face.Key;
-                            if (!meshes.TryGetValue(key, out var mesh) || geometryChanged)
-                                mesh = Geometry(key, JsonSerializer.Serialize(new { Size = part.To - part.From, part.Inflate, model.TextureWidth, model.TextureHeight, Face = f, Sizes = model.Extra["textureSizes"] }), () => CubeFace(part, face.Key, f, model));
+                            var mesh = ModelFaceMesh(model, part, face.Key, f, obj.Id, deformations, geometryChanged);
                             string texture = DirectorCreationShape.S(f, "texture", "#all").TrimStart('#');
                             BindTexture(project, model.Textures.GetValueOrDefault(texture, ""));
                             game.Platform.RenderMesh(mesh);
@@ -204,9 +204,10 @@ internal sealed class DirectorCreationRenderer : IRenderer
         }
         shader!.Uniform("textured", 1); shader.BindTexture2D("tex", id, 0);
     }
-    private void BindTexture(DirectorCreationProject project, string source)
+    private void BindTexture(DirectorCreationProject project, string source, IShaderProgram? target = null)
     {
-        if (source.Length == 0) { shader!.Uniform("textured", 0); return; }
+        var program = target ?? shader!;
+        if (source.Length == 0) { program.Uniform("textured", 0); return; }
         string key = project.Id + "/" + source;
         if (!textures.TryGetValue(key, out int texture))
         {
@@ -224,7 +225,7 @@ internal sealed class DirectorCreationRenderer : IRenderer
             }
             textures[key] = texture;
         }
-        shader!.Uniform("textured", 1); shader.BindTexture2D("tex", texture, 0);
+        program.Uniform("textured", 1); program.BindTexture2D("tex", texture, 0);
     }
     private static MeshData Plane(CreationSceneObject obj)
     {
@@ -263,6 +264,7 @@ internal sealed class DirectorCreationRenderer : IRenderer
     internal static float[] Array(Matrix4x4 m) => [m.M11,m.M12,m.M13,m.M14,m.M21,m.M22,m.M23,m.M24,m.M31,m.M32,m.M33,m.M34,m.M41,m.M42,m.M43,m.M44];
     internal void ReloadTextures()
     {
+        DisposeSelectionBuffers();
         foreach (var mesh in meshes.Values) mesh.Dispose(); meshes.Clear(); geometry.Clear();
         foreach (var t in ownedTextures) t.Dispose(); ownedTextures.Clear(); textures.Clear(); revision = -1;
         foreach (var mesh in nativeMeshes.Values) mesh.Dispose(); nativeMeshes.Clear();
@@ -271,6 +273,7 @@ internal sealed class DirectorCreationRenderer : IRenderer
     {
         api.Event.UnregisterRenderer(this, EnumRenderStage.AfterOIT); api.Event.ReloadShader -= ReloadShader;
         foreach (var mesh in meshes.Values) mesh.Dispose(); meshes.Clear(); ReloadTextures(); shader?.Dispose();
+        DisposeSelectionShaders(); selectionTriangle?.Dispose(); selectionTriangle = null;
         foreach (var mesh in nativeMeshes.Values) mesh.Dispose(); nativeMeshes.Clear();
     }
 }
