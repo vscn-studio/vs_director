@@ -18,6 +18,7 @@ public sealed class CreationObjectState
     public string? ResourceOverride { get; set; }
     public DirectorReplayActorSample? PerformanceSample { get; set; }
     public bool HasPerformance { get; set; }
+    public bool HasRecordedPose { get; set; }
     public bool HasPositionAnimation { get; set; }
 }
 
@@ -98,9 +99,8 @@ public static class DirectorCreationEvaluator
                 if (!project.Performances.TryGetValue(clip.PerformanceAssetId, out var take)) continue;
                 state.HasPerformance = true;
                 var edited = clip.BakedPose ? project.Animations.Find(a => a.Id == clip.AnimationId) : null;
-                double duration = Math.Max(1d / 30, edited?.Duration ?? take.Action.DurationSeconds);
-                double source = clip.SourceStart + Math.Clamp(time - clip.Start, 0, clip.Duration) * clip.Speed;
-                source = clip.Loop || edited?.Loop == true ? source % duration : Math.Min(source, duration);
+                double source = DirectorCreationTiming.ClipSourceTime(clip, time,
+                    edited?.Duration ?? take.Action.DurationSeconds, edited?.Loop == true);
                 // Conversion changes the editable data source, not its priority
                 // relative to project keys, other takes or the clip's time range.
                 var poseTracks = clip.BakedPose
@@ -110,6 +110,8 @@ public static class DirectorCreationEvaluator
                 {
                     Apply(state, track, source, 1);
                     recordedChannels.Add((track.PartId, track.Channel));
+                    if (track.PartId != Guid.Empty && track.Channel is CreationChannel.Position or CreationChannel.Rotation or CreationChannel.Scale)
+                        state.HasRecordedPose = true;
                 }
                 if (take.Channels.HasFlag(CreationRecordingChannels.Equipment)) state.PerformanceSample = take.SampleState(source);
             }
@@ -321,6 +323,7 @@ public static class DirectorCreationEdits
         {
             track.Id = Guid.NewGuid(); track.ObjectId = Guid.Empty;
             foreach (var key in track.Keys) key.Id = Guid.NewGuid();
+            DirectorCreationKeyReduction.Reduce(track);
         }
         project.Animations.Add(animation); clip.AnimationId = animation.Id; clip.BakedPose = true;
         return animation;

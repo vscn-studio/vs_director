@@ -3,6 +3,9 @@ namespace VSDirector.Data;
 public sealed class CreationPerformance
 {
     public CreationRecordingChannels Channels { get; set; } = CreationRecordingChannels.All;
+    // Project-relative recording owned by this take. Legacy performances keep
+    // resolving their explicitly linked replay through BackgroundReplayId.
+    public string WorldSource { get; set; } = "";
     public Guid BackgroundReplayId { get; set; }
     public double BackgroundStart { get; set; }
     public CreationVector Origin { get; set; }
@@ -11,7 +14,7 @@ public sealed class CreationPerformance
     private DirectorActionFrame[]? frames;
     public void Validate()
     {
-        if (!Origin.Finite() || !double.IsFinite(BackgroundStart) || BackgroundStart < 0 || (Channels & ~CreationRecordingChannels.All) != 0
+        if (WorldSource is null || !Origin.Finite() || !double.IsFinite(BackgroundStart) || BackgroundStart < 0 || (Channels & ~CreationRecordingChannels.All) != 0
             || Action is null || Action.Layers is null || Tracks is null) throw new InvalidDataException("Invalid recorded performance.");
         foreach (var track in Tracks)
         {

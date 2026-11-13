@@ -16,13 +16,14 @@ internal static partial class DirectorImGuiProbe
         var current = AccessTools.Field(type, "<Current>k__BackingField"); var previous = current.GetValue(null);
         var runtime = RuntimeHelpers.GetUninitializedObject(type);
         var renderer = RuntimeHelpers.GetUninitializedObject(assembly.GetType("VSDirector.Rendering.DirectorCreationRenderer", true)!);
+        AccessTools.Field(renderer.GetType(), "<HeldItems>k__BackingField").SetValue(renderer, new Dictionary<Guid, ItemRenderInfo>());
         var carrier = new EntityPlayer(); carrier.Pos.SetPos(100, 3, 100);
         var player = (Vintagestory.Client.NoObf.ClientPlayer)RuntimeHelpers.GetUninitializedObject(typeof(Vintagestory.Client.NoObf.ClientPlayer));
         var playerData = (Vintagestory.Client.NoObf.ClientWorldPlayerData)RuntimeHelpers.GetUninitializedObject(typeof(Vintagestory.Client.NoObf.ClientWorldPlayerData));
         playerData.PlayerUID = "Jack";
         AccessTools.Field(playerData.GetType(), "entityplayer").SetValue(playerData, carrier);
         AccessTools.Field(player.GetType(), "worlddata").SetValue(player, playerData);
-        var world = ProbeDispatchProxy.Create<IClientWorldAccessor>((m, _) => m.Name switch { "get_Player" => player, "get_AllOnlinePlayers" => new IPlayer[] { player }, _ => ProbeDispatchProxy.DefaultValue(m.ReturnType) });
+        var world = ProbeDispatchProxy.Create<IClientWorldAccessor>((m, _) => m.Name switch { "get_SavegameIdentifier" => "probe-world", "get_Player" => player, "get_AllOnlinePlayers" => new IPlayer[] { player }, _ => ProbeDispatchProxy.DefaultValue(m.ReturnType) });
         var api = ProbeDispatchProxy.Create<ICoreClientAPI>((m, _) => m.Name == "get_World" ? world : ProbeDispatchProxy.DefaultValue(m.ReturnType));
         var actor = new CreationSceneObject { Kind = CreationObjectKind.Group, ReplacePlayerUid = "Jack" };
         var track = new CreationTrack { Channel = CreationChannel.Position };
@@ -30,7 +31,7 @@ internal static partial class DirectorImGuiProbe
         var asset = new CreationAsset { Kind = CreationAssetKind.Performance, Source = "assets/test.performance.json" };
         var replay = Guid.NewGuid();
         var take = new CreationPerformance { BackgroundReplayId = replay, Action = new() { SourceActorKey = "player:Jack", Layers = [new() { Frames = [new() { TimeSeconds = 0 }, new() { TimeSeconds = 2 }] }] }, Tracks = [track] };
-        var project = new DirectorCreationProject { Objects = [actor], Assets = [asset], BackgroundReplayId = replay, Clips = [new() { ObjectId = actor.Id, PerformanceAssetId = asset.Id, Duration = 2 }] };
+        var project = new DirectorCreationProject { WorldId = "probe-world", Objects = [actor], Assets = [asset], BackgroundReplayId = replay, Clips = [new() { ObjectId = actor.Id, PerformanceAssetId = asset.Id, Duration = 2 }] };
         project.BackgroundClipId = project.Clips[0].Id;
         DirectorCreationEdits.SetKey(project, actor.Id, Guid.Empty, CreationChannel.Position, 0, new(1, 3, 1));
         project.Performances[asset.Id] = take;

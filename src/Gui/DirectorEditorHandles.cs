@@ -52,7 +52,9 @@ internal sealed class DirectorEditorHandles
         {
             for(int i=0;i<3;i++)
             {
-                var d=axes[i]; float projected=new Vector2((float)(view[0]*d.X+view[4]*d.Y+view[8]*d.Z),(float)(view[1]*d.X+view[5]*d.Y+view[9]*d.Z)).Length();
+                var d=axes[i];
+                float projected=new Vector2((float)(view[0]*d.X+view[4]*d.Y+view[8]*d.Z),
+                    (float)(view[1]*d.X+view[5]*d.Y+view[9]*d.Z)).Length();
                 float length=radius/Math.Max(.15f,projected);
                 CameraHandleLine(draw,pivot,pivot,Add(pivot,d*(length-(scale?0:CameraMoveConeLength(pivot,length)))),Color(i),i,1.5f);
                 if(scale) DrawCameraPivotBox(draw,pivot,length,i,Color(i)); else DrawCameraMoveCone(draw,pivot,length,i,Color(i));

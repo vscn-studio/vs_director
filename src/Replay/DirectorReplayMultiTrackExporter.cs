@@ -400,7 +400,8 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
         catch (Exception exception)
         {
             CloseTracks(tracks);
-            error = exception.Message;
+            error = exception.GetBaseException().Message;
+            capi.Logger.Error("VS Director: replay export initialization failed: {0}", exception);
             SetStatus("error", error, folder);
             return false;
         }

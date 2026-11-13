@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace VSDirector.Data;
 
-public sealed record CreationProjectEntry(Guid Id, string Name, string Folder, DateTimeOffset ModifiedUtc, bool Recovery);
+public sealed record CreationProjectEntry(Guid Id, string Name, string Folder, DateTimeOffset ModifiedUtc, bool Recovery, string WorldId = "", int Dimension = 0);
 
 /// <summary>Independent project storage; replay files and workspace settings are never rewritten.</summary>
 public sealed class DirectorCreationStore
@@ -51,7 +51,7 @@ public sealed class DirectorCreationStore
             {
                 var project = Read(File.Exists(path) ? path : recovery);
                 entries.Add(new(id, project.Name, project.Folder, project.ModifiedUtc,
-                    File.Exists(recovery) && (!File.Exists(path) || File.GetLastWriteTimeUtc(recovery) >= File.GetLastWriteTimeUtc(path))));
+                    File.Exists(recovery) && (!File.Exists(path) || File.GetLastWriteTimeUtc(recovery) >= File.GetLastWriteTimeUtc(path)), project.WorldId, project.Dimension));
             }
             catch (Exception e) when (e is IOException or JsonException or InvalidDataException or ArgumentException) { /* Other projects remain accessible. */ }
         }
@@ -120,10 +120,34 @@ public sealed class DirectorCreationStore
         {
             if (!project.Performances.TryGetValue(pair.First.Id, out var original)) continue;
             var take = CreationJson.Clone(original);
+            if (take.WorldSource.Length > 0)
+            {
+                string source = AssetPath(project.Id, take.WorldSource);
+                string destination = AssetPath(copy.Id, take.WorldSource);
+                if (!File.Exists(destination))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    File.Copy(source, destination);
+                }
+            }
             foreach (var track in take.Tracks) if (track.PartId != Guid.Empty) track.PartId = partMap.GetValueOrDefault(track.PartId, track.PartId);
             AtomicWrite(AssetPath(copy.Id, pair.Second.Source), JsonSerializer.Serialize(take, CreationJson.Options));
         }
         LoadPerformances(copy, all: true); Save(copy); return copy;
+    }
+    public DirectorCreationProject CopyToWorld(DirectorCreationProject source, string worldId, int dimension)
+    {
+        if (string.IsNullOrWhiteSpace(worldId)) throw new ArgumentException("A destination world is required.", nameof(worldId));
+        var copy = Duplicate(source);
+        copy.WorldId = worldId; copy.Dimension = dimension;
+        // Keep motion, poses and local recording files, but do not apply another
+        // world's block history or bind actors to live players on opening.
+        copy.SetBackground(Guid.Empty); copy.UsePerformanceWorld = false;
+        foreach (var actor in copy.Objects) actor.ReplacePlayerUid = "";
+        foreach (var preset in copy.Presets)
+            if (preset.Appearance is { } appearance) appearance.ReplacePlayerUid = "";
+        Save(copy);
+        return copy;
     }
     public void Delete(Guid id)
     {

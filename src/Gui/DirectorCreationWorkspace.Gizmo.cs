@@ -13,7 +13,7 @@ internal sealed partial class DirectorCreationWorkspace
     private Vector3 handleDirection,handleRight,handleUp,handleView;
     private float handleUnits,handleAngle,handleLastAngle;
     private OPERATION handleOperation;
-    private int poseRotationAxis=6;
+    private int poseRotationAxis=-1;
     private Vector2 poseDragTangent;
     private bool simplePoseDrag;
     private Guid handleOwner,handlePart,handleAction;
@@ -29,14 +29,15 @@ internal sealed partial class DirectorCreationWorkspace
         float units=Math.Max(.000001f,Math.Abs(Vector3.Transform(world.Translation,v).Z)/(Math.Abs(projection[5])*size.Y/2));
         var right=Vector3.Normalize(new Vector3(view[0],view[4],view[8]));var up=Vector3.Normalize(new Vector3(view[1],view[5],view[9]));var eye=Vector3.Normalize(new Vector3(view[2],view[6],view[10]));
         var axes=new[]{Vector3.UnitX,Vector3.UnitY,Vector3.UnitZ};
-        if(transformMode==MODE.LOCAL) for(int i=0;i<3;i++) { var axis=Vector3.TransformNormal(axes[i],world); if(axis.LengthSquared()>1e-8) axes[i]=Vector3.Normalize(axis); }
+        if(transformMode==MODE.LOCAL && Matrix4x4.Decompose(world,out _,out var orientation,out _))
+            for(int i=0;i<3;i++)axes[i]=Vector3.Transform(axes[i],Quaternion.Normalize(orientation));
         float pixels=60*DirectorImGuiTheme.Scale;
         var outlineWorld=camera ? Session.Frame?.Objects.GetValueOrDefault(Session.SelectedObject)?.World ?? world : world;
         if(camera) foreach(var edge in DirectorEditorGeometry.CameraOutline) foreach(var point in new[]{edge.A,edge.B})
             if(Screen(Vector3.Transform(point,outlineWorld)) is { } at) pixels=Math.Max(pixels,Vector2.Distance(center,at)+18*DirectorImGuiTheme.Scale);
         bool interactive=ImGui.IsMouseHoveringRect(min,min+size)&&(!ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow)||ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows));
         bool pose=Session.PoseEditing&&Session.SelectedPart!=Guid.Empty;
-        handleHover=creationHandles.Draw(draw,center,units,pixels*units,view.Select(x=>(double)x).ToArray(),axes,operation==OPERATION.ROTATE,operation==OPERATION.SCALE,handleAxis,interactive,handleHover,pose?poseRotationAxis:-1);
+        handleHover=creationHandles.Draw(draw,center,units,pixels*units,view.Select(x=>(double)x).ToArray(),axes,operation==OPERATION.ROTATE,operation==OPERATION.SCALE,handleAxis,interactive,handleHover,pose?poseRotationAxis:objectRotationAxis);
         if(handleAxis<0 && handleHover>=0 && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
             handleAxis=handleHover;handleStart=world;handlePointer=io.MousePos;handleCenter=center;handleUnits=units;

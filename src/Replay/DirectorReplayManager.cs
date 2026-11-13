@@ -52,7 +52,7 @@ internal readonly record struct DirectorReplayPreloadEditorState(
     IReadOnlyList<DirectorReplayPreloadColumn> IncludedColumns,
     IReadOnlyList<DirectorReplayPreloadColumn> ExcludedColumns);
 
-internal sealed class DirectorReplayManager : IDisposable
+internal sealed partial class DirectorReplayManager : IDisposable
 {
     private const double TimeEpsilon = 0.000001d;
     private const int PendingBlockChangesPerTick = 64;
@@ -1232,9 +1232,9 @@ internal sealed class DirectorReplayManager : IDisposable
 
     internal float ReplayParticleDeltaTime(float fallback)
     {
-        float delta = dedicatedReplayRenderer.IsActive
-            ? fallback
-            : replayParticleFrameClock.Read(fallback).DeltaSeconds;
+        if (DirectorOffscreenRenderRuntime.IsRendering) return 0f;
+        DirectorReplayParticleFrameDelta frame = replayParticleFrameClock.Read(fallback);
+        float delta = frame.UsesReplayClock ? frame.DeltaSeconds : fallback;
         return delta;
     }
 
@@ -1252,7 +1252,6 @@ internal sealed class DirectorReplayManager : IDisposable
             // Offscreen views are rendered after the primary frame. They must
             // see the same particle pose, but must not consume the primary
             // frame's replay delta or publish another advancing frame.
-            replayParticleFrameClock.Publish(usesReplayClock: true, frameDeltaSeconds: 0f);
             return;
         }
 
@@ -1260,7 +1259,8 @@ internal sealed class DirectorReplayManager : IDisposable
             && DirectorReplayPlaybackPolicy.ShouldAdvanceParticleClock(
                 active!.Paused,
                 exporter.IsExporting
-                    || obsExport?.StartGate.RecordingStarted == true)
+                    || obsExport?.StartGate.RecordingStarted == true,
+                IsCreationSession && creationPlaybackAdvancing)
             ? Math.Max(0f, active.PendingParticleDeltaSeconds)
             : 0f;
         if (deterministic)
@@ -1275,6 +1275,7 @@ internal sealed class DirectorReplayManager : IDisposable
         bool offthread,
         float fallback)
     {
+        if (DirectorOffscreenRenderRuntime.IsRendering) return 0f;
         if (dedicatedReplayRenderer.IsActive
             && !dedicatedReplayRenderer.OwnsParticlePool(pool))
         {
@@ -1779,6 +1780,11 @@ internal sealed class DirectorReplayManager : IDisposable
     {
         PollPendingSave();
         error = string.Empty;
+        if (CreationOwnsWorld)
+        {
+            error = "creation-recording-unavailable";
+            return false;
+        }
         if (store is null)
         {
             error = "world-not-ready";
@@ -2147,6 +2153,11 @@ internal sealed class DirectorReplayManager : IDisposable
     {
         missingActors = 0;
         error = string.Empty;
+        if (CreationOwnsWorld)
+        {
+            error = "creation-recording-unavailable";
+            return false;
+        }
         DirectorReplayStore? activeStore = store;
         if (activeStore is null)
         {
@@ -2493,6 +2504,10 @@ internal sealed class DirectorReplayManager : IDisposable
         if (!active.Paused) SetPaused(true);
         double next = Math.Clamp(timeSeconds, 0, active.Document.DurationSeconds);
         if (Math.Abs(next - active.TimeSeconds) < 1e-6) return;
+        // Creation's export transport advances exactly one output frame at a
+        // time. Keep both normal playback and deterministic video export on
+        // the continuous event path so particles retain their live age and
+        // do not get cleared/rebuilt for every rendered frame.
         bool continuous = advancing && next >= active.TimeSeconds && next - active.TimeSeconds <= .5;
         active.TimeSeconds = next;
         if (!continuous) active.TimedEventSeekPending = true;
@@ -3235,6 +3250,11 @@ internal sealed class DirectorReplayManager : IDisposable
     {
         source = default;
         error = string.Empty;
+        if (CreationOwnsWorld)
+        {
+            error = "creation-recording-unavailable";
+            return false;
+        }
         if (liveActionCapture is not null)
         {
             error = "action-live-recording-active";
@@ -8696,7 +8716,7 @@ internal sealed class DirectorReplayManager : IDisposable
             {
                 continue;
             }
-            SpawnParticle(particle, particleVisuals);
+            SpawnParticle(particle, particleVisuals, (float)Math.Max(0d, active.TimeSeconds - particle.TimeSeconds));
             spawnedParticles++;
         }
 
@@ -9017,7 +9037,7 @@ internal sealed class DirectorReplayManager : IDisposable
     private bool ShouldPauseReplaySounds(Playback active)
         => active.ElementFullyFrozen || playbackChunkBuffering || active.WorldPlayback?.IsSynchronizing == true
             || DirectorReplayPlaybackPolicy.ShouldPauseReplaySounds(
-                active.Paused,
+                active.Paused && !(IsCreationSession && creationPlaybackAdvancing),
                 game.IsPaused,
                 obsExport is { IsActive: true, Client: not null }
                     && obsExport.StartGate.RecordingStarted);
@@ -10792,7 +10812,7 @@ internal sealed class DirectorReplayManager : IDisposable
             if (document.ServerReplay is { RequiredForCompletePlayback: true, Available: false })
                 throw new InvalidDataException("This coordinated replay requires its server companion data. Copy the matching server replay directory beside the client volume and try again.");
             document.Name = loading.Info.Name;
-            store?.ApplyTimelineEdits(loading.Info.Path, document);
+            if (!loading.ProjectOwned) store?.ApplyTimelineEdits(loading.Info.Path, document);
             // Do not build the complete route plan here.  Build() rasterizes
             // every actor sample and scans the whole world snapshot on the
             // client thread, which can stall an integrated server while the
@@ -10931,6 +10951,11 @@ internal sealed class DirectorReplayManager : IDisposable
                     || actorWork.Elapsed.TotalMilliseconds < PlaybackActorWorkBudgetMilliseconds))
             {
                 DirectorReplayActorTrack actor = starting.Document.Actors[starting.NextActorIndex++];
+                // The creation renderer supplies the selected performer and
+                // equipment. Keep its recorded track for world preload/audio
+                // anchors, but do not create a second visible actor.
+                if (IsCreationSession && creationExcludedActorKey.Length > 0
+                    && actor.ActorKey == creationExcludedActorKey) continue;
                 ActorBinding? binding = CreatePlaybackBinding(
                     actor,
                     starting.PreferLiveActors,
@@ -11176,6 +11201,7 @@ internal sealed class DirectorReplayManager : IDisposable
         capi.Event.OnEntityLoaded -= OnEntityLoaded;
         capi.Event.OnEntityDespawn -= OnEntityDespawn;
         LeaveWorld();
+        DirectorReplayRuntime.ReleaseCreationSession(this);
         PendingReplaySave? abandonedSave = pendingSave;
         pendingSave = null;
         if (abandonedSave is not null)
@@ -11357,6 +11383,8 @@ internal sealed class DirectorReplayManager : IDisposable
         public bool QuickMode { get; }
 
         public bool PauseAfterLoad { get; }
+
+        public bool ProjectOwned { get; init; }
 
         public CancellationTokenSource Cancellation { get; } = new();
 

@@ -14,7 +14,8 @@ internal sealed partial class DirectorCreationWorkspace
         bool hovered=ImGui.IsItemHovered();
         if(scenePoseOwner==actor.Id && scenePoseDrag!=Guid.Empty && ImGui.IsMouseDragging(ImGuiMouseButton.Left)) scenePoseDrop=time(io.MousePos.X);
         TimelineRowBackground(row,labelWidth+width,height,Session.ScenePoseActor==actor.Id?DirectorImGuiTheme.Selected:DirectorImGuiTheme.Panel);
-        draw.AddText(row+new Vector2(12,(height-ImGui.GetFontSize())/2),DirectorImGuiTheme.Text,L("creation-pose"));
+        draw.AddText(row+new Vector2(8*DirectorImGuiTheme.Scale,(height-ImGui.GetFontSize())/2),DirectorImGuiTheme.Text,DirectorImGuiIcons.Get(expandedPoseObjects.Contains(actor.Id)?"chevron-down":"chevron-right"));
+        draw.AddText(row+new Vector2(30*DirectorImGuiTheme.Scale,(height-ImGui.GetFontSize())/2),DirectorImGuiTheme.Text,L("creation-pose"));
         draw.PushClipRect(new(x0,row.Y),new(x0+width,row.Y+height),true);
         foreach(var key in actor.PoseKeys)
         {
@@ -27,10 +28,12 @@ internal sealed partial class DirectorCreationWorkspace
         var hit=nearest is not null && io.MousePos.X>=x0 && Math.Abs(x(nearest.Time)-io.MousePos.X)<12*DirectorImGuiTheme.Scale?nearest:null;
         if(hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
+            if(io.MousePos.X<row.X+28*DirectorImGuiTheme.Scale)
+            {if(!expandedPoseObjects.Add(actor.Id))expandedPoseObjects.Remove(actor.Id);return;}
             bool drag=!Session.HasTransformDraft;
             Continue(()=>
             {
-                Session.BeginScenePose(actor.Id);showBones=false;
+                Session.BeginScenePose(actor.Id);wholeObjectSelection=false;showBones=false;
                 trackId=clipId=Guid.Empty;poseEditorActor=Guid.Empty;actionPoseEditorTime=null;selectionArea=SelectionArea.Timeline;
                 if(hit is not null) { SelectTimelineKey(hit.Id,actor.PoseKeys.Select(k=>(k.Id,k.Time)),io.KeyCtrl,io.KeyShift);Session.Seek(hit.Time);if(ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))OpenPoseEditor(actor,hit);else if(drag&&selectedTimelineKeys.Contains(hit.Id)) { scenePoseDrag=hit.Id;scenePoseOwner=actor.Id;scenePoseDrop=hit.Time;BeginKeyMove(); } }
                 else {keyId=Guid.Empty;selectedTimelineKeys.Clear();if(io.MousePos.X>=x0) Session.Seek(time(io.MousePos.X));}

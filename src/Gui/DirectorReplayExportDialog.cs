@@ -153,8 +153,10 @@ internal sealed class DirectorReplayExportDialog : DirectorImGuiDialog
         DirectorReplayViewportTimeline timeline = owner.ReplayViewportTimeline;
         start = timeline.ExportStartSeconds ?? start; end = timeline.ExportEndSeconds ?? end;
         DirectorReplayElementScene? scene = timeline.ActiveScene;
-        if (scene is null || !owner.TryStartReplaySceneExport(scene.Id, scene.Name, start, end, scale, options, out _))
-        { validationText = owner.ReplayExportStatusShortText(); return; }
+        if (scene is null)
+        { validationText = L("replay-export-scene-missing"); return; }
+        if (!owner.TryStartReplaySceneExport(scene.Id, scene.Name, start, end, scale, options, out string message))
+        { validationText = message; return; }
         Close();
     }
 

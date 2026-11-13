@@ -25,6 +25,7 @@ public sealed class CreationActorSource
     public string SourceWorld { get; set; } = "";
     public long SourceEntityId { get; set; }
     public int TextureVariant { get; set; }
+    public byte[] AppearanceData { get; set; } = [];
 }
 
 public sealed class CreationIkChain
@@ -133,7 +134,7 @@ public static class DirectorCreationIk
         foreach (var state in frame.Objects.Values)
         {
             var model = project.Models.Find(m => m.Id == state.Source.ModelId);
-            if (model is null || state.IkWeight <= 0 || !Matrix4x4.Invert(state.World, out var inverseWorld)) continue;
+            if (model is null || state.HasRecordedPose || state.IkWeight <= 0 || !Matrix4x4.Invert(state.World, out var inverseWorld)) continue;
             foreach (var chain in state.Source.IkChains.Where(c => c.Enabled))
             {
                 var upper = model.Parts.Find(p => p.Id == chain.Upper);

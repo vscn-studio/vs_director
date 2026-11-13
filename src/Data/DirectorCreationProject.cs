@@ -114,7 +114,9 @@ public sealed class CreationSceneObject
     public double Glow { get; set; }
     public string Text { get; set; } = "Text";
     public string ResourceCode { get; set; } = "";
+    public byte[] ItemStackData { get; set; } = [];
     public int ActorHand { get; set; }
+    public bool UseRecordedHandItem { get; set; } = true;
     public string ReplacePlayerUid { get; set; } = "";
     public CreationCameraMode CameraMode { get; set; }
     public double Fov { get; set; } = 70;
@@ -239,6 +241,7 @@ public sealed partial class DirectorCreationProject
     public bool Loop { get; set; }
     public Guid CameraId { get; set; }
     public Guid BackgroundReplayId { get; set; }
+    public bool UsePerformanceWorld { get; set; } = true;
     public Guid BackgroundClipId { get; set; }
     public double BackgroundOffset { get; set; }
     public List<string> Folders { get; set; } = new();
@@ -258,7 +261,8 @@ public sealed partial class DirectorCreationProject
         // that graph into a huge JSON string on the UI thread for every gesture.
         var copy = new DirectorCreationProject { SchemaVersion = SchemaVersion, Id = Id, Name = Name, Folder = Folder, WorldId = WorldId, Dimension = Dimension,
             Origin = Origin, Duration = Duration, TimeDisplay = TimeDisplay, LoopStart = LoopStart, LoopEnd = LoopEnd, Loop = Loop, CameraId = CameraId,
-            BackgroundReplayId = BackgroundReplayId, BackgroundClipId = BackgroundClipId, BackgroundOffset = BackgroundOffset, ModifiedUtc = ModifiedUtc,
+            BackgroundReplayId = BackgroundReplayId, UsePerformanceWorld = UsePerformanceWorld,
+            BackgroundClipId = BackgroundClipId, BackgroundOffset = BackgroundOffset, ModifiedUtc = ModifiedUtc,
             Folders = new(Folders), Assets = CreationJson.Clone(Assets), Models = CreationJson.Clone(Models), Objects = CreationJson.Clone(Objects),
             Tracks = Tracks.Select(t => t.Copy()).ToList(), Animations = Animations.Select(a => a.Copy()).ToList(),
             Clips = CreationJson.Clone(Clips), Presets = CreationJson.Clone(Presets), Output = CreationJson.Clone(Output), Visuals = Visuals.DeepClone() };

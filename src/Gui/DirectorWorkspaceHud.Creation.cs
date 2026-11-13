@@ -33,7 +33,7 @@ internal sealed partial class DirectorWorkspaceHud
     }
     private void CreationMouseDown(MouseEvent args)
     {
-        if (owner.Creation.ControllingActor) return;
+        if (owner.Creation.ControllingActor || owner.Creation.NativeAppearanceEditorOpen) return;
         if (args.Handled) return;
         var p = imGuiWorkspace.ViewportPosition; var s = imGuiWorkspace.ViewportSize;
         bool viewport = args.X >= p.X && args.Y >= p.Y && args.X < p.X + s.X && args.Y < p.Y + s.Y;

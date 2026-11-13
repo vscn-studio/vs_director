@@ -30,9 +30,67 @@ internal static class CreationDependencyChecks
             File.WriteAllText(store.AssetPath(p.Id, used.Source), "null");
             store.LoadPerformances(p, retry: true);
             Check(store.PerformanceError(p, used.Source) is not null, "Invalid recording was accepted");
-            File.WriteAllText(store.AssetPath(p.Id, used.Source), JsonSerializer.Serialize(new CreationPerformance(), CreationJson.Options));
+            const string worldSource = "recordings/take.world.vsdreplay.gz";
+            File.WriteAllText(store.AssetPath(p.Id, used.Source), JsonSerializer.Serialize(new CreationPerformance { WorldSource = worldSource }, CreationJson.Options));
             store.LoadPerformances(p, retry: true);
             Check(p.Performances.ContainsKey(used.Id) && store.PerformanceError(p, used.Source) is null, "Repaired recording did not reload");
+            Check(p.Performances[used.Id].WorldSource == worldSource, "Project-owned recording reference was lost on load");
+            Check(!DirectorCreationDependencies.Collect(p).Any(d => d.Source == worldSource),
+                "An explicit replay background required an unused project world recording");
+            p.SetBackground(Guid.Empty);
+            Check(DirectorCreationDependencies.Collect(p).Any(d => d.Source == worldSource),
+                "Export dependencies omitted the performance's world recording");
+            p.UsePerformanceWorld = false;
+            var liveDependencies = DirectorCreationDependencies.Collect(p);
+            Check(!liveDependencies.Any(d => d.Source == worldSource)
+                && liveDependencies.Any(d => d.Performance == used.Id),
+                "Live-world export required an unused recorded world or omitted its actor performance");
+            p.UsePerformanceWorld = true;
+            p.SetBackground(replay, clip.Id, 2);
+            var legacy = (CreationPerformance?)JsonSerializer.Deserialize("{}", typeof(CreationPerformance), CreationJson.Options);
+            Check(legacy is not null && legacy.WorldSource == "", "Legacy performances require a new recording reference");
+            var timedClip = new CreationClip { Start = 10, Duration = 8, SourceStart = 2, Speed = 2 };
+            Check(DirectorCreationTiming.ClipSourceTime(timedClip, 11, 20) == 4,
+                "Trimmed performance clock ignored the clip's offset or speed");
+            Check(DirectorCreationTiming.ClipSourceTime(timedClip, 0, 20) == 2
+                && DirectorCreationTiming.ClipSourceTime(timedClip, 100, 20) == 18,
+                "Performance clock escaped the clip's time range");
+            timedClip.Loop = true;
+            Check(DirectorCreationTiming.ClipSourceTime(timedClip, 13, 6) == 2,
+                "Looped performance clock did not wrap at the source duration");
+            var worldProject = p.Clone();
+            worldProject.SetBackground(Guid.Empty);
+            var worldClip = worldProject.Clips.First(c => c.PerformanceAssetId == used.Id);
+            worldClip.Start = 2; worldClip.Duration = 4; worldClip.SourceStart = 1; worldClip.Speed = 2;
+            worldProject.Performances[used.Id] = new CreationPerformance
+            {
+                WorldSource = worldSource,
+                Action = new() { Layers = [new() { Frames = [new() { TimeSeconds = 0 }, new() { TimeSeconds = 20 }] }] }
+            };
+            Check(DirectorCreationWorldTimeline.Resolve(worldProject, 0)?.SourceTime == 1,
+                "Before a take, world preview did not preserve its trimmed baseline");
+            Check(DirectorCreationWorldTimeline.Resolve(worldProject, 3)?.SourceTime == 3,
+                "World preview did not share the actor's trimmed and scaled source clock");
+            Check(DirectorCreationWorldTimeline.Resolve(worldProject, 8)?.SourceTime == 9,
+                "A gap reverted the world preview to live reality instead of the take's ending state");
+            worldProject.UsePerformanceWorld = false;
+            Check(DirectorCreationWorldTimeline.Resolve(worldProject, 3) is null
+                && !worldProject.Clone().UsePerformanceWorld, "Live-world selection was ignored or lost in history");
+            worldProject.UsePerformanceWorld = true;
+            worldProject.SetBackground(replay);
+            Check(DirectorCreationWorldTimeline.Resolve(worldProject, 3) is null,
+                "An explicitly linked background competed with project-owned world playback");
+            worldProject.SetBackground(Guid.Empty);
+            worldClip.Enabled = false;
+            Check(DirectorCreationWorldTimeline.Resolve(worldProject, 3) is null,
+                "A disabled performance continued owning the preview world");
+            worldClip.Enabled = true;
+            string originalWorld = store.AssetPath(worldProject.Id, worldSource);
+            Directory.CreateDirectory(Path.GetDirectoryName(originalWorld)!);
+            File.WriteAllText(originalWorld, "world-recording-copy-fixture");
+            var copiedProject = store.Duplicate(worldProject);
+            Check(File.ReadAllText(store.AssetPath(copiedProject.Id, worldSource)) == "world-recording-copy-fixture",
+                "Duplicating a project omitted the performance's recorded world");
             session.Edit("delete linked clip", project => project.Clips.RemoveAt(0));
             Check(session.Project!.BackgroundReplayId == Guid.Empty && session.Project.BackgroundClipId == Guid.Empty && session.Project.BackgroundOffset == 0, "Deleted clip left a stale background");
             session.Undo();

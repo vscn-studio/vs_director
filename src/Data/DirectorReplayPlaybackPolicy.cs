@@ -105,8 +105,8 @@ public static class DirectorReplayPlaybackPolicy
             : 0f;
     }
 
-    public static bool ShouldAdvanceParticleClock(bool playbackPaused, bool exportActive)
-        => !playbackPaused || exportActive;
+    public static bool ShouldAdvanceParticleClock(bool playbackPaused, bool exportActive, bool creationAdvancing = false)
+        => !playbackPaused || exportActive || creationAdvancing;
 
     public static bool ShouldPauseReplaySounds(
         bool playbackPaused,

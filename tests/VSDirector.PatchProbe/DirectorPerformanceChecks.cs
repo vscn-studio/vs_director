@@ -36,6 +36,7 @@ internal static class DirectorPerformanceChecks
         var assembly = typeof(VSDirectorModSystem).Assembly;
         Type type = assembly.GetType("VSDirector.Networking.DirectorPerformanceServer", true)!;
         var carrier = new Carrier(); carrier.Pos.SetPos(1, 100, 3);
+        carrier.Pos.HeadYaw = MathF.PI; carrier.Pos.HeadPitch = 1.2f;
         carrier.SetCollisionBox(.6f, 1.8f); carrier.SetSelectionBox(.6f, 1.8f); carrier.LocalEyePos.Y = 1.7;
         long clock = 100;
         var worldData = (Vintagestory.Server.ServerWorldPlayerData)RuntimeHelpers.GetUninitializedObject(typeof(Vintagestory.Server.ServerWorldPlayerData));
@@ -64,8 +65,15 @@ internal static class DirectorPerformanceChecks
         string Start() { string id = Guid.NewGuid().ToString(); Call("Request", player, new DirectorPerformanceRequest { Session = id, X = 10, Y = 100, Z = 20, CustomBody = true, BodyWidth = .2, BodyHeight = .6, SneakHeight = .3, EyeHeight = .5 }); return id; }
         void Request(string id, int action) => Call("Request", player, new DirectorPerformanceRequest { Session = id, Action = action });
         string first = Start(); Check(carrier.Pos.X == 10 && data.Count == 1, "Start failed to persist return position");
+        Check(Math.Abs(carrier.Pos.Pitch - Math.PI) < .00001 && carrier.Pos.Roll == 0,
+            "Performance initialization does not use the native horizontal player pitch");
+        Check(carrier.Pos.HeadYaw == 0 && carrier.Pos.HeadPitch == 0,
+            "Performance initialization retained the editor's relative head angles");
         Check(Math.Abs(carrier.CollisionBox.XSize - .2) < .001 && Math.Abs(carrier.CollisionBox.Y2 - .6) < .001 && carrier.LocalEyePos.Y == .5, "Server did not apply independent body dimensions");
+        carrier.Pos.Yaw = 1.25f; carrier.BodyYaw = 0;
         Request(first, 3); clock += 33; Call("Tick", .033f); Request(first, 1);
+        Check(packets.Where(p => p.Phase == "sample").All(p => Math.Abs(p.Yaw - 1.25f) < .00001),
+            "Authoritative samples use an unsimulated visual BodyYaw");
         Check(carrier.Pos.X == 1 && data.Count == 0, "Stop did not restore carrier");
         Check(Math.Abs(carrier.CollisionBox.Y2 - 1.8) < .001 && carrier.LocalEyePos.Y == 1.7, "Stop did not restore body and eye height");
         Check(packets.Count(p => p.Phase == "sample") == 3 && packets.Where(p => p.Phase == "sample").Select(p => p.Sequence).SequenceEqual(new long[] { 1, 2, 3 }), "Final authoritative sample or ordering lost");

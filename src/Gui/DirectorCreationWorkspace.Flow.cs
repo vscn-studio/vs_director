@@ -13,7 +13,7 @@ internal sealed partial class DirectorCreationWorkspace
     internal void Enter()
     { Active = true; host.SetCreationMode(true); Runtime.Enabled = Project is not null; }
     internal void Exit()
-    { PersistEditorPreferences(); Runtime.Suspend(); Active = false; host.CreationPreviewVisible = false; host.SetCreationMode(false); }
+    { PersistEditorPreferences(); Runtime.ClosePlayerInventory(); Runtime.Suspend(); Active = false; host.CreationPreviewVisible = false; host.SetCreationMode(false); }
     internal void RequestLeave()
     {
         if (pendingTransition is not null) return;
@@ -22,12 +22,14 @@ internal sealed partial class DirectorCreationWorkspace
     }
     internal void RequestEscape()
     {
+        if (Runtime.NativeAppearanceEditorOpen) { Runtime.ClosePlayerInventory(); return; }
         if(gizmoUsing || draggedKey!=Guid.Empty || draggedClip!=Guid.Empty || scenePoseDrag!=Guid.Empty || draggingPose is not null)
         { Session.CancelGesture();gizmoUsing=false;handleAxis=-1;draggedKey=draggedClip=scenePoseDrag=Guid.Empty;draggingPose=null;return; }
         if (Runtime.PerformanceActive) { Runtime.StopPerformance(); return; }
         if (pendingTransition is not null) { ResolvePendingTransition(null); return; }
         if (ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel)) return;
         if (auxiliary.Length > 0) { auxiliary = ""; return; }
+        if(PosePicking) { LeaveBodySelection();return; }
         RequestLeave();
     }
     private void Continue(Action action)
@@ -115,8 +117,8 @@ internal sealed partial class DirectorCreationWorkspace
                 new("edit", L("creation-edit"), () => Menu("编辑")),
                 new("add", L("creation-add-menu"), () => Menu("创建")),
                 new("view", L("creation-view-menu"), () => Menu("窗口")),
-                new("save", L("creation-save-project"), () => Continue(Session.Save), Project is not null),
-                new("export", L("creation-export-menu"), () => auxiliary = "output", Project is not null)
+                new("save", L("creation-save-project"), () => Continue(Session.Save), Project is not null && Runtime.ProjectWorldMatches),
+                new("export", L("creation-export-menu"), () => auxiliary = "output", Project is not null && Runtime.ProjectWorldMatches)
             };
             ImGui.BeginDisabled(Runtime.PerformanceActive);
             DirectorWorkspaceMenus.Toolbar(commands).Draw();
@@ -132,6 +134,7 @@ internal sealed partial class DirectorCreationWorkspace
     private void DrawAuxiliary()
     {
         if (auxiliary.Length == 0) return;
+        if (!Runtime.ProjectWorldMatches && auxiliary != "projects") auxiliary = "projects";
         bool open = true;
         string title = auxiliary switch { "actors" => L("creation-native-actors"), "resources" => L("creation-resources"), "presets" => L("creation-presets"), "projects" => L("creation-projects"), "output" => L("creation-export-menu"), _ => L("creation-project-settings") };
         ImGui.SetNextWindowSize(new(540, 480), ImGuiCond.FirstUseEver);
@@ -160,6 +163,7 @@ internal sealed partial class DirectorCreationWorkspace
         if(sceneContext is {} saved)
         {
             Session.SetEditTask(saved.Task);
+            wholeObjectSelection=saved.WholeObject;
             if(saved.PoseActor!=Guid.Empty)Session.BeginScenePose(saved.PoseActor);
             Session.SelectedObject=saved.Object;Session.SelectedPart=saved.Part;Session.Seek(saved.Time);
             selectedObjects.Clear();selectedObjects.UnionWith(saved.Objects);
@@ -167,6 +171,7 @@ internal sealed partial class DirectorCreationWorkspace
             keyId=saved.Key;trackId=saved.Track;clipId=saved.Clip;sceneContext=null;
         }
         RestoreTimelineView();
+        RestoreTool(PartScope);
         if(savedKeys is not null)selectedTimelineKeys.UnionWith(savedKeys);
     });
     private void EditClipAnimation(Guid id) => Continue(() =>
@@ -178,13 +183,13 @@ internal sealed partial class DirectorCreationWorkspace
         double sourceTime = clip.SourceStart + Math.Clamp(Session.Time - clip.Start, 0, clip.Duration) * clip.Speed;
         if (clip.Loop || animation.Loop) sourceTime %= Math.Max(1e-6, animation.Duration);
         Session.EnterAnimation(animation.Id, clip.ObjectId); Session.Seek(sourceTime);
-        modelContext = ""; clipId = keyId = trackId = Guid.Empty; timelineEditor = false;
+        wholeObjectSelection=false;modelContext = ""; clipId = keyId = trackId = Guid.Empty; timelineEditor = false;
         timeline = true; RestoreTimelineView();
     });
     private void EditAnimation(CreationAnimation animation) => Continue(() =>
     {
         if (SelectedObject is not { } obj || obj.ModelId != animation.ModelId) throw new InvalidOperationException(L("creation-data-the-animation-and-actor-use-different-models"));
-        RememberSceneContext(); editingSourceClip=Guid.Empty;modelContext = ""; Session.EnterAnimation(animation.Id, obj.Id); bonesPanel = timeline = true; focusRigPanel = "bones"; clipId = keyId = trackId = Guid.Empty; auxiliary = "";RestoreTimelineView();
+        RememberSceneContext(); wholeObjectSelection=false;editingSourceClip=Guid.Empty;modelContext = ""; Session.EnterAnimation(animation.Id, obj.Id); timeline = true; clipId = keyId = trackId = Guid.Empty; auxiliary = "";RestoreTimelineView();
     });
     private void AddAnimationClip(CreationAnimation animation)
     {

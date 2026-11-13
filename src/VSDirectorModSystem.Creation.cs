@@ -18,7 +18,7 @@ public sealed partial class VSDirectorModSystem
     private double beforeCreationTime;
     private EnumCameraMode? performanceCameraMode;
     private bool performanceControlActive;
-    internal void BeginCreationPerformanceControl()
+    internal void BeginCreationPerformanceControl(float yaw)
     {
         performanceControlActive = true;
         controller?.Deactivate(); controller?.SetExternalInputLock(false); SetWorkspaceInputOverride(false);
@@ -26,6 +26,22 @@ public sealed partial class VSDirectorModSystem
         {
             performanceCameraMode = ((ClientPlayer)game.Player).OverrideCameraMode;
             ((ClientPlayer)game.Player).OverrideCameraMode = EnumCameraMode.FirstPerson;
+            // Deactivation restores the saved editor-entry camera. Initialize the
+            // recording view afterward so that old pitch/roll cannot leak into it.
+            var player = (ClientPlayer)game.Player;
+            player.CameraYaw = yaw;
+            // Native player pitch is PI-centred, unlike the editor's camera poses.
+            player.CameraPitch = MathF.PI;
+            player.CameraRoll = 0;
+            // EntityPos.SetAngles is (roll, yaw, pitch). Keep the body upright;
+            // the first-person camera's level pitch is managed separately above.
+            player.Entity.Pos.SetAngles(0, yaw, MathF.PI);
+            player.Entity.BodyYaw = yaw;
+            player.Entity.Pos.HeadYaw = player.Entity.Pos.HeadPitch = 0;
+            player.Entity.BodyYawServer = yaw;
+            foreach (var manager in new[] { player.Entity.AnimManager, player.Entity.TpAnimManager })
+                if (manager?.HeadController is { } head)
+                { head.YawOffset = head.PitchOffset = 0; head.OnFrame(0); }
             game.AllowCharacterControl = game.AllowCameraControl = true;
         }
     }
@@ -42,6 +58,7 @@ public sealed partial class VSDirectorModSystem
         beforeCreationFree = controller?.IsFreeCamera == true;
         beforeCreationActive = controller?.IsActive == true;
         beforeCreationReplay = ActiveReplayId; beforeCreationTime = ReplayTimeSeconds;
+        creation?.InvalidateBackgroundSelection();
         PauseReplayForTimelineScrub();
         if (!TryEnableCreationFreeCamera(out var error))
         {
@@ -67,6 +84,18 @@ public sealed partial class VSDirectorModSystem
     internal bool TryCaptureCreationView(out CameraPreset pose)
     {
         pose = new(); return controller?.TryCaptureCurrentView(L("creation-creation-view"), out pose) == true;
+    }
+    internal void FocusCreationView(CreationVector target, double radius, int dimension)
+    {
+        if(!TryEnableCreationFreeCamera(out var message))throw new InvalidOperationException(message);
+        if(!TryCaptureCreationView(out var pose)||pose.Dimension!=dimension)return;
+        var forward=Vintagestory.API.Common.Entities.EntityPos.GetViewVector(pose.Pitch*Vintagestory.API.MathTools.GameMath.DEG2RAD,pose.Yaw*Vintagestory.API.MathTools.GameMath.DEG2RAD);
+        double aspect=Math.Max(.1,(capi?.Render.FrameWidth??1)/(double)Math.Max(1,capi?.Render.FrameHeight??1));
+        double halfAngle=Math.Atan(Math.Tan(Math.Clamp(pose.Fov,20,120)*Math.PI/360)*Math.Min(1,aspect));
+        double distance=Math.Max(.75,radius/Math.Sin(halfAngle)*1.15);
+        pose.X=target.X-forward.X*distance;pose.Y=target.Y-forward.Y*distance;pose.Z=target.Z-forward.Z*distance;
+        if(controller?.TryActivate(pose,out message)!=true)throw new InvalidOperationException(message);
+        TryEnableCreationFreeCamera(out _);
     }
     internal DirectorOffscreenMultiViewRenderer CreationOffscreen()
     {

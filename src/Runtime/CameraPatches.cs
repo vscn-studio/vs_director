@@ -45,7 +45,8 @@ internal static class ReplayBeforeCameraPatch
     private static void Prefix(float dt)
     {
         DirectorReplayRuntime.Manager?.PrepareFrame(dt);
-        DirectorReplayRuntime.UpdateCameraForRenderFrame?.Invoke();
+        if (DirectorReplayRuntime.CreationManager is null)
+            DirectorReplayRuntime.UpdateCameraForRenderFrame?.Invoke();
     }
 }
 

@@ -1,5 +1,6 @@
 using static VSDirector.Gui.DirectorCreationText;
 using Vintagestory.API.Common;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using VSDirector.Data;
@@ -10,6 +11,44 @@ namespace VSDirector.Runtime;
 
 internal sealed partial class DirectorCreationRuntime
 {
+    private GuiDialog? nativeAppearanceDialog;
+    internal bool NativeAppearanceEditorOpen => nativeAppearanceDialog?.IsOpened() == true;
+
+    internal void ClosePlayerInventory()
+    {
+        nativeAppearanceDialog?.TryClose();
+        nativeAppearanceDialog?.Dispose();
+        nativeAppearanceDialog = null;
+    }
+
+    internal void SetActorHand(CreationSceneObject actor, int hand, ItemStack? stack)
+    {
+        if (Session.Project is not { } project || hand is not (1 or 2)
+            || project.Models.Find(m => m.Id == actor.ModelId) is not { } model)
+            throw new InvalidOperationException(L("creation-native-unavailable"));
+        string anchorName = hand == 1 ? "RightHand" : "LeftHand";
+        var anchor = model.Parts.FirstOrDefault(p => p.Name.Equals(anchorName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(L("creation-native-hand-anchor-missing"));
+        byte[] data = stack?.ToBytes() ?? [];
+        string code = stack?.Collectible.Code?.ToString() ?? "";
+        Session.Edit(L("creation-apply-player-hand"), p =>
+        {
+            var attachment = p.Objects.FirstOrDefault(o => o.ParentId == actor.Id && o.ActorHand == hand);
+            if (attachment is null)
+            {
+                attachment = new CreationSceneObject
+                {
+                    Name = anchorName, Kind = CreationObjectKind.Item, ParentId = actor.Id,
+                    ParentPartId = anchor.Id, ActorHand = hand
+                };
+                p.Objects.Add(attachment);
+            }
+            attachment.ResourceCode = code;
+            attachment.ItemStackData = data;
+            attachment.UseRecordedHandItem = false;
+        });
+    }
+
     internal IEnumerable<(string Code, string Name)> ActorResources(string search)
         => api.World.EntityTypes.Where(p => p.Client?.Shape?.Base is not null)
             .Select(p => (Code: p.Code.ToString(), Name: ActorName(p.Code)))
@@ -27,10 +66,22 @@ internal sealed partial class DirectorCreationRuntime
         .OrderBy(e => e.Pos.SquareDistanceTo(api.World.Player.Entity.Pos))
         .Select(e => (e.EntityId, e.GetName()));
 
+    internal void ApplyPlayerAppearance(CreationSceneObject actor)
+    {
+        var player = api.World.Player.Entity;
+        string shape = player.Properties.Client.Shape?.Base?.ToString() ?? "";
+        if (shape.Length == 0 || actor.ActorSource?.ShapeCode != shape)
+            throw new InvalidOperationException(L("creation-player-appearance-incompatible"));
+        CaptureNativeActor("", player.EntityId, actor);
+    }
+
     internal CreationSceneObject AddNativeActor(string code, long sourceEntity = 0)
+        => CaptureNativeActor(code, sourceEntity);
+
+    private CreationSceneObject CaptureNativeActor(string code, long sourceEntity, CreationSceneObject? update = null, Entity? appearance = null)
     {
         if (Session.Project is not { } project) throw new InvalidOperationException(L("creation-open-a-project-first"));
-        var entity = sourceEntity == 0 ? null : api.World.GetEntityById(sourceEntity);
+        var entity = appearance ?? (sourceEntity == 0 ? null : api.World.GetEntityById(sourceEntity));
         var properties = entity?.Properties ?? api.World.GetEntityType(new AssetLocation(code));
         if (properties?.Client?.Shape?.Base is not { } shapeCode) throw new InvalidDataException(L("creation-native-unavailable"));
         var location = shapeCode.Clone(); location.Path = "shapes/" + location.Path + ".json";
@@ -44,7 +95,7 @@ internal sealed partial class DirectorCreationRuntime
             model.Extra["textureSizes"] = sizes;
         }
         var textureAssets = new List<CreationAsset>();
-        if ((entity is EntityPlayer ep ? ep.TpAnimManager?.Animator : entity?.AnimManager?.Animator) is AnimatorBase animator)
+        if ((entity is EntityPlayer ep ? ep.TpAnimManager?.Animator ?? ep.AnimManager?.Animator : entity?.AnimManager?.Animator) is AnimatorBase animator)
         {
             var oldNames = model.Parts.ToDictionary(p => p.Id, p => p.Name);
             model.Parts.Clear();
@@ -108,7 +159,7 @@ internal sealed partial class DirectorCreationRuntime
         foreach (var root in model.Parts.Where(p => p.ParentId == Guid.Empty)) root.ParentId = basis.Id;
         model.Parts.Add(basis);
         var obj = new CreationSceneObject { Name = model.Name, Kind = CreationObjectKind.Model, ModelId = model.Id,
-            ActorSource = new() { EntityCode = properties.Code.ToString(), ShapeCode = shapeCode.ToString(), SourceWorld = api.World.SavegameIdentifier, SourceEntityId = sourceEntity },
+            ActorSource = new() { EntityCode = properties.Code.ToString(), ShapeCode = shapeCode.ToString(), SourceWorld = api.World.SavegameIdentifier, SourceEntityId = sourceEntity, AppearanceData = CaptureAppearanceData(entity) },
             Transform = new() { Position = CursorPosition(), Scale = new(properties.Client.Size, properties.Client.Size, properties.Client.Size) } };
         var attachments = new List<CreationSceneObject>();
         foreach (var (hand, anchorName) in new[] { (1, "RightHand"), (2, "LeftHand") })
@@ -117,7 +168,27 @@ internal sealed partial class DirectorCreationRuntime
             if (anchor is null) continue;
             var stack = entity is EntityAgent agent ? (hand == 1 ? agent.RightHandItemSlot : agent.LeftHandItemSlot)?.Itemstack : null;
             attachments.Add(new CreationSceneObject { Name = anchorName, Kind = CreationObjectKind.Item, ParentId = obj.Id, ParentPartId = anchor.Id,
-                ActorHand = hand, ResourceCode = stack?.Collectible?.Code?.ToString() ?? "" });
+                ActorHand = hand, ItemStackData = stack?.ToBytes() ?? [], ResourceCode = stack?.Collectible?.Code?.ToString() ?? "" });
+        }
+        if (update is not null)
+        {
+            if (update.ActorSource is { } originalSource) obj.ActorSource.SourceWorld = originalSource.SourceWorld;
+            Guid editing = Session.AnimationObject == update.Id ? Session.EditingAnimation?.Id ?? Guid.Empty : Guid.Empty;
+            double time = Session.EditTime;
+            Dictionary<Guid, Guid> actions = new();
+            Session.Edit(L("creation-apply-player-appearance"), p =>
+            {
+                actions = DirectorCreationAppearance.Apply(p, update, model);
+                update.ActorSource = obj.ActorSource;
+                p.Assets.AddRange(textureAssets);
+            });
+            if (actions.TryGetValue(editing, out var action))
+            {
+                Session.EnterAnimation(action, update.Id);
+                Session.Seek(time);
+            }
+            Renderer.ReloadTextures();
+            return update;
         }
         Session.Edit(L("creation-native-add"), p => { p.Models.Add(model); p.Animations.AddRange(imported.Animations); p.Assets.AddRange(textureAssets); p.Objects.Add(obj); p.Objects.AddRange(attachments); });
         Renderer.ReloadTextures(); return obj;

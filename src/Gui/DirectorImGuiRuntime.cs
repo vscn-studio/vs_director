@@ -75,7 +75,8 @@ internal static class DirectorImGuiRuntime
 
     private static bool PerformanceInput(ref bool __result)
     {
-        if (VSDirector.Runtime.DirectorCreationRuntime.Current?.ControllingActor != true) return true;
+        var creation = VSDirector.Runtime.DirectorCreationRuntime.Current;
+        if (creation?.ControllingActor != true && creation?.NativeAppearanceEditorOpen != true) return true;
         __result = false; return false;
     }
     private static void PerformanceMouseGrab(ref bool __result)

@@ -29,7 +29,7 @@ internal sealed partial class DirectorCreationWorkspace
             display = display[..length] + "…";
         }
         ImGui.PushID(label);
-        bool open = ImGui.CollapsingHeader(display + "###header");
+        bool open = ImGui.CollapsingHeader(display + "###header", ImGuiTreeNodeFlags.DefaultOpen);
         if (display != label && ImGui.IsItemHovered()) ImGui.SetTooltip(label);
         ImGui.PopID();
         return open;
@@ -155,6 +155,8 @@ internal sealed partial class DirectorCreationWorkspace
     {
         if (Project is null) return;
         if (modelContext.Length > 0) { Hint(L("creation-shared-model")); DrawModelProperties(); return; }
+        if(IsIkControl(Session.SelectedObject)) { DrawIkPanel();return; }
+        if(PosePicking && RigActor is not null) { DrawBonesPanel();return; }
         DrawObjectProperties();
     }
     private IReadOnlyList<string>? exportIssues;
@@ -175,6 +177,8 @@ internal sealed partial class DirectorCreationWorkspace
             else Hint(L("creation-background-clip-timing") + project.Clips.Find(c => c.Id == project.BackgroundClipId)?.Name);
         }
         if (Button(L("creation-use-current-world"))) Run(Runtime.UseCurrentWorld);
+        if (project.Performances.Values.Any(t => t.WorldSource.Length > 0)
+            && Button(L("creation-use-recorded-world"))) Run(Runtime.UseRecordedWorld);
     }
     private void DrawProjectSettings(bool output)
     {
@@ -197,10 +201,10 @@ internal sealed partial class DirectorCreationWorkspace
                 Number(L("creation-quality-crf"), project.Output.Quality, v => project.Output.Quality = (int)v, 0, 51, 1);
                 TextField(L("creation-encoder"), project.Output.Encoder, v => project.Output.Encoder = v);
                 TextField(L("creation-output-directory"), project.Output.Directory, v => project.Output.Directory = v);
-                ImGui.BeginDisabled(project.BackgroundReplayId == Guid.Empty);
+                ImGui.BeginDisabled(!Runtime.HasSceneAudioSource);
                 Toggle(L("creation-mix-background-replay-audio"), project.Output.SceneAudio, v => project.Output.SceneAudio = v);
                 ImGui.EndDisabled();
-                if (project.BackgroundReplayId == Guid.Empty) Hint(L("creation-world-audio-note"));
+                if (!Runtime.HasSceneAudioSource) Hint(L("creation-world-audio-note"));
                 ImGui.SeparatorText(L("creation-export-dependencies"));
                 Hint(L("creation-export-dependencies-note"));
                 if (Button(L("creation-check-resources"))) Run(() =>
@@ -213,8 +217,10 @@ internal sealed partial class DirectorCreationWorkspace
                 else if (exportIssues is not null) foreach (string issue in exportIssues) ImGui.TextWrapped(issue);
                 Checkbox(L("creation-include-textures-in-model-export"), ref exportTextures);
                 if (Button(L("creation-save-project"))) Continue(Session.Save);
-                if (Button(L("creation-screenshot-145"))) FileDialog(L("creation-save-screenshot"), Runtime.Screenshot, "frame.png");
-                if (Button(L("creation-export-video-146"))) FileDialog(L("creation-export-video"), ExportProject, "film.mp4");
+                SameLineIfFits(L("creation-screenshot-145"));
+            if (Button(L("creation-screenshot-145"))) FileDialog(L("creation-save-screenshot"), Runtime.Screenshot, "frame.png");
+                SameLineIfFits(L("creation-export-video-146"));
+            if (Button(L("creation-export-video-146"))) FileDialog(L("creation-export-video"), ExportProject, "film.mp4");
     }
     private CreationTransform EvaluatedTransform(CreationSceneObject obj)
     {
@@ -287,7 +293,7 @@ internal sealed partial class DirectorCreationWorkspace
         DrawEditingContext();
         TextField(L("creation-name"), obj.Name, v => obj.Name = v);
         Hint(L("creation-object-transform"));
-        ImGui.BeginDisabled(Session.PoseEditing);
+        ImGui.BeginDisabled(PartScope);
         DrawRigTransform(obj, Guid.Empty);
         ImGui.EndDisabled();
         var evaluated = Session.Frame?.Objects.GetValueOrDefault(obj.Id);
@@ -295,6 +301,7 @@ internal sealed partial class DirectorCreationWorkspace
         Toggle(L("creation-visible"), visible, v => Session.SetProperty(obj.Id, Guid.Empty, CreationChannel.Visible, new(v ? 1 : 0, 0, 0), () => obj.Visible = v));
         if (obj.Kind == CreationObjectKind.Model)
         {
+            DrawActorActionPicker(obj);
             DrawActorRig(obj);
             if (Button(L("creation-edit-selected-model"))) Continue(() => { Session.LeaveAnimation(); Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; modelId = obj.ModelId; modelContext = "model"; });
             if (Button(L("creation-apply-preset"))) Continue(() => { Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; auxiliary = "presets"; });
@@ -335,7 +342,9 @@ internal sealed partial class DirectorCreationWorkspace
         {
             ImGui.SeparatorText(L("creation-camera"));
             if (Button(project.CameraId == obj.Id ? L("creation-current-shooting-camera") : L("creation-use-as-shooting-camera"))) Session.Edit(L("creation-select-shooting-camera"), p => p.CameraId = obj.Id);
+            SameLineIfFits(L("creation-set-from-observer-view"));
             if (Button(L("creation-set-from-observer-view"))) Runtime.CaptureCamera(obj);
+            SameLineIfFits(L("creation-open-camera-preview"));
             if (Button(L("creation-open-camera-preview"))) Runtime.Preview = true;
             Choice(L("creation-camera-mode"), obj.CameraMode, v => obj.CameraMode = v, [L("creation-keyframes-fixed"), L("creation-linear-motion"), L("creation-path"), L("creation-follow"), L("creation-look-at"), L("creation-orbit")]);
             double fov = Session.AnimationEditing ? evaluated?.Fov ?? obj.Fov : obj.Fov;
@@ -367,7 +376,9 @@ internal sealed partial class DirectorCreationWorkspace
         }
         if (obj.Kind == CreationObjectKind.Item)
         {
-            TextField(L("creation-item-block-code"), obj.ResourceCode, v => obj.ResourceCode = v.Trim());
+            if (obj.ActorHand is 1 or 2)
+                Toggle(L("creation-use-recorded-hand-item"), obj.UseRecordedHandItem, v => obj.UseRecordedHandItem = v);
+            TextField(L("creation-item-block-code"), obj.ResourceCode, v => { obj.ResourceCode = v.Trim(); obj.ItemStackData = []; obj.UseRecordedHandItem = false; });
             if (obj.ResourceCode.Length > 0)
             {
                 try { Runtime.ValidateItem(obj.ResourceCode); ImGui.TextColored(new System.Numerics.Vector4(.35f, .85f, .45f, 1), L("creation-game-resource-found")); }

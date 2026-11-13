@@ -10,6 +10,8 @@ internal sealed partial class DirectorCreationWorkspace
     private Guid poseEditorActor, poseEditorKey, poseEditorPart;
     private double? actionPoseEditorTime;
     private readonly HashSet<Guid> expandedPoseObjects = new();
+    private readonly HashSet<Guid> expandedPoseParts = new();
+    private CreationChannel? poseEditorChannel;
     private double CurveValue(CreationVector v)=>curveAxis==0?v.X:curveAxis==1?v.Y:v.Z;
     private (double Min,double Max) CurveRange(CreationTrack track)
     {
@@ -20,21 +22,28 @@ internal sealed partial class DirectorCreationWorkspace
     private float CurveY(CreationTrack track,CreationVector value,float top,float height)
     {var range=CurveRange(track);return top+height-5-(float)((CurveValue(value)-range.Min)/(range.Max-range.Min))*(height-10);}
     private void OpenPoseEditor(CreationSceneObject actor,CreationScenePoseKey key,Guid part=default)
-    { poseEditorActor=actor.Id;poseEditorKey=key.Id;poseEditorPart=part;actionPoseEditorTime=null;timelineEditor=true;keyId=key.Id;clipId=trackId=Guid.Empty;selectionArea=SelectionArea.Timeline; }
+    { poseEditorActor=actor.Id;poseEditorKey=key.Id;poseEditorPart=part;poseEditorChannel=null;actionPoseEditorTime=null;timelineEditor=true;keyId=key.Id;clipId=trackId=Guid.Empty;selectionArea=SelectionArea.Timeline; }
     private void DrawScenePoseDetails(CreationSceneObject actor,float x0,float width,float labelWidth,float height,Func<double,float> x,Func<float,double> time)
     {
         if(revealTrackObject==actor.Id && revealTrackPart!=Guid.Empty)expandedPoseObjects.Add(actor.Id);
         if(!expandedPoseObjects.Contains(actor.Id)||Project!.Models.Find(m=>m.Id==actor.ModelId) is not {} model)return;
-        foreach(var part in model.Parts.Where(p=>exactPoseParts||DirectorCreationPoseGeometry.PoseTarget(Project,model,p.Id)==p.Id))
+        foreach(var part in model.Parts.Where(p=>exactPoseParts||PoseTarget(model,p.Id)==p.Id))
         {
+            if(selectedTracksOnly && PartScope && !selectedBones.Contains(part.Id) && Session.SelectedPart!=part.Id)continue;
             var keys=actor.PoseKeys.Where(k=>!keyedTracksOnly||k.Bones.ContainsKey(part.Id)||k.Hidden.Contains(part.Id)).ToArray();
             if(keyedTracksOnly&&keys.Length==0)continue;
+            DrawPartRow(null);
+            if(expandedPoseParts.Contains(part.Id))foreach(var channel in new[]{CreationChannel.Position,CreationChannel.Rotation,CreationChannel.Scale,CreationChannel.Pivot,CreationChannel.Visible})DrawPartRow(channel);
+            void DrawPartRow(CreationChannel? channel)
+            {
             var row=ImGui.GetCursorScreenPos();var draw=ImGui.GetWindowDrawList();
-            ImGui.InvisibleButton("pose-part-"+part.Id,new(Math.Max(1,ImGui.GetContentRegionAvail().X),height),ImGuiButtonFlags.MouseButtonLeft|ImGuiButtonFlags.MouseButtonRight);
+            ImGui.InvisibleButton("pose-part-"+part.Id+channel,new(Math.Max(1,ImGui.GetContentRegionAvail().X),height),ImGuiButtonFlags.MouseButtonLeft|ImGuiButtonFlags.MouseButtonRight);
             bool hovered=ImGui.IsItemHovered();
             RevealRow(actor.Id,part.Id,row.Y,row.Y+height);
             TimelineRowBackground(row,labelWidth+width,height,Session.SelectedObject==actor.Id&&Session.SelectedPart==part.Id?DirectorImGuiTheme.Selected:DirectorImGuiTheme.Panel);
-            draw.PushClipRect(row,new(x0,row.Y+height),true);draw.AddText(row+new Vector2(24*DirectorImGuiTheme.Scale,(height-ImGui.GetFontSize())/2),DirectorImGuiTheme.Text,BoneName(model,part));draw.PopClipRect();
+            draw.PushClipRect(row,new(x0,row.Y+height),true);
+            if(channel is null)draw.AddText(row+new Vector2(24*DirectorImGuiTheme.Scale,(height-ImGui.GetFontSize())/2),DirectorImGuiTheme.Text,DirectorImGuiIcons.Get(expandedPoseParts.Contains(part.Id)?"chevron-down":"chevron-right"));
+            draw.AddText(row+new Vector2((channel is null?46:58)*DirectorImGuiTheme.Scale,(height-ImGui.GetFontSize())/2),DirectorImGuiTheme.Text,channel is {} c?ChannelName(c):BoneName(model,part));draw.PopClipRect();
             draw.PushClipRect(new(x0,row.Y),new(x0+width,row.Y+height),true);
             foreach(var key in keys)
             {
@@ -44,16 +53,19 @@ internal sealed partial class DirectorCreationWorkspace
             draw.PopClipRect();
             if(hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
             {
+                if(channel is null && ImGui.GetIO().MousePos.X<row.X+44*DirectorImGuiTheme.Scale)
+                {if(!expandedPoseParts.Add(part.Id))expandedPoseParts.Remove(part.Id);return;}
                 var nearest=keys.MinBy(k=>Math.Abs(x(k.Time)-ImGui.GetIO().MousePos.X));
                 if(nearest is not null && ImGui.GetIO().MousePos.X>=x0 && Math.Abs(x(nearest.Time)-ImGui.GetIO().MousePos.X)<12*DirectorImGuiTheme.Scale)
-                { keyId=nearest.Id;clipId=trackId=Guid.Empty;selectionArea=SelectionArea.Timeline;if(ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))OpenPoseEditor(actor,nearest,part.Id); }
+                { keyId=nearest.Id;clipId=trackId=Guid.Empty;selectionArea=SelectionArea.Timeline;if(ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)){OpenPoseEditor(actor,nearest,part.Id);poseEditorChannel=channel;} }
                 else SelectBone(actor.Id,part.Id);
             }
-            if(ImGui.BeginPopupContextItem("pose-part-menu-"+part.Id))
+            if(ImGui.BeginPopupContextItem("pose-part-menu-"+part.Id+channel))
             {
                 var nearest=keys.MinBy(k=>Math.Abs(x(k.Time)-ImGui.GetIO().MousePos.X));
-                if(nearest is not null)Item(L("creation-edit-keyframe"),()=>OpenPoseEditor(actor,nearest,part.Id));
+                if(nearest is not null)Item(L("creation-edit-keyframe"),()=>{OpenPoseEditor(actor,nearest,part.Id);poseEditorChannel=channel;});
                 ImGui.EndPopup();
+            }
             }
         }
     }
@@ -106,12 +118,13 @@ internal sealed partial class DirectorCreationWorkspace
             ImGui.EndCombo();
         }
         if(Combo(L("creation-bone"),model.Parts.Find(p=>p.Id==poseEditorPart)?.Name??L("creation-select-bone-first")))
-        {foreach(var part in model.Parts.Where(p=>exactPoseParts||DirectorCreationPoseGeometry.PoseTarget(Project,model,p.Id)==p.Id))if(ImGui.Selectable(BoneName(model,part)+"##"+part.Id))poseEditorPart=part.Id;ImGui.EndCombo();}
+        {foreach(var part in model.Parts.Where(p=>exactPoseParts||PoseTarget(model,p.Id)==p.Id))if(ImGui.Selectable(BoneName(model,part)+"##"+part.Id))poseEditorPart=part.Id;ImGui.EndCombo();}
         if(model.Parts.All(p=>p.Id!=poseEditorPart))return;
         var basis=actor.Pose.GetValueOrDefault(poseEditorPart)??new();
         var value=scene?key!.Bones.GetValueOrDefault(poseEditorPart)??basis:DirectorCreationEvaluator.Evaluate(Project,Session.Time,editingAction:SelectedAnimation,actionActor:actor.Id,actionTime:time).Objects[actor.Id].Pose.GetValueOrDefault(poseEditorPart)??basis;
         void Field(CreationChannel channel,CreationVector v,Action<CreationTransform,CreationVector> assign)
         {
+            if(scene && poseEditorChannel is {} filter && filter!=channel)return;
             VectorField(ChannelName(channel),v,next=>
             {
                 if(scene){var changed=value with{};assign(changed,next);key!.Bones[poseEditorPart]=changed;}
@@ -120,6 +133,7 @@ internal sealed partial class DirectorCreationWorkspace
         }
         Field(CreationChannel.Position,value.Position,(t,v)=>t.Position=v);Field(CreationChannel.Rotation,value.Rotation,(t,v)=>t.Rotation=v);
         Field(CreationChannel.Scale,value.Scale,(t,v)=>t.Scale=v);Field(CreationChannel.Pivot,value.Pivot,(t,v)=>t.Pivot=v);
+        if(scene && poseEditorChannel is {} selectedChannel && selectedChannel!=CreationChannel.Visible)return;
         bool visible=scene?!key!.Hidden.Contains(poseEditorPart):!DirectorCreationEvaluator.Evaluate(Project,Session.Time,editingAction:SelectedAnimation,actionActor:actor.Id,actionTime:time).Objects[actor.Id].HiddenParts.Contains(poseEditorPart);
         Toggle(L("creation-visible"),visible,v=>{if(scene){if(v)key!.Hidden.Remove(poseEditorPart);else key!.Hidden.Add(poseEditorPart);}else{var track=EditTracks.Find(t=>t.PartId==poseEditorPart&&t.Channel==CreationChannel.Visible);if(track is null){track=new(){PartId=poseEditorPart,Channel=CreationChannel.Visible};EditTracks.Add(track);}DirectorCreationEdits.SetKey(track,time,new(v?1:0,0,0));}});
     }

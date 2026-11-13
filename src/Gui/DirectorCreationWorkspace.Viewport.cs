@@ -15,14 +15,14 @@ internal sealed partial class DirectorCreationWorkspace
     private MODE transformMode = MODE.WORLD;
     private bool gizmoUsing, gizmoHover;
     private bool posePull;
-    private Guid hoveredPosePart, hoveredSceneObject;
+    private Guid hoveredPosePart, hoveredSceneObject, hoveredScenePart;
     // VSImGui 1.2.7's managed IsOver() imports ImGuizmo_IsOverNil, but its bundled
     // native library exports ImGuizmo_IsOver_Nil.
     [DllImport("cimguizmo", EntryPoint = "ImGuizmo_IsOver_Nil", CallingConvention = CallingConvention.Cdecl)]
     private static extern byte IsGizmoOver();
     private readonly List<(Guid Id, Vector2 Point)> objectPoints = new();
     private readonly List<(Guid Id, Vector2 Point)> bonePoints = new();
-    private bool showBones = true;
+    private bool showBones;
     internal bool CapturePointer(int x, int y) => Active && Project is not null && (hoveredPosePart != Guid.Empty || hoveredSceneObject != Guid.Empty || gizmoUsing || gizmoHover || objectPoints.Concat(bonePoints).Any(p => Vector2.Distance(p.Point, new(x, y)) < 12 * DirectorImGuiTheme.Scale));
     internal bool Manipulating => Active && gizmoUsing;
     private (Vector2 Position, Vector2 Size) GameImageRect()
@@ -38,7 +38,7 @@ internal sealed partial class DirectorCreationWorkspace
     {
         if(gizmoUsing && ImGui.IsKeyPressed(ImGuiKey.Escape,false)) { Session.CancelGesture();gizmoUsing=false;handleAxis=-1;return; }
         if (gizmoUsing && !ImGui.IsMouseDown(ImGuiMouseButton.Left)) { Session.EndGesture(L("creation-gizmo-transform")); gizmoUsing=false; handleAxis=-1; }
-        gizmoHover = false; hoveredPosePart = hoveredSceneObject = Guid.Empty; objectPoints.Clear(); bonePoints.Clear();
+        gizmoHover = false; hoveredPosePart = hoveredSceneObject = hoveredScenePart = Guid.Empty; objectPoints.Clear(); bonePoints.Clear();
         if (Project is not { } project || Session.Frame is not { } frame || !Runtime.Enabled || host.ViewportSize.X < 1) return;
         var (min, size) = GameImageRect();
         var draw = ImGui.GetWindowDrawList(); draw.PushClipRect(min, min + size, true);
@@ -70,12 +70,13 @@ internal sealed partial class DirectorCreationWorkspace
                     var b = Vector4.Transform(new Vector4(mouse.X * 2 - 1, 1 - mouse.Y * 2, .9f, 1), inverseVp);
                     var near = new Vector3(a.X,a.Y,a.Z) / a.W; var far = new Vector3(b.X,b.Y,b.Z) / b.W;
                     hoveredPosePart = DirectorCreationPoseGeometry.Pick(pickModel,pickState,near,Vector3.Normalize(far-near));
-                    if (!exactPoseParts) hoveredPosePart = DirectorCreationPoseGeometry.PoseTarget(project,pickModel,hoveredPosePart);
+                    if (!exactPoseParts) hoveredPosePart = PoseTarget(pickModel,hoveredPosePart);
                 }
                 Guid selectedPosePart = Session.SelectedObject == rigActor.Id ? Session.SelectedPart : Guid.Empty;
                 if (!exactPoseParts)
                 {
                     Runtime.Renderer.AdditionalSelectedParts=selectedBones;
+                    Runtime.Renderer.SemanticTargets=PoseTargets(pickModel);
                     int texture = Runtime.Renderer.PoseSelectionTexture(pickModel, pickState, selectedPosePart,
                         gizmoUsing ? Guid.Empty : hoveredPosePart, view, projection, size, DirectorImGuiTheme.Scale);
                     if (texture > 0) draw.AddImage((nint)texture, min, min + size, new(0, 1), new(1, 0));
@@ -104,10 +105,11 @@ internal sealed partial class DirectorCreationWorkspace
                 if (!gizmoUsing && pickState.Visible && pickModel.Parts.Find(p => p.Id == hoveredPosePart) is { } hoveredPart)
                 {
                     float scale = DirectorImGuiTheme.Scale;
-                    Vector2 padding = new(5 * scale, 3 * scale), textSize = ImGui.CalcTextSize(hoveredPart.Name);
+                    string label=BoneName(pickModel,hoveredPart);
+                    Vector2 padding = new(5 * scale, 3 * scale), textSize = ImGui.CalcTextSize(label);
                     Vector2 position = Vector2.Max(min + padding, Vector2.Min(ImGui.GetIO().MousePos + new Vector2(14, 18) * scale, min + size - textSize - padding * 2));
                     draw.AddRectFilled(position - padding, position + textSize + padding, 0xe6222222, 3 * scale);
-                    draw.AddText(position, hoveredPosePart == selectedPosePart ? 0xff70d1ff : 0xffeed080, hoveredPart.Name);
+                    draw.AddText(position, hoveredPosePart == selectedPosePart ? 0xff70d1ff : 0xffeed080, label);
                 }
             }
             if (!PosePicking && modelContext.Length == 0 && Matrix4x4.Invert(vp,out var sceneInverse) && ImGui.IsMouseHoveringRect(min,min+size))
@@ -120,12 +122,13 @@ internal sealed partial class DirectorCreationWorkspace
                 foreach(var state in frame.Objects.Values.Where(s=>s.Visible))
                 {
                     if(project.Models.Find(m=>m.Id==state.Source.ModelId) is not { } model) continue;
-                    if(DirectorCreationPoseGeometry.Pick(model,state,near,Vector3.Normalize(far-near),out float distance)!=Guid.Empty && distance<best)
-                    { best=distance; hoveredSceneObject=state.Source.Id; }
+                    var hit=DirectorCreationPoseGeometry.Pick(model,state,near,Vector3.Normalize(far-near),out float distance);
+                    if(hit!=Guid.Empty && distance<best)
+                    { best=distance; hoveredSceneObject=state.Source.Id;hoveredScenePart=exactPoseParts?hit:PoseTarget(model,hit); }
                 }
             }
             var activeChain = rigActor is null ? null : ActiveIkChain(rigActor);
-            bool ShowControl(Guid id) => showBones && rigActor is not null && (showAllBones
+            bool ShowControl(Guid id) => id==Session.SelectedObject || showBones && rigActor is not null && (showAllBones
                 ? rigActor.IkChains.Any(c => c.Enabled && (c.Target == id || c.Pole == id))
                 : activeChain?.Enabled == true && (activeChain.Target == id || activeChain.Pole == id));
             foreach (var state in frame.Objects.Values.Where(s => s.Visible || s.Source.Kind == CreationObjectKind.Camera))
@@ -161,7 +164,7 @@ internal sealed partial class DirectorCreationWorkspace
                 && frame.Objects.TryGetValue(rigActor.Id, out var rigState))
             {
                 bool InScope(CreationPart part) => showAllBones || (Session.SelectedPart != Guid.Empty && Session.SelectedObject == rigActor.Id
-                    ? posePull && Session.PoseEditing ? DirectorCreationPoseGeometry.Chain(rig,Session.SelectedPart).Any(p => p.Id == part.Id) : part.Id == Session.SelectedPart
+                    ? posePull && Session.PoseEditing ? (gizmoUsing && pullChain is not null ? pullChain : exactPoseParts ? DirectorCreationPoseGeometry.Chain(rig,Session.SelectedPart) : DirectorCreationRigSelection.Chain(project,rig,Session.SelectedPart,extendedPullChain?8:4)).Any(p => p.Id == part.Id) : part.Id == Session.SelectedPart
                     : activeChain is not null && (part.Id == activeChain.Upper || part.Id == activeChain.Lower));
                 foreach (var part in rig.Parts.Where(InScope))
                 {
@@ -183,7 +186,8 @@ internal sealed partial class DirectorCreationWorkspace
                 }
             }
             bool popup = ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel);
-            if (!popup && modelContext.Length == 0 && SelectedObject is { } obj && (!PosePicking || Session.SelectedPart != Guid.Empty || IsIkControl(obj.Id)) && (!IsIkControl(obj.Id) || ShowControl(obj.Id)) && frame.Objects.TryGetValue(obj.Id, out var selectedState))
+            bool enterPart=ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)&&hoveredSceneObject!=Guid.Empty&&hoveredScenePart!=Guid.Empty;
+            if (!popup && !selectionTool && !enterPart && modelContext.Length == 0 && SelectedObject is { } obj && (!PosePicking || Session.SelectedPart != Guid.Empty || IsIkControl(obj.Id)) && (!IsIkControl(obj.Id) || ShowControl(obj.Id)) && frame.Objects.TryGetValue(obj.Id, out var selectedState))
             {
                 ImGuizmo.SetImGuiContext(ImGui.GetCurrentContext());
                 ImGuizmo.BeginFrame(); ImGuizmo.SetDrawlist(draw); ImGuizmo.SetRect(min.X,min.Y,size.X,size.Y);
@@ -198,7 +202,11 @@ internal sealed partial class DirectorCreationWorkspace
                         : DirectorCreationMath.BoneHandle(selectedPart, baseline, selectedModel.AnimationVersion, boneMatrix * selectedState.World);
                 bool changed=ManipulateCreation(draw,world,view,projection,min,size,!bone&&obj.Kind==CreationObjectKind.Camera,out var manipulated);
                 bool usingNow=handleAxis>=0;gizmoHover=handleHover>=0;
-                if(usingNow&&!gizmoUsing) Session.BeginGesture();
+                if(usingNow&&!gizmoUsing)
+                {
+                    Session.BeginGesture();pullStart=null;pullChain=null;
+                    if(bone && posePull && CurrentModel is {} pullModel)BeginPull(pullModel,selectedState,Session.SelectedPart);
+                }
                 if(changed&&usingNow)
                 {
                     if(!bone) TransformObjectSelection(selectedState,Matrix4x4.CreateTranslation(-baseline.Pivot.Float())*manipulated);
@@ -208,7 +216,8 @@ internal sealed partial class DirectorCreationWorkspace
                         {
                             if (posePull && Session.PoseEditing)
                             {
-                                var result = DirectorCreationPoseGeometry.Pull(model,selectedState,part.Id,manipulated.Translation);
+                                if(pullStart is null)BeginPull(model,selectedState,part.Id);
+                                var result = DirectorCreationPoseGeometry.Pull(model,pullStart!,part.Id,manipulated.Translation,pullChain!);
                                 foreach (var pair in result) Session.SetPosePart(pair.Key,pair.Value);
                             }
                             else
@@ -236,7 +245,8 @@ internal sealed partial class DirectorCreationWorkspace
                 if (!controlHit && rigActor is not null && hoveredPosePart != Guid.Empty) SelectBone(rigActor.Id,hoveredPosePart);
                 else if (!controlHit && rigActor is not null && nearestBone.Id != Guid.Empty && Vector2.Distance(nearestBone.Point, ioMouse()) < 10 * DirectorImGuiTheme.Scale)
                     SelectBone(rigActor.Id, nearestBone.Id);
-                else if (hoveredSceneObject != Guid.Empty && project.Objects.Find(o=>o.Id==hoveredSceneObject) is { } sceneObject) SelectObjectClick(sceneObject);
+                else if (hoveredSceneObject != Guid.Empty && project.Objects.Find(o=>o.Id==hoveredSceneObject) is { } sceneObject)
+                { if(enterPart)EnterBodySelection(sceneObject,hoveredScenePart);else SelectObjectClick(sceneObject); }
                 else if (nearest.Id != Guid.Empty && Vector2.Distance(nearest.Point, ioMouse()) < 12 * DirectorImGuiTheme.Scale && project.Objects.Find(o => o.Id == nearest.Id) is { } picked) SelectObjectClick(picked);
                 Vector2 ioMouse() => ImGui.GetIO().MousePos;
             }
@@ -257,9 +267,13 @@ internal sealed partial class DirectorCreationWorkspace
         if (ImGui.BeginPopup("creation-viewport-context"))
         {
             if (ImGui.MenuItem(L("creation-show-bones"), "", showBones)) showBones = !showBones;
-            foreach (var tool in new[] { (L("creation-move"), OPERATION.TRANSLATE), (L("creation-rotation"), OPERATION.ROTATE), (L("creation-scale"), OPERATION.SCALE) })
-                if (ImGui.MenuItem(tool.Item1, "", operation == tool.Item2, !Session.PoseEditing||freePoseTransform||tool.Item2!=OPERATION.SCALE)) { operation = tool.Item2;posePull=Session.PoseEditing&&!freePoseTransform&&operation==OPERATION.TRANSLATE; }
-            if (ImGui.MenuItem(L("creation-local-axes"), "", transformMode == MODE.LOCAL)) transformMode = transformMode == MODE.WORLD ? MODE.LOCAL : MODE.WORLD;
+            foreach (var tool in new[] { ("creation-select-tool",CreationTool.Select),("creation-move",CreationTool.Move),("creation-rotation",CreationTool.Rotate),("creation-scale",CreationTool.Scale),("creation-pull",CreationTool.Pull) })
+                if (ImGui.MenuItem(L(tool.Item1), "", ActiveTool == tool.Item2, ToolAvailable(tool.Item2))) ChooseTool(tool.Item2);
+            bool screen=ActiveTool==CreationTool.Rotate&&(PartScope?poseRotationAxis:objectRotationAxis)==6;
+            if (ImGui.MenuItem(L("creation-local-axes"), "", transformMode == MODE.LOCAL,!screen))
+            {transformMode = transformMode == MODE.WORLD ? MODE.LOCAL : MODE.WORLD;if(PartScope)partSpace=transformMode;else objectSpace=transformMode;}
+            if(RigActor is {} contextActor && ImGui.MenuItem(L("creation-part-scope"),"",PosePicking))EnterBodySelection(contextActor);
+            if(PosePicking && ImGui.MenuItem(L("creation-object-scope")))LeaveBodySelection();
             Item(L("creation-preview"), () => Runtime.Preview = !Runtime.Preview);
             if (SelectedObject is { } obj)
             {

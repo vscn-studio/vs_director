@@ -111,7 +111,10 @@ internal sealed class DirectorPerformanceServer : IDisposable
         player.SetModData(RestoreKey, new ReturnPosition { X = original.X, Y = original.Y, Z = original.Z, Dimension = original.Dimension, Yaw = original.Yaw, Pitch = original.Pitch, Roll = original.Roll });
         sessions[player.PlayerUID] = session;
         if (body.Enabled) VSDirector.Runtime.DirectorPlayerBodyRuntime.Set(player.Entity, body);
-        var destination = session.Original.Copy(); destination.SetPos(request.X, request.Y, request.Z); destination.Yaw = request.Yaw; destination.Pitch = destination.Roll = 0;
+        var destination = session.Original.Copy(); destination.SetPos(request.X, request.Y, request.Z); destination.Yaw = request.Yaw;
+        // The native player uses PI for a level view; zero points outside its normal pitch range.
+        destination.Pitch = MathF.PI; destination.Roll = 0;
+        destination.HeadYaw = destination.HeadPitch = 0;
         player.Entity.TeleportTo(destination, () =>
         {
             // Cancellation can race the asynchronous chunk-loading teleport. Restore again
@@ -140,7 +143,7 @@ internal sealed class DirectorPerformanceServer : IDisposable
     {
         var pos = session.Player.Entity.Pos;
         channel.SendPacket(new DirectorPerformanceStatus { Session = session.Id, Phase = "sample", X = pos.X, Y = pos.Y, Z = pos.Z,
-            Yaw = session.Player.Entity.BodyYaw, Pitch = pos.Pitch, Seconds = (api.World.ElapsedMilliseconds - session.Start) / 1000d, Sequence = ++session.Sequence }, session.Player);
+            Yaw = pos.Yaw, Pitch = pos.Pitch, Seconds = (api.World.ElapsedMilliseconds - session.Start) / 1000d, Sequence = ++session.Sequence }, session.Player);
     }
     private void End(Session session, bool disconnect = false)
     {

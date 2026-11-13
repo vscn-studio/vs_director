@@ -49,7 +49,13 @@ public static class DirectorCreationDependencies
         }
         foreach (var clip in project.Clips.Where(c => c.Enabled && c.Start < project.Duration && c.AudioAssetId != Guid.Empty))
             Asset(clip.AudioAssetId, clip.Name);
-        foreach (var clip in PerformanceClips(project)) Asset(clip.PerformanceAssetId, clip.Name);
+        foreach (var clip in PerformanceClips(project))
+        {
+            Asset(clip.PerformanceAssetId, clip.Name);
+            if (project.UsePerformanceWorld && project.BackgroundReplayId == Guid.Empty
+                && project.Performances.TryGetValue(clip.PerformanceAssetId, out var take) && take.WorldSource.Length > 0)
+                result.Add(new(clip.Name, take.WorldSource));
+        }
         return result.Distinct().ToArray();
     }
 }

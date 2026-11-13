@@ -30,6 +30,8 @@
       <HintPath>$(VintageStoryPath)\VintagestoryAPI.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="VSEssentials" HintPath="$(VintageStoryPath)\Mods\VSEssentials.dll" Private="false" />
+    <Reference Include="VSSurvivalMod" HintPath="$(VintageStoryPath)\Mods\VSSurvivalMod.dll" Private="false" />
     <Reference Include="VintagestoryLib">
       <HintPath>$(VintageStoryPath)\VintagestoryLib.dll</HintPath>
       <Private>false</Private>

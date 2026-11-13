@@ -19,13 +19,48 @@ internal sealed partial class DirectorCreationWorkspace
         public Guid Project { get; set; }
         public List<TimelineClipboard>? Items { get; set; }
     }
-    private void HandleTimelineKeys()
+    private void HandleTimelineKeys() => ExecuteTimelineCommand(null);
+    private void ExecuteTimelineCommand(string? command)
     {
         var io=ImGui.GetIO();var project=Project!;
+        if(command=="select-all" || command is null && io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.A,false))
+        {
+            selectedTimelineKeys.Clear();
+            selectedTimelineKeys.UnionWith(TimelineKeys().Select(k=>k.Id));
+            keyId=selectedTimelineKeys.FirstOrDefault();clipId=Guid.Empty;
+            selectionArea=SelectionArea.Timeline;return;
+        }
+        if(command is null && !io.WantTextInput)
+        {
+            int direction=ImGui.IsKeyPressed(ImGuiKey.LeftArrow)?-1:ImGui.IsKeyPressed(ImGuiKey.RightArrow)?1:0;
+            if(direction!=0 && io.KeyAlt)
+            {
+                Continue(()=>
+                {
+                    BeginKeyMove();
+                    MoveSelectedKeys(direction*DirectorCreationTiming.FrameDuration*(io.KeyShift?10:1));
+                    FinishKeyMove();
+                });
+                return;
+            }
+            if(direction!=0)
+            {
+                double next=EditTime+direction*DirectorCreationTiming.FrameDuration*(io.KeyShift?10:1);
+                if(io.KeyCtrl)
+                {
+                    var times=TimelineKeys().Select(k=>k.Time);
+                    next=direction<0?times.Where(t=>t<EditTime-1e-6).DefaultIfEmpty(0).Max()
+                        :times.Where(t=>t>EditTime+1e-6).DefaultIfEmpty(Session.EditDuration).Min();
+                }
+                SeekEditTime(Math.Clamp(next,0,Session.EditDuration));return;
+            }
+            if(ImGui.IsKeyPressed(ImGuiKey.Home,false)){SeekEditTime(0);return;}
+            if(ImGui.IsKeyPressed(ImGuiKey.End,false)){SeekEditTime(Session.EditDuration);return;}
+        }
         var track=EditTracks.Find(t=>t.Keys.Any(k=>k.Id==keyId));var key=track?.Keys.Find(k=>k.Id==keyId);
         var poseActor=project.Objects.Find(o=>o.PoseKeys.Any(k=>k.Id==keyId));var pose=poseActor?.PoseKeys.Find(k=>k.Id==keyId);
         var clip=project.Clips.Find(c=>c.Id==clipId);
-        if(ImGui.IsKeyPressed(ImGuiKey.Delete,false))
+        if(command=="delete" || command is null && ImGui.IsKeyPressed(ImGuiKey.Delete,false))
         {
             if(key is not null || pose is not null) { Continue(DeleteTimelineSelection);return; }
             else if(actionPoseEditorTime is {} poseTime && SelectedAnimation is {} action)
@@ -33,8 +68,9 @@ internal sealed partial class DirectorCreationWorkspace
             else if(clip is not null)Continue(()=>Session.Edit(L("creation-delete-clip"),_=>project.Clips.Remove(clip)));
             keyId=clipId=Guid.Empty;return;
         }
-        if(!io.KeyCtrl)return;
-        if(ImGui.IsKeyPressed(ImGuiKey.C,false))
+        if(!io.KeyCtrl && command is null)return;
+        bool cut=command=="cut" || command is null && ImGui.IsKeyPressed(ImGuiKey.X,false);
+        if(command=="copy" || cut || command is null && ImGui.IsKeyPressed(ImGuiKey.C,false))
         {
             TimelineClipboard? data=key is not null?new(){Kind="key",Key=key,Channel=track!.Channel,Part=track.PartId,Model=SelectedObject?.ModelId??Guid.Empty}
                 :pose is not null?new(){Kind="pose",Pose=pose,Model=poseActor!.ModelId}:clip is not null?new(){Kind="clip",Clip=clip,Model=project.Objects.Find(o=>o.Id==clip.ObjectId)?.ModelId??Guid.Empty}:null;
@@ -55,9 +91,13 @@ internal sealed partial class DirectorCreationWorkspace
                     items.Add(new(){Kind="pose",Object=actor.Id,Model=actor.ModelId,Pose=k});
                 if(items.Count>1)data=new(){Kind="selection",Project=project.Id,Items=items};
             }
-            if(data is not null)ImGui.SetClipboardText("VSDirectorTimeline:"+System.Text.Json.JsonSerializer.Serialize(data,CreationJson.Options));
+            if(data is not null)
+            {
+                ImGui.SetClipboardText("VSDirectorTimeline:"+System.Text.Json.JsonSerializer.Serialize(data,CreationJson.Options));
+                if(cut)ExecuteTimelineCommand("delete");
+            }
         }
-        if(ImGui.IsKeyPressed(ImGuiKey.V,false))Run(()=>
+        if(command=="paste" || command is null && ImGui.IsKeyPressed(ImGuiKey.V,false))Run(()=>
         {
             const string prefix="VSDirectorTimeline:";string value=ImGui.GetClipboardText();if(!value.StartsWith(prefix,StringComparison.Ordinal))return;
             var data=System.Text.Json.JsonSerializer.Deserialize<TimelineClipboard>(value[prefix.Length..],CreationJson.Options);if(data is null)return;

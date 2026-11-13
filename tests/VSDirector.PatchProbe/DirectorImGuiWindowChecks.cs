@@ -46,6 +46,7 @@ internal static partial class DirectorImGuiProbe
 
     private static void CheckExportAndFooterWindows(Assembly assembly, ICoreClientAPI api, Action<string> capture)
     {
+        CheckReplayExportFailureStatus(assembly);
         Type Runtime(string name) => assembly.GetType("VSDirector.Gui." + name, true)!;
         object? Call(object instance, string name, params object?[] args)
             => AccessTools.Method(instance.GetType(), name, args.Select(a => a!.GetType()).ToArray()).Invoke(instance, args);
@@ -166,5 +167,30 @@ internal static partial class DirectorImGuiProbe
             io.MouseDown[0] = false; io.MousePos = new Vector2(-100);
             io.DisplaySize = savedDisplay; RuntimeEnv.GUIScale = savedScale;
         }
+    }
+
+    private static void CheckReplayExportFailureStatus(Assembly assembly)
+    {
+        var owner = new VSDirectorModSystem();
+        var managerType = assembly.GetType("VSDirector.Replay.DirectorReplayManager", true)!;
+        var exporterType = assembly.GetType("VSDirector.Replay.DirectorReplayMultiTrackExporter", true)!;
+        object manager = RuntimeHelpers.GetUninitializedObject(managerType);
+        object exporter = RuntimeHelpers.GetUninitializedObject(exporterType);
+        AccessTools.Field(exporterType, "statusLock").SetValue(exporter, new object());
+        AccessTools.Field(exporterType, "status").SetValue(exporter, "error");
+        const string failure = "FFmpeg executable 'missing-export-encoder.exe' was not found.";
+        AccessTools.Field(exporterType, "lastError").SetValue(exporter, failure);
+        AccessTools.Field(managerType, "exporter").SetValue(manager, exporter);
+        AccessTools.Field(managerType, "independentVoiceExportGate").SetValue(manager, new object());
+        AccessTools.Field(managerType, "independentVoiceExportStatus").SetValue(manager, "idle");
+        AccessTools.Field(typeof(VSDirectorModSystem), "replay").SetValue(owner, manager);
+        string text = (string)AccessTools.Method(typeof(VSDirectorModSystem), "ReplayExportStatusShortText").Invoke(owner, null)!;
+        if (!text.Contains(failure, StringComparison.Ordinal))
+            throw new Exception("Export initialization failure was hidden behind an empty output-track status: " + text);
+        AccessTools.Field(exporterType, "lastError").SetValue(exporter, "replay-export-range");
+        text = (string)AccessTools.Method(typeof(VSDirectorModSystem), "ReplayExportStatusShortText").Invoke(owner, null)!;
+        if (text != Lang.Get("vsdirector:replay-export-range"))
+            throw new Exception("Replay export error codes were not localized: " + text);
+        Console.WriteLine("PASS replay export initialization errors remain visible with zero output tracks, including localized validation errors");
     }
 }

@@ -37,15 +37,7 @@ public static class DirectorCreationPoseGeometry
     }
     public static Guid PoseTarget(DirectorCreationProject project, CreationModel model, Guid hit)
     {
-        // Imported animation channels and explicit body mappings identify authored
-        // joints without guessing from clothing, hair or anatomical names.
-        var joints = project.Animations.Where(a => a.ModelId == model.Id && !a.PoseEditing)
-            .SelectMany(a => a.Tracks).Where(t => t.PartId != Guid.Empty).Select(t => t.PartId).ToHashSet();
-        joints.UnionWith(model.BodyMapping.Values);
-        var part = model.Parts.Find(p => p.Id == hit);
-        for (int depth=0; part is not null && depth<128; depth++)
-        { if (joints.Contains(part.Id)) return part.Id; part=model.Parts.Find(p=>p.Id==part.ParentId); }
-        return hit;
+        return DirectorCreationRigSelection.Targets(project,model).GetValueOrDefault(hit,hit);
     }
     public static IReadOnlyList<CreationPart> Chain(CreationModel model, Guid selected)
     {
@@ -64,9 +56,12 @@ public static class DirectorCreationPoseGeometry
     // Uses the same forward transforms as rendering, with bounded CCD passes.
     // No anatomical names or synthetic bones are required.
     public static Dictionary<Guid, CreationTransform> Pull(CreationModel model, CreationObjectState source, Guid selected, Vector3 targetWorld)
+        => Pull(model,source,selected,targetWorld,Chain(model,selected));
+    internal static Dictionary<Guid, CreationTransform> Pull(CreationModel model, CreationObjectState source, Guid selected, Vector3 targetWorld,IReadOnlyList<CreationPart> chain)
     {
-        if (!Matrix4x4.Invert(source.World, out var inverseWorld)) throw new InvalidOperationException("Pose transform is singular.");
-        var chain = Chain(model, selected); if (chain.Count == 0) return new();
+        static bool Finite(Vector3 v)=>float.IsFinite(v.X)&&float.IsFinite(v.Y)&&float.IsFinite(v.Z);
+        if (!Finite(targetWorld) || !Matrix4x4.Invert(source.World, out var inverseWorld) || !Finite(Vector3.Transform(targetWorld,inverseWorld))) throw new InvalidOperationException("Pose transform is singular or non-finite.");
+        if (chain.Count == 0) return new();
         var endPart = chain[^1];
         var state = new CreationObjectState { Source = source.Source, World = source.World };
         foreach (var p in source.Pose) state.Pose[p.Key] = p.Value with { };
@@ -77,7 +72,7 @@ public static class DirectorCreationPoseGeometry
         Vector3 End() => Vector3.Transform(endLocal, state.Bones[selected]);
         float length = 0; var previous = End();
         foreach (var part in chain.Reverse()) { var joint = DirectorCreationIk.Joint(part,state,model.AnimationVersion); length += Vector3.Distance(previous,joint); previous = joint; }
-        if (length < 1e-7) throw new InvalidOperationException("Pose chain has no usable length.");
+        if (!float.IsFinite(length) || length < 1e-7) throw new InvalidOperationException("Pose chain has no usable length.");
         float tolerance = Math.Max(.0001f, length * .001f), best = Vector3.Distance(End(),target);
         var bestPose = state.Pose.ToDictionary(p => p.Key,p => p.Value with { });
         for (int iteration = 0; iteration < 24 && best > tolerance; iteration++)
@@ -95,7 +90,7 @@ public static class DirectorCreationPoseGeometry
                 solved.Scale = baseline.Scale;
                 var actual = DirectorCreationMath.BoneMatrix(part,solved,model.AnimationVersion) * parent;
                 foreach (var point in new[] { Vector3.Zero,Vector3.UnitX,Vector3.UnitY,Vector3.UnitZ })
-                    if (Vector3.Distance(Vector3.Transform(point,actual),Vector3.Transform(point,desired)) > .002f)
+                    if (!Finite(Vector3.Transform(point,actual)) || !Finite(Vector3.Transform(point,desired)) || Vector3.Distance(Vector3.Transform(point,actual),Vector3.Transform(point,desired)) > .002f)
                         throw new InvalidOperationException("Pose cannot represent this transform without shear.");
                 state.Pose[part.Id] = solved; state.Bones.Clear(); DirectorCreationEvaluator.EvaluateBones(model,state);
                 float error = Vector3.Distance(End(),target);

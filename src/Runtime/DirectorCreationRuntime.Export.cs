@@ -13,23 +13,33 @@ internal sealed partial class DirectorCreationRuntime
     private Guid exportBackground;
     private Guid observedBackground;
     private long backgroundGeneration = -1;
+    internal void InvalidateBackgroundSelection() => backgroundGeneration = -1;
     private void SyncBackgroundSelection()
     {
         if (PerformanceActive || Session.Project is not { } project) return;
         bool changedProject = backgroundGeneration != Session.DocumentGeneration;
         if (!changedProject && observedBackground == project.BackgroundReplayId) return;
         backgroundGeneration = Session.DocumentGeneration; observedBackground = project.BackgroundReplayId;
+        if (observedBackground != Guid.Empty) StopCreationWorld();
         if (observedBackground == Guid.Empty)
         {
             pendingBackground = Guid.Empty;
             if (owner.ActiveReplayId != Guid.Empty)
             {
                 RestoreVisualEnvironment();
-                DirectorReplayRuntime.Manager?.StopPlayback();
+                DirectorReplayRuntime.OrdinaryManager?.StopPlayback();
                 owner.TryEnableCreationFreeCamera(out _);
             }
         }
         else if (owner.ActiveReplayId != observedBackground && pendingBackground != observedBackground) LoadLinkedBackground();
+        else if (owner.ActiveReplayId == observedBackground && pendingBackground != observedBackground)
+        {
+            // A replay opened outside the creation workspace can already be loaded
+            // at a different time. Re-entering the work must align its world state
+            // with the work's playhead even when the replay identity is unchanged.
+            owner.SeekCreationBackground(BackgroundTime(Session.Time));
+            owner.TryEnableCreationFreeCamera(out _);
+        }
     }
 
     internal void LinkCurrentBackground()
@@ -40,25 +50,48 @@ internal sealed partial class DirectorCreationRuntime
     }
     internal void UseCurrentWorld()
     {
-        Session.Edit(L("creation-use-current-world"), p => p.SetBackground(Guid.Empty));
+        if (Session.Project is { } existing && !ProjectWorldMatches)
+        {
+            DuplicateProject(existing.Id, toCurrentWorld: true);
+            return;
+        }
+        Session.Edit(L("creation-use-current-world"), p =>
+        {
+            p.SetBackground(Guid.Empty);
+            p.UsePerformanceWorld = false;
+        });
         pendingBackground = Guid.Empty;
         RestoreVisualEnvironment();
-        DirectorReplayRuntime.Manager?.StopPlayback();
+        StopCreationWorld();
+        DirectorReplayRuntime.OrdinaryManager?.StopPlayback();
         owner.TryEnableCreationFreeCamera(out _);
         Status = L("creation-background-world");
+    }
+    internal void UseRecordedWorld()
+    {
+        Session.Edit(L("creation-use-recorded-world"), p =>
+        {
+            p.SetBackground(Guid.Empty);
+            p.UsePerformanceWorld = true;
+        });
+        pendingBackground = Guid.Empty;
+        UpdateCreationWorld();
     }
     internal void LoadLinkedBackground()
     {
         if (Session.Project is not { } project || project.BackgroundReplayId == Guid.Empty) return;
         RestoreVisualEnvironment();
-        var replay = DirectorReplayRuntime.Manager;
+        StopCreationWorld();
+        var replay = DirectorReplayRuntime.OrdinaryManager;
         if (replay is null || !replay.StartPlayback(project.BackgroundReplayId.ToString(), out _, out var error, pauseAfterLoad: true))
             throw new InvalidOperationException(L("creation-background-load-failed"));
         pendingBackground = project.BackgroundReplayId; pendingBackgroundTime = BackgroundTime(Session.Time);
         Status = L("creation-background-loading");
     }
     internal string BackgroundStatus => Session.Project is not { } p || p.BackgroundReplayId == Guid.Empty
-        ? L("creation-background-world")
+        ? RecordedWorldAt(Session.Time) is { } world
+            ? L(CreationWorldReady ? "creation-recorded-world-ready" : "creation-recorded-world-loading") + " " + world.Clip.Name
+            : L("creation-background-world")
         : L(p.BackgroundReplayId == owner.ActiveReplayId && owner.CreationBackgroundReady
             ? "creation-background-ready" : "creation-background-unloaded") + " " + p.BackgroundReplayId;
 
@@ -110,10 +143,11 @@ internal sealed partial class DirectorCreationRuntime
             // Live-world exports must never accidentally capture an unrelated replay.
             pendingBackground = Guid.Empty;
             RestoreVisualEnvironment();
-            DirectorReplayRuntime.Manager?.StopPlayback();
+            DirectorReplayRuntime.OrdinaryManager?.StopPlayback();
             owner.TryEnableCreationFreeCamera(out _);
         }
         else if (owner.ActiveReplayId != p.BackgroundReplayId) LoadLinkedBackground();
+        UpdateCreationWorld();
         pendingExport = path; exportGeneration = Session.DocumentGeneration; exportBackground = p.BackgroundReplayId;
         exportPrepareStarted = Environment.TickCount64;
         Status = L("creation-export-preparing");
@@ -127,7 +161,7 @@ internal sealed partial class DirectorCreationRuntime
             throw new InvalidOperationException(L("creation-background-load-timeout"));
         bool ready = exportBackground == Guid.Empty ? owner.ActiveReplayId == Guid.Empty
             : owner.ActiveReplayId == exportBackground && owner.CreationBackgroundReady && pendingBackground == Guid.Empty;
-        if (!ready) return;
+        if (!ready || !CreationWorldReady) return;
         pendingExport = null; StartExport(path);
     }
 }

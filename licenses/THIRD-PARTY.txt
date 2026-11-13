@@ -20,12 +20,17 @@ Distributed resource: assets/vsdirector/fonts/noto/NotoSansSC-Regular.ttf
 InGameDevTools (Alodh and contributors)
 Source: https://github.com/Alodh1/InGameDevTools
 Reference revision: 499cd9d1a37cb687cbb421b1e93715344aa38446
+  Native held-item attachment composition in DirectorCreationMath.cs and
+  DirectorCreationRuntime.Objects.cs adapted from
+  Animations/VanillaAnimationEditor.PreviewSupport.cs.
 Adapted FromTo rotation safeguards from Animations/RigPoseEditor.cs;
 bone handle and IK workflow informed by VanillaAnimationEditor.Viewport.cs
 and VanillaAnimationEditor.IkSymmetry.cs. Used in DirectorCreationActors.cs
 and the creation rig editor. Direct pose picking and topology-based CCD workflow
 are informed by the same viewport/IK sources; implemented for Director transforms
-in DirectorCreationPoseGeometry.cs. License: MIT; full text: InGameDevTools-MIT.txt.
+in DirectorCreationPoseGeometry.cs and DirectorCreationRigSelection.cs.
+The contextual body inspector and bounded automatic chains also reference
+VanillaAnimationEditor.Browser.cs and VanillaAnimationEditor.IkSymmetry.cs. License: MIT; full text: InGameDevTools-MIT.txt.
 Author authorization supplied by the project maintainer:
 https://discord.com/channels/302152934249070593/1510578112889622639/1569719241773416459
 
@@ -37,12 +42,35 @@ Reference revision: 13bd62dab1980b974b8ea0f78d037e8e82684b84
 License: MIT; full text: BBS-FS-MIT.txt.
 Creation editor workflow, shared timeline context, track filtering/folding and
 contextual property organization informed by UIReplaysEditor.java,
-UIKeyframeEditor.java and UIPoseEditor.java. Independently implemented for
+UIKeyframeEditor.java, UIFilmPanel.java and UIPoseEditor.java. Independently implemented for
 Vintage Story Shape, actor attachments and Director creation data; no Minecraft
 assets or BBS-FS runtime are bundled.
+Timeline track/all selection and keyframe context operations also reference
+UIKeyframes.java, independently implemented for Director's creation timeline.
+Actor equipment and appearance editing follows BBS-FS's separate actor state
+workflow; selection and skin/clothing composition use Vintage Story public APIs.
+World-scoped project discovery also references BBSMod.java, FilmManager.java
+and ServerNetwork.java. Director independently implements world/dimension
+validation and cross-world copies in its own project storage format.
+
+Mine-imator (David Norgren / stuffbydavid and contributors)
+Source: https://github.com/stuffbydavid/Mine-imator
+Reference revision: eda12dd0db7cb5892fc068491c60259dba0aa154
+License: MIT; permission text: Mine-imator-MIT.txt.
+Author confirmation by stuffbydavid, 2026-10-20:
+https://github.com/stuffbydavid/Mine-imator/issues/72#issuecomment-6297706623
+The author states that the codebase is under MIT and permits forks/clones,
+with the exact license file to be uploaded to the repository.
+The included MIT notice records this authorization; it is not represented as
+a copy of an upstream LICENSE file. Direct selection, visible transform tools
+and viewport manipulation are informed by view_toolbar_draw.gml and the
+Mine-imator editor workflow, independently implemented with Director's shared
+handles. No Mine-imator runtime, GameMaker components or Minecraft assets
+are bundled; the authorization does not license third-party game resources.
 
 Runtime dependencies
-Vintage Story and its game assemblies, Harmony, protobuf-net, cairo-sharp and
+Vintage Story and its game assemblies (including VSEssentials and VSSurvivalMod),
+Harmony, protobuf-net, cairo-sharp and
 OpenTK.Mathematics are supplied by the game installation and are not bundled
 in this mod ZIP.
 VSImGui and its ImGui-related assemblies are supplied by the separately

@@ -9,6 +9,7 @@ internal sealed partial class DirectorCreationWorkspace
 {
     private double timelineZoom = 1, timelineStart;
     private bool timelineEditor;
+    private Vector2 timelineHeaderPosition;
     private Guid contextKeyId;
     private Action<float, float, uint>? timelineRowMargins;
     private void TimelineRowBackground(Vector2 row, float width, float height, uint color)
@@ -75,6 +76,7 @@ internal sealed partial class DirectorCreationWorkspace
         DrawTimelineContext();
         if(ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)&&ImGui.IsMouseClicked(ImGuiMouseButton.Left))selectionArea=SelectionArea.Timeline;
         Vector2 header = ImGui.GetCursorScreenPos();
+        timelineHeaderPosition=header;
         float totalWidth = Math.Max(1, ImGui.GetContentRegionAvail().X);
         int transportCount = 9 + (Runtime.PerformanceActive ? 1 : 0);
         float transportWidth = (transportCount * 30 - 2) * scale;
@@ -234,14 +236,26 @@ internal sealed partial class DirectorCreationWorkspace
                     {
                         var nearest = track.Keys.MinBy(KeyDistance);
                         contextKeyId = nearest is not null && ImGui.GetIO().MousePos.X >= x0 && KeyDistance(nearest) < 14 * scale ? nearest.Id : Guid.Empty;
+                        if(contextKeyId!=Guid.Empty)
+                        {
+                            if(!selectedTimelineKeys.Contains(contextKeyId))
+                            {selectedTimelineKeys.Clear();selectedTimelineKeys.Add(contextKeyId);}
+                            keyId=contextKeyId;trackId=track.Id;clipId=Guid.Empty;selectionArea=SelectionArea.Timeline;
+                        }
                     }
                     var contextKey = track.Keys.Find(k => k.Id == contextKeyId);
                     if (contextKey is not null)
                     {
                         Item(L("creation-edit-keyframe"), () => { trackId = track.Id; keyId = contextKey.Id; clipId = Guid.Empty; poseEditorActor=Guid.Empty;actionPoseEditorTime=null;timelineEditor = true; });
-                        Item(L("creation-delete-keyframe"), () => Session.Edit(L("creation-delete-keyframe"), _ => track.Keys.Remove(contextKey)));
+                        Item(L("creation-timeline-copy-selection"), () => ExecuteTimelineCommand("copy"));
+                        Item(L("creation-timeline-cut-selection"), () => ExecuteTimelineCommand("cut"));
+                        Item(L("creation-delete-keyframe"), () => ExecuteTimelineCommand("delete"));
                         ImGui.Separator();
                     }
+                    Item(L("creation-timeline-paste-playhead"), () => ExecuteTimelineCommand("paste"));
+                    Item(L("creation-timeline-select-track"), () => SelectTimelineTrack(track));
+                    Item(L("creation-timeline-select-all"), () => ExecuteTimelineCommand("select-all"));
+                    Item(L("creation-timeline-reduce-track"), () => Session.Edit(L("creation-timeline-reduce-track"), _ => DirectorCreationKeyReduction.Reduce(track)));
                     Item(L("creation-enable-disable-track"), () => Session.Edit(L("creation-enable-disable-track"), _ => track.Enabled = !track.Enabled));
                     Item(L("creation-delete-track"), () => Session.Edit(L("creation-delete-track"), _ => EditTracks.Remove(track))); ImGui.EndPopup();
                 }
@@ -358,9 +372,20 @@ internal sealed partial class DirectorCreationWorkspace
             else if (Session.PoseEditing)
             {
                 if(timelineFilter is TimelineFilter.All or TimelineFilter.Pose) DrawPoseTimelineRow(x0, visibleWidth, labelWidth, rowHeight, X, T);
-                if (ImGui.TreeNode(L("creation-pose-details"))) { foreach (var track in tracks) DrawTrack(track); ImGui.TreePop(); }
+                if (ImGui.TreeNode(L("creation-pose-details"))) { DrawActionTracks(); ImGui.TreePop(); }
             }
-            else foreach (var track in tracks) DrawTrack(track);
+            else DrawActionTracks();
+            void DrawActionTracks()
+            {
+                var model=CurrentModel;
+                foreach(var group in tracks.GroupBy(t=>model is not null && !exactPoseParts?PoseTarget(model,t.PartId):t.PartId))
+                {
+                    if(group.Key==Guid.Empty || model?.Parts.Find(p=>p.Id==group.Key) is not {} part){foreach(var track in group)DrawTrack(track);continue;}
+                    if(selectedTracksOnly && PartScope && group.Key!=Session.SelectedPart && !selectedBones.Contains(group.Key))continue;
+                    if(revealTrackPart==part.Id)ImGui.SetNextItemOpen(true);
+                    if(ImGui.TreeNode(BoneName(model,part)+"##tracks-"+part.Id)){foreach(var track in group)DrawTrack(track);ImGui.TreePop();}
+                }
+            }
             float playhead = X(EditTime);
             draw.PushClipRect(new(x0, ImGui.GetWindowPos().Y), new(rightEdge, gridBottom), true);
             draw.AddLine(new(playhead, ImGui.GetWindowPos().Y), new(playhead, gridBottom), DirectorImGuiTheme.Accent, 2 * scale);

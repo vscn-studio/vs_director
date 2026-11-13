@@ -15,7 +15,12 @@ namespace VSDirector.Replay;
 
 internal readonly record struct DirectorReplayAudioFrame(
     double ReplaySeconds,
-    CameraPreset Pose);
+    CameraPreset Pose)
+{
+    public bool Muted { get; init; }
+    public bool Discontinuity { get; init; }
+    public double? NextReplaySeconds { get; init; }
+}
 
 internal readonly record struct DirectorReplayAudioExportResult(
     bool Success,
@@ -338,6 +343,14 @@ internal static class DirectorReplayAudioExporter
         }
     }
 
+    internal static long RenderCreationWave(
+        DirectorReplayAudioExportPlan plan,
+        IReadOnlyList<DirectorReplayAudioFrame> frames,
+        int framesPerSecond,
+        string outputPath,
+        CancellationToken cancellationToken)
+        => RenderWave(plan, frames, framesPerSecond, outputPath, cancellationToken, busFilter: null);
+
     private static long RenderWave(
         DirectorReplayAudioExportPlan plan,
         IReadOnlyList<DirectorReplayAudioFrame> frames,
@@ -367,14 +380,25 @@ internal static class DirectorReplayAudioExporter
         float[] right = new float[maximumSamples];
         double lastReplayRate = 1d;
         bool previouslyFrozen = false;
+        bool previouslyMuted = false;
         double previousContentTime = double.NegativeInfinity;
         long totalSampleFrames = 0L;
         for (int frameIndex = 0; frameIndex < frames.Count; frameIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             DirectorReplayAudioFrame frame = frames[frameIndex];
+            if (frame.Muted)
+            {
+                int mutedSamples = DirectorReplayAudioExportPolicy.SamplesInFrame(frameIndex, framesPerSecond);
+                Array.Clear(left);
+                Array.Clear(right);
+                WriteSamples(writer, left, right, mutedSamples);
+                totalSampleFrames += mutedSamples;
+                previouslyMuted = true;
+                continue;
+            }
             var content = DirectorReplayElementTimeline.SampleFreeze(plan.VoiceTimeline, frame.ReplaySeconds);
-            if (previouslyFrozen && !content.Frozen || content.ReplayTimeSeconds < previousContentTime)
+            if (previouslyMuted || frame.Discontinuity || previouslyFrozen && !content.Frozen || content.ReplayTimeSeconds < previousContentTime)
             {
                 // Unfreeze jumps to the logical timeline. Rebuild audio at
                 // that destination rather than squeezing skipped sounds into
@@ -384,15 +408,18 @@ internal static class DirectorReplayAudioExporter
                 voiceMixer = new DirectorReplayVoiceMixer(plan.VoiceFrames, plan.VoiceTimeline);
             }
             previouslyFrozen = content.Frozen;
+            previouslyMuted = false;
             previousContentTime = content.ReplayTimeSeconds;
-            double nextReplaySeconds = frameIndex + 1 < frames.Count
+            double nextReplaySeconds = frame.NextReplaySeconds ?? (frameIndex + 1 < frames.Count
                 ? DirectorReplayElementTimeline.SampleFreeze(plan.VoiceTimeline, frames[frameIndex + 1].ReplaySeconds).ReplayTimeSeconds
-                : content.ReplayTimeSeconds;
+                : content.ReplayTimeSeconds);
+            if (frame.NextReplaySeconds is null && frameIndex + 1 < frames.Count && frames[frameIndex + 1].Muted)
+                nextReplaySeconds = content.ReplayTimeSeconds;
             if (content.Frozen && frameIndex + 1 < frames.Count
                 && !DirectorReplayElementTimeline.SampleFreeze(plan.VoiceTimeline, frames[frameIndex + 1].ReplaySeconds).Frozen)
                 nextReplaySeconds = content.ReplayTimeSeconds;
             double replayRate;
-            if (frameIndex + 1 < frames.Count)
+            if (frame.NextReplaySeconds.HasValue || frameIndex + 1 < frames.Count)
             {
                 replayRate = DirectorReplayAudioExportPolicy.ResolveReplayRate(
                     content.ReplayTimeSeconds,

@@ -14,10 +14,17 @@ internal static partial class DirectorImGuiProbe
         var clothing = new CreationPart { ParentId = child.Id };
         var other = new CreationPart();
         var model = new CreationModel { Parts = [root, child, clothing, other] };
-        var branch = (HashSet<Guid>)AccessTools.Method(rendererType, "SelectionBranch").Invoke(null, [model, root.Id])!;
+        model.BodyMapping["body"]=root.Id;
+        var project=new DirectorCreationProject{Models=[model]};
+        var semanticTargets=model.Parts.ToDictionary(p=>p.Id,p=>DirectorCreationPoseGeometry.PoseTarget(project,model,p.Id));
+        var branch = (HashSet<Guid>)AccessTools.Method(rendererType, "SelectionBranch").Invoke(null, [semanticTargets, root.Id])!;
         if (!branch.SetEquals([root.Id, child.Id, clothing.Id])
-            || ((HashSet<Guid>)AccessTools.Method(rendererType, "SelectionBranch").Invoke(null, [model, Guid.Empty])!).Count != 0)
+            || ((HashSet<Guid>)AccessTools.Method(rendererType, "SelectionBranch").Invoke(null, [semanticTargets, Guid.Empty])!).Count != 0)
             throw new Exception("Pose silhouette must merge only the chosen branch, including attached clothing.");
+        model.BodyMapping["head"]=child.Id;
+        semanticTargets=model.Parts.ToDictionary(p=>p.Id,p=>DirectorCreationPoseGeometry.PoseTarget(project,model,p.Id));
+        branch=(HashSet<Guid>)AccessTools.Method(rendererType,"SelectionBranch").Invoke(null,[semanticTargets,root.Id])!;
+        if(!branch.SetEquals([root.Id]))throw new Exception("Independent semantic joint leaked into parent selection silhouette");
 
         var stateType = assembly.GetType("VSDirector.Rendering.DirectorCreationRenderState", true)!;
         var targetType = assembly.GetType("VSDirector.Rendering.DirectorCreationSelectionState", true)!;

@@ -12,6 +12,10 @@ internal static class SmokeTests
 {
     private static readonly (string Name, Func<Task> Run)[] Cases =
     {
+        ("creation world/dimension isolation, legacy handling and independent cross-world copies", RunSync(CreationWorldScopeChecks.Run)),
+        ("actor appearance replacement preserves bones, poses, attachments and shared action isolation", RunSync(CreationAppearanceChecks.Run)),
+        ("recorded key reduction preserves endpoints, turns, corners and authored interpolation", RunSync(CreationKeyReductionChecks.Run)),
+        ("semantic rig cache, garments, bounded chains, manual roots, reflected CCD and invalid targets", RunSync(CreationRigSelectionChecks.Run)),
         ("creation explicit editing tasks, auto pose seed, atomic history, cancellation and manual preview", RunSync(CreationEditingContextChecks.Run)),
         ("30 Hz creation clock, integer ruler ticks, legacy/source timing and independent export FPS", RunSync(CreationTimingChecks.Run)),
         ("scene pose keys, synchronized clock, sparse storage, undo, recovery and remapping", RunSync(CreationScenePoseChecks.Run)),
@@ -3724,6 +3728,10 @@ internal static class SmokeTests
         Check.False(DirectorReplayPlaybackPolicy.ShouldAdvanceParticleClock(
             playbackPaused: true,
             exportActive: false));
+        Check.True(DirectorReplayPlaybackPolicy.ShouldAdvanceParticleClock(
+            playbackPaused: true, exportActive: false, creationAdvancing: true));
+        Check.False(DirectorReplayPlaybackPolicy.ShouldAdvanceParticleClock(
+            playbackPaused: true, exportActive: false, creationAdvancing: false));
         Check.False(DirectorReplayPlaybackPolicy.ShouldPauseReplaySounds(
             playbackPaused: true,
             gamePaused: false,

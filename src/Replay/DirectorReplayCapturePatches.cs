@@ -82,6 +82,19 @@ internal static class ReplayAnimationFrameIsolationPatch
         if (EntityField?.GetValue(__instance) is Entity source && DirectorCreationRuntime.Current?.NeedsActorAnimation(source) == true)
         {
             __state = (source, source.IsRendered); source.IsRendered = true;
+            if (source is EntityPlayer player
+                && ReferenceEquals(player, (player.Api as ICoreClientAPI)?.World.Player?.Entity)
+                && (player.Api as ICoreClientAPI)?.Input.MouseGrabbed != true)
+            {
+                // The local player's first-person camera pitch is PI-centred,
+                // while the third-person head controller consumes a signed,
+                // relative pitch. A stale wrapped value near 2PI produces a
+                // 140-degree neck offset in the recorded first frame.
+                float yaw = GameMath.AngleRadDistance(player.BodyYaw, player.Pos.Yaw);
+                float pitch = GameMath.AngleRadDistance(MathF.PI, player.Pos.Pitch) * .75f;
+                player.Pos.HeadYaw = GameMath.Clamp(yaw, -43f * GameMath.DEG2RAD, 43f * GameMath.DEG2RAD);
+                player.Pos.HeadPitch = GameMath.Clamp(pitch, -69f * GameMath.DEG2RAD, 69f * GameMath.DEG2RAD);
+            }
         }
         if (EntityField?.GetValue(__instance) is not Entity entity
             || DirectorReplayRuntime.Manager is not { } manager)
@@ -99,10 +112,15 @@ internal static class ReplayAnimationFrameIsolationPatch
         return manager.ShouldDriveReplayAnimation(entity.EntityId) != true;
     }
     [HarmonyPostfix]
-    private static void Postfix((Entity? Entity, bool Rendered) __state)
-    { if (__state.Entity is { } entity) entity.IsRendered = __state.Rendered; }
+    private static void Postfix(AnimationManager __instance, bool __runOriginal, (Entity? Entity, bool Rendered) __state)
+    {
+        if (__state.Entity is not { } entity) return;
+        entity.IsRendered = __state.Rendered;
+        if (__runOriginal) DirectorCreationRuntime.Current?.CapturePerformanceBones(entity, __instance);
+    }
     [HarmonyFinalizer]
-    private static void Finalizer((Entity? Entity, bool Rendered) __state) => Postfix(__state);
+    private static void Finalizer((Entity? Entity, bool Rendered) __state)
+    { if (__state.Entity is { } entity) entity.IsRendered = __state.Rendered; }
 }
 
 [HarmonyPatch(typeof(EntityPlayer), nameof(EntityPlayer.AnimManager), MethodType.Getter)]
@@ -1332,7 +1350,7 @@ internal static class ReplayOpaqueParticleTimePatch
     {
         if (DirectorReplayRuntime.Manager is { } manager)
         {
-            manager.BeginReplayParticleRenderFrame();
+            if (!manager.IsDedicatedRendererActive) manager.BeginReplayParticleRenderFrame();
             deltaTime = manager.ReplayParticleDeltaTime(deltaTime);
         }
     }

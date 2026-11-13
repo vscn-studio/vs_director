@@ -19,6 +19,8 @@ internal static class DirectorImGuiIcons
         ["bookmark-filled"] = "\ufa88",
         ["bulb"] = "\uea51",
         ["camera"] = "\uea54",
+        ["cursor"] = "\uf265",
+        ["hand-move"] = "\uef50",
         ["camera-rotate"] = "\uee22",
         ["caret-down-filled"] = "\ufb2a",
         ["check"] = "\uea5e",

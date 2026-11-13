@@ -19,6 +19,7 @@ internal sealed partial class DirectorCreationRenderer : IRenderer
     private IShaderProgram? shader;
     private readonly Dictionary<string, MeshRef> meshes = new();
     private readonly Dictionary<string, MultiTextureMeshRef> nativeMeshes = new();
+    internal Dictionary<Guid, ItemRenderInfo> HeldItems { get; } = new();
     private readonly Dictionary<string, int> textures = new();
     private readonly List<LoadedTexture> ownedTextures = new();
     private long revision = -1;
@@ -63,6 +64,10 @@ internal sealed partial class DirectorCreationRenderer : IRenderer
             previous?.Stop();
             game.Platform.GlEnableDepthTest(); game.Platform.GlDepthMask(false); game.Platform.GlDisableCullFace(); game.Platform.GlToggleBlend(on: true); shader!.Use();
             shader.UniformMatrix("projectionMatrix", game.CurrentProjectionMatrix);
+            shader.Uniform("lightDirection", game.shUniforms.LightPosition3D);
+            shader.Uniform("fogColor", api.Render.FogColor);
+            shader.Uniform("fogDensity", api.Render.FogDensity);
+            shader.Uniform("fogMinimum", api.Render.FogMin);
             // Share the exact double-precision world-view basis with viewport
             // picking/gizmos, including native eye offsets and offscreen views.
             shader.UniformMatrix("viewMatrix", DirectorCreationMath.ProjectView(game.PerspectiveViewMat, project.Origin, project.Dimension * (double)BlockPos.DimensionBoundary));
@@ -80,6 +85,15 @@ internal sealed partial class DirectorCreationRenderer : IRenderer
                 game.Platform.GlDepthMask(obj.Opacity >= .999 && obj.Kind is CreationObjectKind.Model or CreationObjectKind.Item or CreationObjectKind.Structure);
                 shader.Uniform("tint", (float)state.Color.X, (float)state.Color.Y, (float)state.Color.Z, (float)obj.Opacity);
                 shader.Uniform("glow", (float)obj.Glow);
+                shader.Uniform("surfaceShading", obj.Kind is CreationObjectKind.Model or CreationObjectKind.Item or CreationObjectKind.Structure ? 1 : 0);
+                var lightPosition = CreationVector.From(state.World.Translation) + project.Origin;
+                var light = api.World.BlockAccessor.GetLightRGBs(new BlockPos(
+                    (int)Math.Floor(lightPosition.X),
+                    (int)Math.Floor(lightPosition.Y + .75) + project.Dimension * BlockPos.DimensionBoundary,
+                    (int)Math.Floor(lightPosition.Z)));
+                var ambient = api.Render.AmbientColor;
+                shader.Uniform("worldLight", Math.Max(light.X, light.W * ambient.X),
+                    Math.Max(light.Y, light.W * ambient.Y), Math.Max(light.Z, light.W * ambient.Z));
                 if (obj.Kind is CreationObjectKind.Item or CreationObjectKind.Structure)
                 {
                     RenderNativeObject(project, state, obj, origin);
@@ -156,6 +170,13 @@ internal sealed partial class DirectorCreationRenderer : IRenderer
     {
         if (obj.Kind == CreationObjectKind.Item)
         {
+            if (HeldItems.TryGetValue(obj.Id, out var held))
+            {
+                shader!.Uniform("textured", 1);
+                shader.UniformMatrix("modelMatrix", Array(state.World * Matrix4x4.CreateTranslation(origin.Float())));
+                api.Render.RenderMultiTextureMesh(held.ModelRef, "tex");
+                return;
+            }
             string code = (state.ResourceOverride ?? obj.ResourceCode).Trim();
             if (code.Length == 0) return;
             string key = "item:" + code;

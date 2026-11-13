@@ -10,7 +10,7 @@ internal sealed partial class DirectorCreationWorkspace
     private void DrawActorLibrary()
     {
         ImGui.SetNextItemWidth(-1); ImGui.InputTextWithHint("##actor-search", L("creation-search-names"), ref search, 256);
-        if (ImGui.CollapsingHeader(L("creation-world-actors")))
+        if (ImGui.CollapsingHeader(L("creation-world-actors"), ImGuiTreeNodeFlags.DefaultOpen))
             foreach (var actor in Runtime.WorldActors().Where(a => search.Length == 0 || a.Name.Contains(search, StringComparison.OrdinalIgnoreCase)).Take(100))
             {
                 if (ImGui.Selectable(actor.Name + "##world-" + actor.Id))
@@ -18,7 +18,7 @@ internal sealed partial class DirectorCreationWorkspace
                 if (ImGui.BeginPopupContextItem("world-record-" + actor.Id))
                 { Item(L("creation-record-world-actor"), () => { Runtime.RecordWorldActor(actor.Id); auxiliary = ""; }); ImGui.EndPopup(); }
             }
-        if (VSDirector.Replay.DirectorReplayRuntime.Manager is { IsPlaying: true } replay && ImGui.CollapsingHeader(L("creation-replay-actors")))
+        if (VSDirector.Replay.DirectorReplayRuntime.Manager is { IsPlaying: true } replay && ImGui.CollapsingHeader(L("creation-replay-actors"), ImGuiTreeNodeFlags.DefaultOpen))
         {
             float from = (float)replayImportStart, to = (float)replayImportEnd;
             ImGui.SetNextItemWidth(-1); if (ImGui.DragFloat(L("creation-replay-start"), ref from, .1f, 0, (float)replay.PlaybackDurationSeconds)) replayImportStart = from;
@@ -43,6 +43,53 @@ internal sealed partial class DirectorCreationWorkspace
     private void DrawActorRig(CreationSceneObject obj)
     {
         if (Project?.Models.Find(m => m.Id == obj.ModelId) is not { } model) return;
+        if (obj.ActorSource is not null && Header(L("creation-player-appearance-equipment")))
+        {
+            foreach (int hand in new[] { 1, 2 })
+            {
+                ImGui.PushID(hand);
+                string anchor = hand == 1 ? "RightHand" : "LeftHand";
+                if (model.Parts.Any(p => p.Name.Equals(anchor, StringComparison.OrdinalIgnoreCase)))
+                    ActorEquipmentRow(L(hand == 1 ? "creation-right-hand-item" : "creation-left-hand-item"),
+                        Runtime.ActorHandName(obj, hand), () => Runtime.PickActorItem(obj, hand), () => Runtime.SetActorHand(obj, hand, null));
+                ImGui.PopID();
+            }
+            if (Runtime.ActorHasClothing(obj) && Header(L("creation-actor-clothing")))
+            {
+                foreach (var slot in Enum.GetValues<Vintagestory.API.Common.EnumCharacterDressType>().Where(t => (int)t >= 0).OrderBy(t => (int)t))
+                {
+                    ImGui.PushID("clothing-" + slot);
+                    ActorEquipmentRow(L("creation-dress-" + slot.ToString().ToLowerInvariant()),
+                        Runtime.ActorWearableName(obj, (int)slot), () => Runtime.PickActorItem(obj, clothingSlot: (int)slot),
+                        () => Runtime.SetActorWearable(obj, (int)slot, null));
+                    ImGui.PopID();
+                }
+            }
+            if (Runtime.ActorSkinOptions(obj).Count > 0 && Header(L("creation-actor-skin"))
+                && ImGui.BeginTable("actor-skin", 2, ImGuiTableFlags.SizingStretchProp))
+            {
+                ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthFixed, 75 * DirectorImGuiTheme.Scale);
+                ImGui.TableSetupColumn("variant", ImGuiTableColumnFlags.WidthStretch);
+                foreach (var part in Runtime.ActorSkinOptions(obj).Where(p => !p.Hidden && p.Type != Vintagestory.GameContent.EnumSkinnableType.Voice))
+                {
+                    string current = Runtime.ActorSkinVariant(obj, part.Code);
+                    string Variant(string code) => Vintagestory.API.Config.Lang.Get((part.Type == Vintagestory.GameContent.EnumSkinnableType.Texture ? "color-" : "skinpart-") + code);
+                    string label = Vintagestory.API.Config.Lang.Get("skinpart-" + part.Code);
+                    ImGui.TableNextRow(); ImGui.TableNextColumn(); ImGui.AlignTextToFramePadding();
+                    ImGui.TextUnformatted(EquipmentLabel(label, ImGui.GetContentRegionAvail().X));
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+                    ImGui.TableNextColumn(); ImGui.SetNextItemWidth(-1);
+                    if (ImGui.BeginCombo("##skin-" + part.Code, current.Length == 0 ? L("creation-none") : Variant(current)))
+                    {
+                        foreach (var variant in part.Variants)
+                            if (ImGui.Selectable(Variant(variant.Code) + "##" + variant.Code, current == variant.Code))
+                                Continue(() => Runtime.SetActorSkin(obj, part.Code, variant.Code));
+                        ImGui.EndCombo();
+                    }
+                }
+                ImGui.EndTable();
+            }
+        }
         if (Header(L("creation-player-body")))
         {
             var body = obj.PlayerBody;
@@ -54,6 +101,7 @@ internal sealed partial class DirectorCreationWorkspace
             Number(L("creation-player-body-eye"), body.EyeHeight, v => body.EyeHeight = v, .05, body.Height, .01f);
             ImGui.TextWrapped(L("creation-player-body-help"));
             if (Button(L("creation-player-body-apply"))) Run(() => Runtime.ApplyPlayerBody(body));
+            SameLineIfFits(L("creation-player-body-restore"));
             if (Button(L("creation-player-body-restore"))) Run(() => Runtime.ApplyPlayerBody(null));
         }
         if (Header(L("creation-recording-channels")))
@@ -63,6 +111,33 @@ internal sealed partial class DirectorCreationWorkspace
                     obj.RecordingChannels = v ? obj.RecordingChannels | channel : obj.RecordingChannels & ~channel);
             if (Button(L("creation-record-player-to-selected-actor"))) Continue(() => { Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; Runtime.TogglePerformance(); });
         }
+    }
+
+    private void ActorEquipmentRow(string label, string name, Action pick, Action clear)
+    {
+        if (!ImGui.BeginTable("equipment", 2, ImGuiTableFlags.SizingStretchProp)) return;
+        ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthFixed, 75 * DirectorImGuiTheme.Scale);
+        ImGui.TableSetupColumn("item", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableNextRow(); ImGui.TableNextColumn(); ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted(EquipmentLabel(label, ImGui.GetContentRegionAvail().X));
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+        ImGui.TableNextColumn();
+        float side = ImGui.GetFrameHeight();
+        float width = Math.Max(1, ImGui.GetContentRegionAvail().X - side - ImGui.GetStyle().ItemSpacing.X);
+        string display = EquipmentLabel(name, width - ImGui.GetStyle().FramePadding.X * 2);
+        if (ImGui.Button(display + "###pick", new(width, 0))) Continue(pick);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
+        ImGui.SameLine();
+        if (DirectorImGuiIcons.Button(DirectorImGuiIcons.Get("x") + "##clear", new(side, side))) Continue(clear);
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-clear-item"));
+        ImGui.EndTable();
+    }
+    private static string EquipmentLabel(string text, float width)
+    {
+        if (ImGui.CalcTextSize(text).X <= width) return text;
+        int count = text.Length;
+        while (count > 0 && ImGui.CalcTextSize(text[..count] + "…").X > width) count--;
+        return text[..count] + "…";
     }
 
     private void CreateIk(CreationSceneObject obj, CreationModel model)

@@ -1062,6 +1062,18 @@ internal sealed class DirectorDedicatedReplayRenderer : IDisposable
             return;
         }
 
+        DirectorReplayManager? replay = DirectorReplayRuntime.Manager;
+        if (model == EnumParticleModel.Cube)
+        {
+            // This renderer owns its particle passes, so the native opaque
+            // particle callback may never publish the replay timeline delta.
+            replay?.BeginReplayParticleRenderFrame();
+        }
+        if (replay is not null)
+        {
+            deltaTime = replay.ReplayParticleDeltaTime(deltaTime);
+        }
+
         ShaderProgramBase shader = model == EnumParticleModel.Cube
             ? ShaderPrograms.Particlescube
             : ShaderPrograms.Particlesquad;
@@ -1089,8 +1101,8 @@ internal sealed class DirectorDedicatedReplayRenderer : IDisposable
             activeShader.UniformMatrix("projectionMatrix", game.CurrentProjectionMatrix);
             activeShader.UniformMatrix("modelViewMatrix", game.CurrentModelViewMatrix);
             // This call is Harmony-routed through ReplayParticlePoolTimePatch.
-            // Owned pools consume the replay frame clock; offscreen passes publish
-            // a zero delta and only rebase the mesh to the current camera.
+            // Owned pools consume the replay frame clock; offscreen passes use
+            // zero without replacing the primary frame's clock snapshot.
             pool.OnNewFrame(deltaTime, game.EntityPlayer.CameraPos);
             if (pool.ShouldRender())
             {

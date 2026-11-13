@@ -14,6 +14,7 @@ internal sealed partial class DirectorCreationRenderer
     private FrameBufferRef? selectionMask, selectionOutline;
     private MeshRef? selectionTriangle;
     internal IReadOnlyCollection<Guid> AdditionalSelectedParts { get; set; } = System.Array.Empty<Guid>();
+    internal IReadOnlyDictionary<Guid,Guid>? SemanticTargets { get; set; }
 
     // Submitted as a clipped ImGui image rather than a world post-process:
     // editor highlights stay behind dialogs and never enter previews/exports.
@@ -37,9 +38,10 @@ internal sealed partial class DirectorCreationRenderer
             selectionMaskShader!.Use();
             selectionMaskShader.UniformMatrix("viewMatrix", view);
             selectionMaskShader.UniformMatrix("projectionMatrix", projection);
-            var selectedParts = SelectionBranch(model, selected);
-            foreach(var id in AdditionalSelectedParts??System.Array.Empty<Guid>())selectedParts.UnionWith(SelectionBranch(model,id));
-            var hoveredParts = SelectionBranch(model, hovered == selected ? Guid.Empty : hovered);
+            var targets=SemanticTargets??DirectorCreationRigSelection.Targets(project,model);
+            var selectedParts = SelectionBranch(targets,selected);
+            foreach(var id in AdditionalSelectedParts??System.Array.Empty<Guid>())selectedParts.UnionWith(SelectionBranch(targets,id));
+            var hoveredParts = SelectionBranch(targets,hovered == selected ? Guid.Empty : hovered);
             var deformations = DirectorCreationJointSeams.Deformations(model, state);
             foreach (var part in model.Parts.Where(p => !p.Group && p.Visible && !state.HiddenParts.Contains(p.Id)))
             {
@@ -76,19 +78,8 @@ internal sealed partial class DirectorCreationRenderer
         }
     }
 
-    private static HashSet<Guid> SelectionBranch(CreationModel model, Guid root)
-    {
-        var result = new HashSet<Guid>();
-        if (root == Guid.Empty || !model.Parts.Any(p => p.Id == root)) return result;
-        result.Add(root);
-        bool added;
-        do
-        {
-            added = false;
-            foreach (var part in model.Parts.Where(p => result.Contains(p.ParentId))) added |= result.Add(part.Id);
-        } while (added);
-        return result;
-    }
+    private static HashSet<Guid> SelectionBranch(IReadOnlyDictionary<Guid,Guid> targets, Guid root)
+        => root==Guid.Empty?new():targets.Where(p=>p.Value==root).Select(p=>p.Key).ToHashSet();
 
     private MeshRef ModelFaceMesh(CreationModel model, CreationPart part, string side, JsonObject face, Guid objectId,
         Dictionary<Guid, Dictionary<Vector3, Vector3>> deformations, bool geometryChanged)

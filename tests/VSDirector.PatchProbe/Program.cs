@@ -21,6 +21,7 @@ using ProtoBuf;
 
 const string harmonyId = "vscn.vsdirector.patch-probe";
 DirectorPerformanceChecks.Run();
+DirectorCreationRecordingChecks.Run();
 Harmony harmony = new(harmonyId);
 
 Type indexedWorldType = typeof(VSDirectorModSystem).Assembly.GetType("VSDirector.Replay.DirectorReplayWorldPlayback", true)!;
@@ -6874,6 +6875,29 @@ try
         File.Delete(replayWavePath);
     }
     Console.WriteLine("PASS deterministic replay audio WAV rendering");
+
+    Array creationFrames = Array.CreateInstance(replayAudioFrame, 30);
+    foreach (int index in Enumerable.Range(0, 30))
+    {
+        object frame = audioFrameConstructor.Invoke(new object[] { index / 30d, new CameraPreset { Fov = 70f } });
+        replayAudioFrame.GetProperty("Muted")!.SetValue(frame, 10 > index || index >= 20);
+        replayAudioFrame.GetProperty("Discontinuity")!.SetValue(frame, index == 10);
+        replayAudioFrame.GetProperty("NextReplaySeconds")!.SetValue(frame, (index + 1) / 30d);
+        creationFrames.SetValue(frame, index);
+    }
+    try
+    {
+        renderReplayWave.Invoke(null, new object[] { audioPlan, creationFrames, 30, replayWavePath, CancellationToken.None, null! });
+        byte[] wave = File.ReadAllBytes(replayWavePath);
+        int sectionBytes = DirectorReplayAudioExportPolicy.SampleRate / 3 * 4;
+        if (wave.Length != 44 + sectionBytes * 3
+            || wave.Skip(44).Take(sectionBytes).Any(value => value != 0)
+            || !wave.Skip(44 + sectionBytes).Take(sectionBytes).Any(value => value != 0)
+            || wave.Skip(44 + sectionBytes * 2).Any(value => value != 0))
+            throw new InvalidOperationException("Creation recording audio lost its project offset, silence gaps, or active source samples.");
+    }
+    finally { File.Delete(replayWavePath); }
+    Console.WriteLine("PASS creation recorded audio retains project-frame timing and silent gaps around active performance clips");
 
     var freezeAudioTrack = new DirectorReplayElementTrack { TrackType = DirectorReplayElementTrackType.Freeze };
     var freezeAudioTimeline = new DirectorReplayViewportTimeline

@@ -31,13 +31,27 @@ internal sealed partial class DirectorCreationWorkspace
     }
     private sealed class EditorPreferences
     {
+        public int LayoutVersion { get; set; }
+        public bool Tools { get; set; } = true;
+        public bool Properties { get; set; } = true;
+        public bool View { get; set; } = true;
+        public bool Bones { get; set; }
+        public bool Ik { get; set; }
+        public bool Actions { get; set; }
+        public int ObjectTool { get; set; } = 1;
+        public int PartTool { get; set; } = 2;
+        public int ObjectAxis { get; set; } = -1;
+        public int PartAxis { get; set; } = -1;
+        public bool ObjectLocal { get; set; }
+        public bool PartLocal { get; set; } = true;
+        public bool ExtendedChain { get; set; }
         public bool AutoKey { get; set; } = true;
         public Dictionary<string,TimelineView> Views { get; set; } = new();
     }
     private EditorPreferences editorPreferences = new();
     private float timelineScroll, restoreTimelineScroll = -1;
     private sealed record SceneContext(Guid Object, Guid Part, Guid Key, Guid Track, Guid Clip, double Time, CreationEditTask Task,
-        Guid PoseActor, HashSet<Guid> Objects, HashSet<Guid> Bones, HashSet<Guid> Keys);
+        Guid PoseActor, HashSet<Guid> Objects, HashSet<Guid> Bones, HashSet<Guid> Keys, bool WholeObject);
     private SceneContext? sceneContext;
     private string? activeViewKey;
     private string ViewKey => Project!.Id.ToString("N") + ":" + Session.SelectedAnimation.ToString("N");
@@ -62,13 +76,36 @@ internal sealed partial class DirectorCreationWorkspace
         selectedTracksOnly=state.SelectedOnly;keyedTracksOnly=state.KeyedOnly;timelineCurves=state.Curves;
         curveAxis=Math.Clamp(state.CurveAxis,0,2);expandedPoseObjects.Clear();expandedPoseObjects.UnionWith(state.PoseDetails ?? new());
     }
+    private void RestoreEditorPreferences()
+    {
+        editorPreferences.Views ??= new();
+        toolsPanel=editorPreferences.Tools;properties=editorPreferences.Properties;view=editorPreferences.View;
+        if(editorPreferences.LayoutVersion>=2){bonesPanel=editorPreferences.Bones;ikPanel=editorPreferences.Ik;actionsPanel=editorPreferences.Actions;}
+        if(editorPreferences.LayoutVersion<3)host.MigrateCreationTools=true;
+        objectTool=Enum.IsDefined(typeof(CreationTool),editorPreferences.ObjectTool)?(CreationTool)editorPreferences.ObjectTool:CreationTool.Move;
+        partTool=Enum.IsDefined(typeof(CreationTool),editorPreferences.PartTool)?(CreationTool)editorPreferences.PartTool:CreationTool.Rotate;
+        objectRotationAxis=new[]{-1,0,1,2,6}.Contains(editorPreferences.ObjectAxis)?editorPreferences.ObjectAxis:-1;
+        poseRotationAxis=editorPreferences.LayoutVersion<3?-1:new[]{-1,0,1,2,6}.Contains(editorPreferences.PartAxis)?editorPreferences.PartAxis:-1;
+        objectSpace=editorPreferences.ObjectLocal?ImGuizmoNET.MODE.LOCAL:ImGuizmoNET.MODE.WORLD;
+        partSpace=editorPreferences.PartLocal?ImGuizmoNET.MODE.LOCAL:ImGuizmoNET.MODE.WORLD;
+        extendedPullChain=editorPreferences.ExtendedChain;
+    }
     private void PersistEditorPreferences()
-    { SaveTimelineView(); api.StoreModConfig(editorPreferences,"vsdirector-creation-editor.json"); }
+    {
+        SaveTimelineView();editorPreferences.LayoutVersion=host.MigrateCreationTools?0:3;
+        editorPreferences.Tools=toolsPanel;editorPreferences.Properties=properties;editorPreferences.View=view;
+        editorPreferences.Bones=bonesPanel;editorPreferences.Ik=ikPanel;editorPreferences.Actions=actionsPanel;
+        editorPreferences.ObjectTool=(int)objectTool;editorPreferences.PartTool=(int)partTool;
+        editorPreferences.ObjectAxis=objectRotationAxis;editorPreferences.PartAxis=poseRotationAxis;
+        editorPreferences.ObjectLocal=objectSpace==ImGuizmoNET.MODE.LOCAL;editorPreferences.PartLocal=partSpace==ImGuizmoNET.MODE.LOCAL;
+        editorPreferences.ExtendedChain=extendedPullChain;
+        api.StoreModConfig(editorPreferences,"vsdirector-creation-editor.json");
+    }
     private void RememberSceneContext()
     {
         SaveTimelineView();
         if(SelectedAnimation is null) sceneContext=new(Session.SelectedObject,Session.SelectedPart,keyId,trackId,clipId,Session.Time,Session.EditTask,
-            Session.ScenePoseActor,new(selectedObjects),new(selectedBones),new(selectedTimelineKeys));
+            Session.ScenePoseActor,new(selectedObjects),new(selectedBones),new(selectedTimelineKeys),wholeObjectSelection);
     }
     private static string ObjectName(CreationSceneObject obj) => obj.ActorHand==1 && obj.Name.Equals("RightHand",StringComparison.OrdinalIgnoreCase)?L("creation-right-hand-item")
         :obj.ActorHand==2 && obj.Name.Equals("LeftHand",StringComparison.OrdinalIgnoreCase)?L("creation-left-hand-item"):obj.Name;
@@ -98,10 +135,12 @@ internal sealed partial class DirectorCreationWorkspace
     }
     private void DrawTimelineContext()
     {
+        bool first=true;
         if(SelectedAnimation is {} action)
         {
             if(ImGui.SmallButton(L("creation-project")))ReturnToProject();
             ImGui.SameLine();ImGui.TextWrapped("› "+action.Name+(Project!.Clips.Count(c=>c.AnimationId==action.Id)>1?" · "+L("creation-shared-action"):""));
+            if(Project!.Clips.Count(c=>c.AnimationId==action.Id)>1 && Button(L("creation-copy-action-source")))Continue(MakeActionIndependent);
             if(ImGui.BeginPopupContextItem("action-source-options"))
             {
                 Item(L("creation-copy-action-source"),MakeActionIndependent);ImGui.EndPopup();
@@ -109,14 +148,21 @@ internal sealed partial class DirectorCreationWorkspace
         }
         else
         {
-            ImGui.SetNextItemWidth(Math.Min(160*DirectorImGuiTheme.Scale,ImGui.GetContentRegionAvail().X));
-            if(ImGui.BeginCombo("##editing-task",L(Session.AnimationEditing?"creation-task-animation":"creation-task-placement")))
-            {
-                foreach(var task in Enum.GetValues<CreationEditTask>())
-                    Item(L(task==CreationEditTask.Placement?"creation-task-placement":"creation-task-animation"),()=>Session.SetEditTask(task),selected:Session.EditTask==task);
-                ImGui.EndCombo();
-            }
+            foreach(var task in Enum.GetValues<CreationEditTask>())
+                if(InlineChoice(L(task==CreationEditTask.Placement?"creation-placement-short":"creation-animation"),Session.EditTask==task,ref first))
+                    Continue(()=>{Session.SetEditTask(task);if(task==CreationEditTask.Placement)wholeObjectSelection=true;});
         }
+        string recording=L(!Session.AnimationEditing?"creation-base-edit":Session.AutoKey?"creation-record-auto":"creation-record-manual");
+        SameLineIfFits(recording);
+        ImGui.TextWrapped(recording);
+        first=false;
+        foreach(var filter in Enum.GetValues<TimelineFilter>())
+            if(InlineChoice(L("creation-filter-"+filter.ToString().ToLowerInvariant()),timelineFilter==filter,ref first))
+            {timelineFilter=filter;ClearTimelineSelection();}
+        if(InlineChoice(L("creation-selected-only"),selectedTracksOnly,ref first)){selectedTracksOnly=!selectedTracksOnly;ClearTimelineSelection();}
+        if(InlineChoice(L("creation-keyed-only"),keyedTracksOnly,ref first)){keyedTracksOnly=!keyedTracksOnly;ClearTimelineSelection();}
+        if(InlineChoice(L(timelineCurves?"creation-curve-view":"creation-keyframe-view"),timelineCurves,ref first))timelineCurves=!timelineCurves;
+        if(timelineCurves)foreach(int axis in new[]{0,1,2})if(InlineChoice("XYZ"[axis].ToString(),curveAxis==axis,ref first))curveAxis=axis;
     }
     private void TimelineOptions()
     {

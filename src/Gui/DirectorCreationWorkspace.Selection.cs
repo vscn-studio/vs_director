@@ -7,7 +7,7 @@ internal sealed partial class DirectorCreationWorkspace
     private readonly HashSet<Guid> selectedObjects = new();
     private bool exactPoseParts;
     private Guid selectionAnchor;
-    private bool PosePicking => (Session.ScenePoseEditing || Session.EditingAnimation is not null) && modelContext.Length == 0;
+    private bool PosePicking => (Session.ScenePoseEditing || Session.EditingAnimation is not null) && modelContext.Length == 0 && !wholeObjectSelection;
     private bool ObjectSelected(Guid id) => id == Session.SelectedObject || selectedObjects.Contains(id);
     private void SyncSelection()
     {
@@ -25,7 +25,7 @@ internal sealed partial class DirectorCreationWorkspace
         var io = ImGui.GetIO(); bool toggle = !context && io.KeyCtrl, range = !context && io.KeyShift;
         if (context && ObjectSelected(obj.Id)) return;
         var previous = selectedObjects.ToHashSet(); if (Session.SelectedObject != Guid.Empty) previous.Add(Session.SelectedObject);
-        SelectWithinPose(obj.Id, () =>
+        Continue(() =>
         {
             Select(obj);
             if (!PosePicking && (toggle || range))
@@ -64,8 +64,9 @@ internal sealed partial class DirectorCreationWorkspace
     }
     private void HandleSelectionKeys()
     {
-        if (ImGui.GetIO().WantTextInput || ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("",ImGuiPopupFlags.AnyPopupId|ImGuiPopupFlags.AnyPopupLevel)) return;
+        if (Runtime.PerformanceActive || Runtime.Exporting || gizmoUsing || ImGui.GetIO().WantTextInput || ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("",ImGuiPopupFlags.AnyPopupId|ImGuiPopupFlags.AnyPopupLevel)) return;
         var io=ImGui.GetIO();
+        if(!io.KeyCtrl && !io.KeyAlt && !io.KeyShift && ImGui.IsKeyPressed(ImGuiKey.F,false))Run(FocusSelection);
         if(selectionArea==SelectionArea.Timeline)
         {
             HandleTimelineKeys();return;
@@ -77,9 +78,9 @@ internal sealed partial class DirectorCreationWorkspace
         { selectedObjects.Clear(); selectedObjects.UnionWith(VisibleObjectOrder()); Session.SelectedObject=selectedObjects.FirstOrDefault(); Session.SelectedPart=Guid.Empty; }
         if(!io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
         {
-            if(ImGui.IsKeyPressed(ImGuiKey.G,false)) { operation=ImGuizmoNET.OPERATION.TRANSLATE; posePull=Session.PoseEditing&&!freePoseTransform; }
-            if(ImGui.IsKeyPressed(ImGuiKey.R,false)) { operation=ImGuizmoNET.OPERATION.ROTATE; posePull=false; }
-            if(ImGui.IsKeyPressed(ImGuiKey.S,false) && (!Session.PoseEditing||freePoseTransform)) { operation=ImGuizmoNET.OPERATION.SCALE; posePull=false; }
+            if(ImGui.IsKeyPressed(ImGuiKey.G,false))ChooseTool(PartScope && Session.PoseEditing && !freePoseTransform?CreationTool.Pull:CreationTool.Move);
+            if(ImGui.IsKeyPressed(ImGuiKey.R,false))ChooseTool(CreationTool.Rotate);
+            if(ImGui.IsKeyPressed(ImGuiKey.S,false))ChooseTool(CreationTool.Scale);
         }
     }
 }

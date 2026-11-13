@@ -38,6 +38,7 @@ internal static partial class DirectorImGuiProbe
         var host = Activator.CreateInstance(R("VSDirector.Gui.DirectorImGuiWorkspace"), hostApi)!;
         var workspace = Activator.CreateInstance(R("VSDirector.Gui.DirectorCreationWorkspace"), BindingFlags.Instance | BindingFlags.NonPublic, null, [api, owner, host], null)!;
         AccessTools.Field(workspace.GetType(), "showAllBones").SetValue(workspace, true);
+        AccessTools.Field(workspace.GetType(), "showBones").SetValue(workspace, true);
         var viewport = R("VSDirector.Rendering.DirectorWorkspaceViewportRuntime");
         object? Call(string name, params object[] args) => AccessTools.Method(workspace.GetType(), name).Invoke(workspace, args);
         var points = (List<(Guid Id, Vector2 Point)>)AccessTools.Field(workspace.GetType(), "bonePoints").GetValue(workspace)!;
@@ -91,7 +92,7 @@ internal static partial class DirectorImGuiProbe
             if (!objectPoints.Any(p => p.Id == controls.Target.Id) || AccessTools.Property(workspace.GetType(), "RigActor").GetValue(workspace) != actor)
                 throw new Exception("Selecting an IK control lost its actor context");
             AccessTools.Field(workspace.GetType(), "showBones").SetValue(workspace, false); Frame();
-            if (points.Count != 0 || objectPoints.Any(p => p.Id == controls.Target.Id || p.Id == controls.Pole.Id)) throw new Exception("Hidden rig controls remain pickable");
+            if (points.Count != 0 || objectPoints.Any(p => p.Id == controls.Pole.Id) || !objectPoints.Any(p => p.Id == controls.Target.Id)) throw new Exception("Hidden rig must retain only its selected control");
             Console.WriteLine("PASS focused rig display hides unrelated bones and inactive IK controls, retains actor context and clears hidden hit targets");
             actor.IkChains.Clear(); session.SelectedObject = actor.Id; session.SelectedPart = Guid.Empty; session.Changed();
             Call("NewAnimation", "Pose workflow");
@@ -232,6 +233,7 @@ internal static partial class DirectorImGuiProbe
             if(session.Project.Objects.Any(o=>o.Id==actor.Id||o.Id==childObject.Id)) throw new Exception("Delete shortcut did not remove selected actor and its children");
             Console.WriteLine("PASS Delete shortcut deletes the selected hierarchy and leaves text editing alone");
             Console.WriteLine("PASS pose action creation, same-frame multibone edits without prompts, atomic save-and-continue, direct rendered part picking and bilingual pose panels");
+            CheckDirectCreationTools(workspace,session,Frame);
         }
         finally { io.MouseDown[0] = false; io.DisplaySize = display; AccessTools.Method(viewport, "Deactivate").Invoke(null, [host]); ((IDisposable)host).Dispose(); if (Directory.Exists(root)) Directory.Delete(root,true); }
     }
@@ -329,7 +331,82 @@ internal static partial class DirectorImGuiProbe
             var manipulated = DirectorCreationMath.BoneFromHandle(part, pose, version, handle * delta);
             Same(manipulated, local * actorWorld * delta, "Bone handle moved geometry around the wrong point");
         }
-        Console.WriteLine("PASS bone matrices match native ShapeElement v0/v1, signed scale round trips and pivot-centred manipulation across inverted rotations");
+        foreach (float hand in new[] { -1f, 1f })
+        {
+            var attachmentPosition = new CreationVector(3 * hand, 7, -2);
+            var attachmentRotation = new CreationVector(20, 35 * hand, -15);
+            var origin = new CreationVector(.3, .7, .1);
+            var scale = new CreationVector(.6, 1.3, .8);
+            var translation = new CreationVector(.2, -.1, .4);
+            var rotation = new CreationVector(-40, 15, 60 * hand);
+            var nativeItem = new Vintagestory.API.Client.Matrixf()
+                .Translate(origin.X, origin.Y, origin.Z)
+                .Scale((float)scale.X, (float)scale.Y, (float)scale.Z)
+                .Translate(attachmentPosition.X / 16 + translation.X, attachmentPosition.Y / 16 + translation.Y, attachmentPosition.Z / 16 + translation.Z)
+                .Rotate((float)((attachmentRotation.X + rotation.X) * Math.PI / 180),
+                    (float)((attachmentRotation.Y + rotation.Y) * Math.PI / 180),
+                    (float)((attachmentRotation.Z + rotation.Z) * Math.PI / 180))
+                .Translate(-origin.X, -origin.Y, -origin.Z);
+            Same(Matrix(nativeItem.Values), DirectorCreationMath.HeldItemMatrix(attachmentPosition, attachmentRotation, origin, scale, translation, rotation),
+                "Held-item attachment differs from native composition with nonuniform scale and pivot");
+        }
+        var capture = AccessTools.Method(typeof(VSDirectorModSystem).Assembly.GetType("VSDirector.Runtime.DirectorCreationRuntime"), "CaptureBoneTransform");
+        foreach (int version in new[] { 0, 1 })
+        {
+            var parent = new CreationPart { Name = "Neck", From = new(8, 19, 8), Origin = new(8, 22, 8), Rotation = new(0, 25, 0) };
+            var child = new CreationPart { Name = "Head", ParentId = parent.Id, From = new(-3, 3, -3), Origin = new(0, 3, 0), Rotation = new(0, -30, 0) };
+            var basis = new CreationPart { Name = "Actor origin", Group = true, From = new(-8,0,-8), Rotation = new(0,90,0) };
+            parent.ParentId = basis.Id;
+            var model = new CreationModel { AnimationVersion = version, Parts = [basis, parent, child] };
+            var actor = new CreationSceneObject { ModelId = model.Id, Transform = new() { Position = new(40,3,-20), Rotation = new(0,170,0), Scale = new(.8,.8,.8) } };
+            var take = new CreationPerformance { Action = new() { Layers = [new() { Frames = [new() { TimeSeconds = 0 }, new() { TimeSeconds = 1 }] }] } };
+            var asset = new CreationAsset { Kind = CreationAssetKind.Performance };
+            var project = new DirectorCreationProject { Duration = 1, Models = [model], Objects = [actor], Assets = [asset], Clips = [new() { ObjectId = actor.Id, PerformanceAssetId = asset.Id, Duration = 1 }] };
+            project.Performances[asset.Id] = take;
+            var expected = new List<Matrix4x4>();
+            CreationTransform nearParent = new(), nearChild = new();
+            for (int sample = 0; sample < 3; sample++)
+            {
+                ElementPose Native(CreationPart part, ElementPose pose, Matrix4x4 parentMatrix)
+                {
+                    var element = new ShapeElement { From = [part.From.X,part.From.Y,part.From.Z], RotationOrigin = [part.Origin.X,part.Origin.Y,part.Origin.Z],
+                        RotationX = part.Rotation.X, RotationY = part.Rotation.Y, RotationZ = part.Rotation.Z };
+                    var world = Matrix(element.GetLocalTransformMatrix(version, tf: pose)) * parentMatrix;
+                    pose.AnimModelMatrix = [world.M11,world.M12,world.M13,world.M14,world.M21,world.M22,world.M23,world.M24,world.M31,world.M32,world.M33,world.M34,world.M41,world.M42,world.M43,world.M44];
+                    return pose;
+                }
+                var p = Native(parent, new() { degY = 175 + sample * 5, degOffY = 12, degOffZ = -8, scaleX = 1, scaleY = 1, scaleZ = 1 }, Matrix4x4.Identity);
+                var c = Native(child, new() { degY = -175 - sample * 5, degOffY = 20, degOffZ = -15, translateY = .03f, scaleX = 1, scaleY = 1, scaleZ = 1 }, Matrix(p.AnimModelMatrix));
+                nearParent = (CreationTransform)capture.Invoke(null, [parent, p, null, nearParent, version])!;
+                nearChild = (CreationTransform)capture.Invoke(null, [child, c, p, nearChild, version])!;
+                foreach (var (part, pose) in new[] { (parent, nearParent), (child, nearChild) })
+                foreach (var (channel, value) in new[] { (CreationChannel.Position, pose.Position), (CreationChannel.Rotation, pose.Rotation), (CreationChannel.Scale, pose.Scale) })
+                {
+                    var track = take.Tracks.Find(t => t.PartId == part.Id && t.Channel == channel);
+                    if (track is null) { track = new() { PartId = part.Id, Channel = channel }; take.Tracks.Add(track); }
+                    DirectorCreationEdits.SetKey(track, sample / 30d, value);
+                }
+                expected.Add(Matrix(c.AnimModelMatrix) * DirectorCreationMath.BoneMatrix(basis, new(), version) * actor.Transform.Matrix());
+            }
+            // Includes the first frame and the same pose after serialization,
+            // through clip evaluation rather than only the conversion helper.
+            var restored = System.Text.Json.JsonSerializer.Deserialize<CreationPerformance>(System.Text.Json.JsonSerializer.Serialize(take, CreationJson.Options), CreationJson.Options)!;
+            project.Performances[asset.Id] = restored;
+            for (int sample = 0; sample < 3; sample++)
+            {
+                var state = DirectorCreationEvaluator.Evaluate(project, sample / 30d).Objects[actor.Id];
+                var actual = state.Bones[child.Id] * state.World;
+                Same(actual, expected[sample], "Recorded head pose changed at first frame or after a turn");
+                var item = DirectorCreationMath.HeldItemMatrix(new(2,4,-1), new(25,90,10), new(.5,.5,.5), new(.7,1.2,.9), new(.1,-.2,.3), new(10,20,30));
+                Same(item * actual, item * expected[sample], "Recorded attachment detached from its animated native bone");
+            }
+            var halfway = DirectorCreationEvaluator.Evaluate(project, 1d / 60).Objects[actor.Id];
+            if (!halfway.HasRecordedPose || Vector3.Distance(Vector3.TransformNormal(Vector3.UnitY, halfway.Bones[child.Id]),
+                Vector3.TransformNormal(Vector3.UnitY, DirectorCreationEvaluator.Evaluate(project, 0).Objects[actor.Id].Bones[child.Id])) > .3)
+                throw new Exception("Recorded Euler branch crossed through a flipped head between samples.");
+        }
+        Console.WriteLine("PASS native bone matrices, signed-scale pose round trips and both held-item attachment transforms");
+        Console.WriteLine("PASS native parent/child pose capture, head offsets, first frame, turn interpolation and held attachment chain survive recording serialization and clip evaluation (v0/v1)");
     }
 
     private static void CheckCreationTransformRows(object workspace)

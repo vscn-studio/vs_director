@@ -24,19 +24,22 @@ internal static partial class DirectorImGuiProbe
         CheckCreationExport(assembly);
         CheckCreationCalendar(assembly);
         CheckPerformanceEditing(assembly, api);
+        DirectorActorEquipmentChecks.Run();
+        CheckCreationWorldIsolation(assembly);
         string directory = Path.Combine(Path.GetTempPath(), "vsdirector-creation-probe-" + Guid.NewGuid().ToString("N"));
         var session = new DirectorCreationSession(new(directory));
         var part = new CreationPart { Name = "头部", To = new(16, 16, 16) };
         var model = new CreationModel { Name = "测试演员", Parts = [part] };
         var actor = new CreationSceneObject { Name = "演员一", ModelId = model.Id };
         var camera = new CreationSceneObject { Name = "拍摄相机", Kind = CreationObjectKind.Camera };
-        var project = new DirectorCreationProject { Name = "双演员动画", Models = [model], Objects = [actor, camera], CameraId = camera.Id };
+        var project = new DirectorCreationProject { WorldId = "probe-world", Name = "双演员动画", Models = [model], Objects = [actor, camera], CameraId = camera.Id };
         DirectorCreationEdits.SetKey(project, actor.Id, part.Id, CreationChannel.Rotation, 0, default);
         DirectorCreationEdits.SetKey(project, actor.Id, part.Id, CreationChannel.Rotation, 2, new(0, 60, 0));
         session.Open(project); session.SelectedObject = actor.Id;
         Type R(string name) => assembly.GetType(name, true)!;
         var runtime = RuntimeHelpers.GetUninitializedObject(R("VSDirector.Runtime.DirectorCreationRuntime"));
         var objectRenderer = RuntimeHelpers.GetUninitializedObject(R("VSDirector.Rendering.DirectorCreationRenderer"));
+        AccessTools.Field(runtime.GetType(), "api").SetValue(runtime, CreationScopeApi());
         AccessTools.Field(runtime.GetType(), "<Session>k__BackingField").SetValue(runtime, session);
         AccessTools.Field(runtime.GetType(), "<Renderer>k__BackingField").SetValue(runtime, objectRenderer);
         AccessTools.Field(runtime.GetType(), "<Status>k__BackingField").SetValue(runtime, "");
@@ -131,8 +134,8 @@ internal static partial class DirectorImGuiProbe
             {
                 ImGui.NewFrame(); ImGui.SetNextWindowPos(Vector2.Zero); ImGui.SetNextWindowSize(new(960, 500));
                 ImGui.Begin("creation-interaction", ImGuiWindowFlags.NoSavedSettings);
-                timelineOrigin = ImGui.GetCursorScreenPos() + new Vector2(0,ImGui.GetFrameHeightWithSpacing());
                 AccessTools.Method(workspace.GetType(), "DrawTimeline").Invoke(workspace, null);
+                timelineOrigin = (Vector2)AccessTools.Field(workspace.GetType(), "timelineHeaderPosition").GetValue(workspace)!;
                 var headerVertices = ImGui.GetWindowDrawList().VtxBuffer;
                 timelineHeader = Enumerable.Range(0, headerVertices.Size).Select(i => (headerVertices[i].pos, headerVertices[i].col)).ToList();
                 ImGui.BeginChild("timeline-rows");
@@ -452,6 +455,7 @@ internal static partial class DirectorImGuiProbe
         });
         var viewportApi = ProbeDispatchProxy.Create<ICoreClientAPI>((m, _) => m.Name == "get_Render" ? render : ProbeDispatchProxy.DefaultValue(m.ReturnType));
         var runtime = RuntimeHelpers.GetUninitializedObject(R("VSDirector.Runtime.DirectorCreationRuntime"));
+        AccessTools.Field(runtime.GetType(), "api").SetValue(runtime, CreationScopeApi());
         var renderer = RuntimeHelpers.GetUninitializedObject(R("VSDirector.Rendering.DirectorCreationRenderer"));
         AccessTools.Field(runtime.GetType(), "<Session>k__BackingField").SetValue(runtime, session);
         AccessTools.Field(runtime.GetType(), "<Renderer>k__BackingField").SetValue(runtime, renderer);
@@ -503,11 +507,17 @@ internal static partial class DirectorImGuiProbe
             foreach (string language in new[] { "zh-cn", "en" })
             {
                 LoadCreationProbeLanguage(language);
-                // Closing every creation panel must not carry over into a new/open project.
+                // Opening documents preserves panel preferences; the Window menu reopens them.
                 foreach (string field in new[] { "browser", "properties", "timeline" }) AccessTools.Field(workspace.GetType(), field).SetValue(workspace, false);
                 var camera = new CreationSceneObject { Name = "Camera", Kind = CreationObjectKind.Camera };
-                var project = new DirectorCreationProject { Name = "New project", Objects = [camera], CameraId = camera.Id };
+                var project = new DirectorCreationProject { WorldId = "probe-world", Name = "New project", Objects = [camera], CameraId = camera.Id };
                 session.Open(project);
+                Frame();
+                foreach (string field in new[] { "browser", "properties", "timeline" })
+                {
+                    if((bool)AccessTools.Field(workspace.GetType(),field).GetValue(workspace)!)throw new Exception("Opening a document reopened a closed panel: "+field);
+                    AccessTools.Field(workspace.GetType(),field).SetValue(workspace,true);
+                }
                 Frame(); Frame(true); Frame(true);
                 bool toolbarSurface = false;
                 var drawData = ImGui.GetDrawData();
@@ -551,6 +561,31 @@ internal static partial class DirectorImGuiProbe
             if (ImGui.GetWindowDockID() != propertiesDock) throw new Exception("Reopening View changed its dock");
             ImGui.End(); ImGui.Render();
             Console.WriteLine("PASS creation View shares the inspector dock and closes/reopens without changing replay layout");
+            uint toolsDock=(uint)AccessTools.Property(host.GetType(),"CreationToolsDockId").GetValue(host)!;
+            if(toolsDock==0||toolsDock==propertiesDock)throw new Exception("Tools must have an independent dock above Properties");
+            // Migrate the previously oversized split without resetting other docks.
+            Call(host,"SetNodeSize",toolsDock,new Vector2(280,260));
+            AccessTools.Property(host.GetType(),"MigrateCreationTools").SetValue(host,true);
+            Frame();Frame();Frame();
+            ImGui.NewFrame(); Call(host,"Draw",1f/60); ImGui.Begin("###vsdirector-creation-tools");
+            float compactHeight=ImGui.GetWindowSize().Y; ImGui.End(); ImGui.Render();
+            if(compactHeight>150 || compactHeight<40)throw new Exception("Tools migration did not fit its button rows: "+compactHeight);
+            AccessTools.Field(workspace.GetType(),"toolsPanel").SetValue(workspace,false);Frame();Frame();
+            AccessTools.Field(workspace.GetType(),"toolsPanel").SetValue(workspace,true);Frame();Frame();
+            if((uint)AccessTools.Property(host.GetType(),"CreationToolsDockId").GetValue(host)! !=toolsDock)throw new Exception("Tools reopen lost its dock");
+            // Simulate moving the native window into the left dock; ordinary frames must preserve it.
+            uint leftDock=(uint)AccessTools.Property(host.GetType(),"LeftDockId").GetValue(host)!;
+            Call(host,"DockWindow","###vsdirector-creation-tools",leftDock);
+            Call(host,"Finish",(uint)AccessTools.Field(host.GetType(),"creationDock").GetValue(host)!);Frame();Frame();
+            if((uint)AccessTools.Property(host.GetType(),"CreationToolsDockId").GetValue(host)! !=leftDock)throw new Exception("Moved Tools window was forced back to its default dock");
+            Call(host,"ResetLayout");Frame();Frame();
+            propertiesDock=(uint)AccessTools.Property(host.GetType(),"InspectorDockId").GetValue(host)!;
+            if((uint)AccessTools.Property(host.GetType(),"CreationToolsDockId").GetValue(host)! ==propertiesDock)throw new Exception("Reset did not restore the Tools split");
+            Call(workspace,"PersistEditorPreferences");
+            AccessTools.Field(workspace.GetType(),"toolsPanel").SetValue(workspace,false);
+            Call(workspace,"RestoreEditorPreferences");
+            if(!(bool)AccessTools.Field(workspace.GetType(),"toolsPanel").GetValue(workspace)!)throw new Exception("Tools preference failed to restore");
+            Console.WriteLine("PASS independent Tools dock closes/reopens, retains native moves and resets separately from replay; preferences restore");
             foreach (var entry in new[] { ("bonesPanel", "bones"), ("ikPanel", "ik"), ("actionsPanel", "actions") })
             {
                 AccessTools.Field(workspace.GetType(), entry.Item1).SetValue(workspace, false); Frame();
@@ -698,8 +733,68 @@ internal static partial class DirectorImGuiProbe
             if (linked == 0) throw new Exception("Creation shader link failed: " + GL.GetProgramInfoLog(program));
             if (GL.GetAttribLocation(program, "vertexPositionIn") != 0 || GL.GetAttribLocation(program, "uvIn") != 1)
                 throw new Exception("Creation shader attributes do not match engine mesh layout.");
+            CheckCreationGlowCoverage(program);
             Console.WriteLine("PASS creation GLSL 330 compile/link, mesh attribute bindings and GL state restoration");
         }
         finally { GL.DeleteProgram(program); GL.DeleteShader(vertex); GL.DeleteShader(fragment); }
+    }
+
+    private static void CheckCreationGlowCoverage(int program)
+    {
+        int previousFramebuffer = GL.GetInteger(GetPName.FramebufferBinding);
+        bool scissorEnabled = GL.IsEnabled(EnableCap.ScissorTest);
+        int[] viewport = new int[4]; GL.GetInteger(GetPName.Viewport, viewport);
+        int framebuffer = GL.GenFramebuffer(), vao = GL.GenVertexArray(), buffer = GL.GenBuffer();
+        int[] textures = [GL.GenTexture(), GL.GenTexture()];
+        try
+        {
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
+            for (int i = 0; i < textures.Length; i++)
+            {
+                GL.BindTexture(TextureTarget.Texture2D, textures[i]);
+                GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba32f, 16, 16, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+                GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0 + i, TextureTarget.Texture2D, textures[i], 0);
+            }
+            GL.DrawBuffers(2, new[] { DrawBuffersEnum.ColorAttachment0, DrawBuffersEnum.ColorAttachment1 });
+            if (GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != FramebufferErrorCode.FramebufferComplete)
+                throw new Exception("Creation glow probe framebuffer is incomplete.");
+            GL.Viewport(0, 0, 16, 16); GL.Disable(EnableCap.ScissorTest); GL.Disable(EnableCap.DepthTest); GL.Disable(EnableCap.CullFace);
+            GL.Enable(EnableCap.Blend); GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            GL.BindVertexArray(vao); GL.BindBuffer(BufferTarget.ArrayBuffer, buffer);
+            float[] vertices = [-1,-1,0, 3,-1,0, -1,3,0];
+            GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsageHint.StaticDraw);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0); GL.EnableVertexAttribArray(0);
+            GL.UseProgram(program);
+            float[] identity = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+            foreach (string name in new[] { "projectionMatrix", "viewMatrix", "modelMatrix" })
+                GL.UniformMatrix4(GL.GetUniformLocation(program, name), 1, false, identity);
+            GL.Uniform1(GL.GetUniformLocation(program, "textured"), 0);
+            GL.Uniform1(GL.GetUniformLocation(program, "surfaceShading"), 0);
+            GL.Uniform3(GL.GetUniformLocation(program, "worldLight"), .2f, .2f, .2f);
+            GL.Uniform3(GL.GetUniformLocation(program, "lightDirection"), 0f, 1f, 0f);
+            GL.Uniform1(GL.GetUniformLocation(program, "fogDensity"), 0f); GL.Uniform1(GL.GetUniformLocation(program, "fogMinimum"), 0f);
+            float[] pixel = new float[4];
+            foreach (float emission in new[] { 0f, .6f })
+            {
+                GL.ClearColor(1, 1, 1, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
+                GL.Uniform4(GL.GetUniformLocation(program, "tint"), 1f, 1f, 1f, 1f);
+                GL.Uniform1(GL.GetUniformLocation(program, "glow"), emission); GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
+                GL.ReadBuffer(ReadBufferMode.ColorAttachment1); GL.ReadPixels(8, 8, 1, 1, PixelFormat.Rgba, PixelType.Float, pixel);
+                if (Math.Abs(pixel[0] - emission) > .01 || Math.Abs(pixel[1]) > .01)
+                    throw new Exception("Actor retained underlying world bloom or lost explicit emission.");
+                if (emission == 0)
+                {
+                    GL.ReadBuffer(ReadBufferMode.ColorAttachment0); GL.ReadPixels(8, 8, 1, 1, PixelFormat.Rgba, PixelType.Float, pixel);
+                    if (Math.Abs(pixel[0] - .2) > .01) throw new Exception("Nonemissive actor ignores world lighting.");
+                }
+            }
+            Console.WriteLine("PASS real MRT framebuffer: nonemissive actors cover world bloom and respect darkness; explicit emission remains available");
+        }
+        finally
+        {
+            if (scissorEnabled) GL.Enable(EnableCap.ScissorTest); else GL.Disable(EnableCap.ScissorTest);
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, previousFramebuffer); GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+            GL.DeleteFramebuffer(framebuffer); GL.DeleteVertexArray(vao); GL.DeleteBuffer(buffer); foreach (int texture in textures) GL.DeleteTexture(texture);
+        }
     }
 }

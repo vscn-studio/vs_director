@@ -8,6 +8,13 @@ internal sealed partial class DirectorCreationWorkspace
 {
     private readonly HashSet<Guid> selectedTimelineKeys = new();
     private readonly Dictionary<Guid,double> keyDragTimes = new();
+    private void SelectTimelineTrack(CreationTrack track)
+    {
+        selectedTimelineKeys.Clear();
+        selectedTimelineKeys.UnionWith(track.Keys.Select(k=>k.Id));
+        keyId=track.Keys.FirstOrDefault()?.Id??Guid.Empty;
+        trackId=track.Id;clipId=Guid.Empty;selectionArea=SelectionArea.Timeline;
+    }
     private IEnumerable<(Guid Id,double Time)> TimelineKeys()
     {
         foreach(var track in EditTracks)foreach(var key in track.Keys)yield return(key.Id,key.Time);

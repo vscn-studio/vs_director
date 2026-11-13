@@ -8,6 +8,14 @@ public static class DirectorCreationTiming
     public const int FramesPerSecond = 30;
     public const double FrameDuration = 1d / FramesPerSecond;
 
+    // Poses, world changes and effects share this clock when a take is edited.
+    public static double ClipSourceTime(CreationClip clip, double sceneTime, double sourceDuration, bool sourceLoop = false)
+    {
+        double duration = Math.Max(FrameDuration, sourceDuration);
+        double source = clip.SourceStart + Math.Clamp(sceneTime - clip.Start, 0, clip.Duration) * clip.Speed;
+        return clip.Loop || sourceLoop ? source % duration : Math.Min(source, duration);
+    }
+
     public static double Snap(double seconds) => Math.Round(seconds * FramesPerSecond, MidpointRounding.AwayFromZero) / FramesPerSecond;
 
     public static double Step(double seconds, int direction) => direction > 0

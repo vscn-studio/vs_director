@@ -11,8 +11,7 @@ internal sealed partial class DirectorCreationWorkspace
     private string actionSearch = "";
     private CreationPoseSnapshot? copiedPose;
     private bool freePoseTransform;
-    private void StartScenePose(CreationSceneObject actor)
-    { Continue(()=> { Session.BeginScenePose(actor.Id); selectedObjects.Clear();selectedObjects.Add(actor.Id);bonesPanel=timeline=true;focusRigPanel="bones";modelContext="";showBones=false;freePoseTransform=false; }); }
+    private void StartScenePose(CreationSceneObject actor) => EnterBodySelection(actor);
     private CreationSceneObject? RigActor => SelectedObject is { ModelId: var model } selected && model != Guid.Empty ? selected
         : Project?.Objects.FirstOrDefault(o => o.IkChains.Any(c => c.Target == Session.SelectedObject || c.Pole == Session.SelectedObject));
     private bool IsIkControl(Guid id) => Project?.Objects.Any(o => o.IkChains.Any(c => c.Target == id || c.Pole == id)) == true;
@@ -60,6 +59,7 @@ internal sealed partial class DirectorCreationWorkspace
             if (Button(L("creation-copy-pose"))) copiedPose = Session.CapturePose();
             SameLineIfFits(L("creation-paste-pose")); ImGui.BeginDisabled(copiedPose is null || copiedPose.Bones.Keys.Any(id => model.Parts.All(p => p.Id != id)));
             if (Button(L("creation-paste-pose"))) Run(() => Session.ApplyPose(copiedPose!)); ImGui.EndDisabled();
+            SameLineIfFits(L("creation-bone-rest"));
             if (Button(L("creation-bone-rest"))) Run(Session.RestoreRestPose);
         }
         Checkbox(L("creation-pose-exact-parts"), ref exactPoseParts);
@@ -73,7 +73,7 @@ internal sealed partial class DirectorCreationWorkspace
                 if(depth>128)return;
                 foreach(var part in model.Parts.Where(p=>p.ParentId==parent))
                 {
-                    bool exposed=exactPoseParts||DirectorCreationPoseGeometry.PoseTarget(Project!,model,part.Id)==part.Id;
+                    bool exposed=exactPoseParts||PoseTarget(model,part.Id)==part.Id;
                     bool matches=part.Name.Contains(boneSearch,StringComparison.OrdinalIgnoreCase)||BoneName(model,part).Contains(boneSearch,StringComparison.OrdinalIgnoreCase);
                     if(!exposed || boneSearch.Length>0&&!matches){Parts(part.Id,depth+1);continue;}
                     if(boneSearch.Length>0)
@@ -92,23 +92,6 @@ internal sealed partial class DirectorCreationWorkspace
         if (Session.SelectedObject != actor.Id || model.Parts.Find(p => p.Id == Session.SelectedPart) is not { } bone)
         { Hint(L("creation-select-bone-first")); return; }
         ImGui.SeparatorText(BoneName(model,bone));
-        if(Session.PoseEditing && Header(L("creation-transform-options")))
-        {
-            foreach(var axis in new[]{6,0,1,2,-1})
-            {
-                string label=axis==6?L("creation-screen-rotate"):axis<0?L("creation-all-axes"):"XYZ"[axis].ToString();
-                if(ImGui.RadioButton(label,poseRotationAxis==axis)) { poseRotationAxis=axis;operation=ImGuizmoNET.OPERATION.ROTATE;posePull=false; }
-                if(axis!=-1) SameLineIfFits(axis==2?L("creation-all-axes"):"XYZ");
-            }
-        }
-        ImGui.SetNextItemWidth(-1);
-        if(ImGui.BeginCombo("##pose-tool",L(posePull?"creation-pull":operation==ImGuizmoNET.OPERATION.ROTATE?"creation-rotation":"creation-move")))
-        {
-            if(ImGui.Selectable(L("creation-rotation"))){operation=ImGuizmoNET.OPERATION.ROTATE;posePull=false;}
-            if(Session.PoseEditing && ImGui.Selectable(L("creation-pull"))){operation=ImGuizmoNET.OPERATION.TRANSLATE;posePull=true;}
-            if(freePoseTransform&&ImGui.Selectable(L("creation-move"))){operation=ImGuizmoNET.OPERATION.TRANSLATE;posePull=false;}
-            ImGui.EndCombo();
-        }
         var chain = actor.IkChains.FirstOrDefault(c => c.Enabled && (c.Upper == bone.Id || c.Lower == bone.Id));
         if (chain is not null && !Session.PoseEditing)
         {
@@ -119,7 +102,8 @@ internal sealed partial class DirectorCreationWorkspace
         DrawRigTransform(actor, bone.Id);
         if (Session.PoseEditing && Header(L("creation-ik-advanced")))
         {
-            if(Checkbox(L("creation-free-pose-transform"),ref freePoseTransform) && !freePoseTransform) { operation=ImGuizmoNET.OPERATION.ROTATE;posePull=false; }
+            if(Checkbox(L("creation-free-pose-transform"),ref freePoseTransform) && !freePoseTransform) ChooseTool(CreationTool.Rotate);
+            Checkbox(L("creation-extended-chain"),ref extendedPullChain);
             bool seam=model.RigEditing.Seams.Any(s=>s.Child==bone.Id);
             if(Checkbox(L("creation-joint-seam"),ref seam)) Run(()=>
             {
@@ -226,7 +210,9 @@ internal sealed partial class DirectorCreationWorkspace
             var state = DirectorCreationEvaluator.Evaluate(Project,Session.Time,editingAction:source,actionActor:actor.Id,actionTime:time).Objects[actor.Id];
             DirectorCreationSession.WritePose(copy,new() { Bones = model.Parts.ToDictionary(p=>p.Id,p=>(state.Pose.GetValueOrDefault(p.Id)??new()) with {}), Hidden = new(state.ExplicitHiddenParts) },time);
         }
-        Session.Edit(L("creation-pose-edit-copy"), p=>p.Animations.Add(copy)); Session.EnterAnimation(copy.Id,actor.Id); bonesPanel=true; focusRigPanel="bones";
+        RememberSceneContext();
+        Session.Edit(L("creation-pose-edit-copy"), p=>p.Animations.Add(copy)); Session.EnterAnimation(copy.Id,actor.Id);wholeObjectSelection=false;RestoreTimelineView();
+        if(bonesPanel)focusRigPanel="bones";
     }
     private void DrawActionsPanel()
     {

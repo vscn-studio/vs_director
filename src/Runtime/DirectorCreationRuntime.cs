@@ -21,7 +21,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
     internal DirectorCreationSession Session { get; }
     internal DirectorCreationRenderer Renderer { get; }
     internal DirectorCreationExtensions Extensions { get; } = new();
-    internal bool Enabled { get => Renderer.Visible; set { if (!value && Exporting) CancelExport(); if (!value) FinishPerformanceBeforeTransition(); Renderer.Visible = value; if (!value) { Session.Play(false); RestoreEntities(); RestoreVisualEnvironment(); } } }
+    internal bool Enabled { get => Renderer.Visible; set { if (!value && Exporting) CancelExport(); if (!value) FinishPerformanceBeforeTransition(); Renderer.Visible = value; if (!value) { Session.Play(false); RestoreEntities(); RestoreVisualEnvironment(); StopCreationWorld(); } } }
     internal bool Preview { get; set; }
     internal bool Guides { get; set; } = true;
     internal int PreviewTexture { get; private set; }
@@ -44,7 +44,6 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
     private readonly Dictionary<Guid, ILoadedSound> sounds = new();
     private readonly HashSet<AssetLocation> soundAssets = new();
     private double previousSoundTime = -1;
-    private double previousParticleTime = -1;
     private bool disposed;
     internal DirectorCreationRuntime(ICoreClientAPI api, VSDirectorModSystem owner)
     {
@@ -66,15 +65,38 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         var camera = new CreationSceneObject { Name = L("creation-camera"), Kind = CreationObjectKind.Camera,
             Transform = new() { Position = new(pose.X - project.Origin.X, pose.Y - project.Origin.Y, pose.Z - project.Origin.Z), Rotation = DirectorCreationMath.CameraRotationFromNative(pose) }, Fov = pose.Fov };
         project.Objects.Add(camera); project.CameraId = camera.Id;
+        StopCreationWorld();
         Session.Open(project); Renderer.ReloadTextures(); Session.SelectedObject = camera.Id; Session.Save(); Enabled = true;
         Status = L("creation-create-an-actor-or-import-a-shape-model-then-add-keyframes");
     }
     internal void Open(Guid id, bool recovery = false)
     {
+        var project = Session.Store.Load(id, recovery);
+        RequireProjectWorld(project);
         FinishPerformanceBeforeTransition();
         if (Exporting) throw new InvalidOperationException(L("creation-finish-or-cancel-the-export-first"));
-        StopSounds(); Session.Open(Session.Store.Load(id, recovery)); Renderer.ReloadTextures(); Enabled = true;
+        ClosePlayerInventory(); StopSounds(); StopCreationWorld(); Session.Open(project); Renderer.ReloadTextures(); Enabled = true;
         if (recovery) Session.Changed();
+    }
+    internal bool MatchesProjectWorld(string world, int dimension)
+        => api.World.Player?.Entity is { } player
+            && DirectorCreationWorldScope.Matches(world, dimension, api.World.SavegameIdentifier, player.Pos.Dimension);
+    internal bool ProjectWorldMatches => Session.Project is not { } p || MatchesProjectWorld(p.WorldId, p.Dimension);
+    private void RequireProjectWorld(DirectorCreationProject project)
+    {
+        if (!MatchesProjectWorld(project.WorldId, project.Dimension))
+            throw new InvalidOperationException(L("creation-project-world-mismatch"));
+    }
+    internal void DuplicateProject(Guid id, bool toCurrentWorld = false, bool recovery = false)
+    {
+        if (Exporting || PerformanceActive) throw new InvalidOperationException(L("creation-recording-unavailable"));
+        if (Session.Project?.Id == id && Session.Dirty && !recovery) Session.Save();
+        var source = Session.Store.Load(id, recovery);
+        if (!toCurrentWorld) RequireProjectWorld(source);
+        var player = api.World.Player?.Entity ?? throw new InvalidOperationException(L("creation-the-current-world-view-is-unavailable"));
+        var copy = toCurrentWorld ? Session.Store.CopyToWorld(source, api.World.SavegameIdentifier, player.Pos.Dimension)
+            : Session.Store.Duplicate(source);
+        Open(copy.Id);
     }
     internal CreationVector CursorPosition()
     {
@@ -87,9 +109,10 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         if (Session.Project is not { } p || !owner.TryCaptureCreationView(out var camera)) return;
         Session.Edit(L("creation-capture-camera"), _ => { var tr = obj.Transform with { Position = new(camera.X - p.Origin.X, camera.Y - p.Origin.Y, camera.Z - p.Origin.Z), Rotation = DirectorCreationMath.CameraRotationFromNative(camera) }; Session.SetTransform(obj.Id, Guid.Empty, tr); obj.Fov = camera.Fov; });
     }
-    internal void Seek(double time)
+    internal void Seek(double time, bool advancing = false)
     {
         Session.Seek(time);
+        if (!PerformanceActive && Enabled) UpdateCreationWorld(advancing);
         if (fileSink is not null) { exportGate.BeginSeek(); exportWaitStarted = Environment.TickCount64; }
         if (!PerformanceActive && Session.EditingAnimation is null && Session.Project is { BackgroundReplayId: var id } p && id != Guid.Empty)
         {
@@ -104,10 +127,21 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         {
             if (finishing is { IsCompleted: true }) finishing = null;
             if (!Enabled) return;
+            if (!ProjectWorldMatches)
+            {
+                ClosePlayerInventory(); Session.Play(false);
+                if (Exporting) CancelExport();
+                FinishPerformanceBeforeTransition(); StopSounds(); StopCreationWorld();
+                RestoreEntities(); RestoreVisualEnvironment();
+                Status = L("creation-project-world-mismatch");
+                return;
+            }
             UpdateVisualEnvironment();
             TickPerformance(delta);
             SyncBackgroundSelection();
             TickPerformanceBackground();
+            UpdateCreationWorld(Session.Playing && Session.EditingAnimation is null
+                && fileSink is null && pendingExport is null);
             TickExportPreparation();
             if (fileSink is not null)
             {
@@ -117,7 +151,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
                 {
                     frameSubmitted = false; exportFrame++;
                     if (exportFrame >= Math.Ceiling(project.Duration * project.Output.Fps)) stopRequested = true;
-                    else Seek(exportFrame / (double)project.Output.Fps);
+                    else Seek(exportFrame / (double)project.Output.Fps, advancing: true);
                 }
                 if (stopRequested) FinishExport();
             }
@@ -126,13 +160,13 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
                 if (performanceRunning && DirectorReplayRuntime.Manager is { } recorder)
                 {
                     Session.AdvancePerformance(performanceStart + recorder.LiveActionRecordingSeconds);
-                    CapturePerformanceBones();
                     if (Session.Time >= 86400) StopPerformance();
                 }
                 else
                 {
                     bool advancing = Session.Playing;
-                    Session.Tick(delta);
+                    if (CreationWorldReady) Session.Tick(delta);
+                    UpdateCreationWorld(advancing && Session.EditingAnimation is null);
                     if (!PerformanceActive && Session.EditingAnimation is null && advancing && project.BackgroundReplayId == owner.ActiveReplayId && project.BackgroundReplayId != Guid.Empty)
                         owner.SeekCreationBackground(BackgroundTime(Session.Time), advancing: true);
                 }
@@ -180,14 +214,19 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         if (fileSink is null || frameSubmitted || stopRequested) return;
         bool backgroundReady = Session.Project is not { BackgroundReplayId: var background } || background == Guid.Empty
             || (background == owner.ActiveReplayId && owner.CreationBackgroundReady);
+        backgroundReady &= CreationWorldReady;
         if (exportGate.Next(backgroundReady) != DirectorReplayExportFrameAction.Capture) return;
         long before = fileSink.Statistics.SubmittedReadbacks;
         fileSink.OnFrame(frame);
         if (fileSink.Statistics.SubmittedReadbacks > before)
         {
             frameSubmitted = true;
-            if (replayAudioPlan is not null && Session.Project is { } p && Session.Frame is { } f && DirectorCreationEvaluator.Camera(p, f) is { } camera)
-                replayAudioFrames.Add(new(BackgroundTime(exportFrame / (double)p.Output.Fps), camera));
+            if (Session.Project is { } p && Session.Frame is { } f && DirectorCreationEvaluator.Camera(p, f) is { } camera)
+            {
+                if (replayAudioPlan is not null)
+                    replayAudioFrames.Add(new(BackgroundTime(exportFrame / (double)p.Output.Fps), camera));
+                CaptureCreationWorldAudio(camera);
+            }
         }
     }
     internal void Screenshot(string path) { screenshot = Path.GetFullPath(path); Directory.CreateDirectory(Path.GetDirectoryName(screenshot)!); UpdateView(); }
@@ -206,6 +245,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
             Encoder = Enum.TryParse<DirectorOffscreenVideoEncoder>(p.Output.Encoder, out var encoder) ? encoder : DirectorOffscreenVideoEncoder.Auto,
             FfmpegPath = ffmpeg, RequireExactFrames = true });
         replayAudioPlan = null; replayAudioFrames = new();
+        creationAudio.Clear();
         if (p.Output.SceneAudio && p.BackgroundReplayId != Guid.Empty && p.BackgroundReplayId == owner.ActiveReplayId && owner.ActiveReplayDocument is { } replayDocument)
         {
             replayAudioPlan = DirectorReplayAudioExporter.Prepare((ClientMain)api.World, replayDocument, api.World.Player?.PlayerUID ?? string.Empty);
@@ -224,9 +264,12 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
         if (!result.Success || !complete) { Status = complete ? result.Error : L("creation-export-cancelled-the-partial-output-is-kept"); return; }
         var frozen = project.Clone(); string path = videoPath; string ffmpeg = owner.Config.FfmpegPath;
         var audioPlan = replayAudioPlan; var audioFrames = replayAudioFrames.ToArray();
+        var creationAudioTracks = SnapshotCreationWorldAudio(exportFrame);
+        creationAudio.Clear();
         var cancellation = exportCancellation?.Token ?? CancellationToken.None;
         finishing = Task.Run(() =>
         {
+            var recordedWaves = new List<string>();
             try
             {
                 bool baseAudio = false;
@@ -237,16 +280,39 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
                     if (!replayAudio.Success) throw new IOException(replayAudio.Error);
                     baseAudio = replayAudio.Success && replayAudio.HasAudio;
                 }
-                MixAudio(frozen, path, DirectorFfmpegLocator.ResolveRequired(ffmpeg), baseAudio, cancellation); Status = L("creation-video-saved") + path;
+                foreach (var track in creationAudioTracks)
+                {
+                    if (!track.Plan.HasPlayableEvents)
+                    {
+                        if (track.Plan.MissingAssets > 0)
+                            throw new IOException("Recorded performance sound assets could not be decoded.");
+                        continue;
+                    }
+                    string wave = path + ".creation-audio-" + Guid.NewGuid().ToString("N") + ".wav";
+                    recordedWaves.Add(wave);
+                    DirectorReplayAudioExporter.RenderCreationWave(track.Plan, track.Frames,
+                        frozen.Output.Fps, wave, cancellation);
+                }
+                MixAudio(frozen, path, DirectorFfmpegLocator.ResolveRequired(ffmpeg), baseAudio, cancellation, recordedWaves);
+                Status = L("creation-video-saved") + path;
             }
             catch (OperationCanceledException) { Status = L("creation-export-cancelled-328"); }
             catch (Exception e) { Status = L("creation-video-saved-but-audio-mixing-failed") + Message(e.Message); }
+            finally
+            {
+                foreach (string wave in recordedWaves)
+                    try { File.Delete(wave); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    { api.Logger.Warning("VS Director: temporary creation audio cleanup failed: {0}", e.Message); }
+            }
         });
     }
-    private void MixAudio(DirectorCreationProject project, string path, string ffmpeg, bool baseAudio, CancellationToken cancellation)
+    private void MixAudio(DirectorCreationProject project, string path, string ffmpeg, bool baseAudio, CancellationToken cancellation,
+        IReadOnlyList<string>? recordedWaves = null)
     {
+        recordedWaves ??= Array.Empty<string>();
         var clips = project.Clips.Where(c => c.Enabled && c.AudioAssetId != Guid.Empty && c.Start < project.Duration).ToArray();
-        if (clips.Length == 0) return;
+        if (clips.Length == 0 && recordedWaves.Count == 0) return;
         string output = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + ".audio.mp4");
         var info = new ProcessStartInfo(ffmpeg) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
         void A(params string[] values) { foreach (var v in values) info.ArgumentList.Add(v); }
@@ -258,6 +324,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
             if (clip.Loop) A("-stream_loop", "-1");
             A("-i", Session.Store.AssetPath(project.Id, asset.Source));
         }
+        foreach (string wave in recordedWaves) A("-i", wave);
         var filters = new List<string>();
         if (baseAudio) filters.Add("[0:a]volume=1[base]");
         for (int i = 0; i < clips.Length; i++)
@@ -268,8 +335,11 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
                 + (c.FadeOut > 0 ? $",afade=t=out:st={N(Math.Max(0,c.Duration-c.FadeOut))}:d={N(c.FadeOut)}" : "");
             filters.Add($"[{i + 1}:a]atrim=start={N(c.SourceStart)}:duration={N(c.Duration * c.Speed)},asetpts=PTS-STARTPTS,{string.Join(',', tempo)},volume={N(c.Gain)}dB{fades},adelay={N(c.Start*1000)}:all=1[a{i}]");
         }
-        string inputs = (baseAudio ? "[base]" : "") + string.Concat(Enumerable.Range(0, clips.Length).Select(i => $"[a{i}]"));
-        filters.Add(inputs + $"amix=inputs={clips.Length + (baseAudio ? 1 : 0)}:normalize=0,apad,atrim=duration={N(project.Duration)}[mix]");
+        foreach (int index in Enumerable.Range(0, recordedWaves.Count))
+            filters.Add($"[{clips.Length + index + 1}:a]anull[r{index}]");
+        string inputs = (baseAudio ? "[base]" : "") + string.Concat(Enumerable.Range(0, clips.Length).Select(i => $"[a{i}]"))
+            + string.Concat(Enumerable.Range(0, recordedWaves.Count).Select(i => $"[r{i}]"));
+        filters.Add(inputs + $"amix=inputs={clips.Length + recordedWaves.Count + (baseAudio ? 1 : 0)}:normalize=0,apad,atrim=duration={N(project.Duration)}[mix]");
         A("-filter_complex", string.Join(';', filters), "-map", "0:v:0", "-map", "[mix]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", N(project.Duration), output);
         using var process = Process.Start(info) ?? throw new IOException(L("creation-unable-to-start-ffmpeg"));
         using var registration = cancellation.Register(() => { try { process.Kill(true); } catch { } });
@@ -306,6 +376,7 @@ internal sealed partial class DirectorCreationRuntime : IDirectorOffscreenFrameS
     internal void RestoreAppearance() { RestoreEntities(); if (Session.Project is not null) Session.Edit(L("creation-restore-appearance"), p => { foreach (var o in p.Objects) o.ReplacePlayerUid = ""; }); }
     internal void Suspend(bool force = false)
     {
+        ClosePlayerInventory();
         FinishPerformanceBeforeTransition();
         try { if (Session.Dirty) Session.Save(); }
         catch (Exception e) when (force) { api.Logger.Error("VS Director: could not save creation project during shutdown: {0}", e.Message); }

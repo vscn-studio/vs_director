@@ -8,6 +8,12 @@ internal sealed partial class DirectorImGuiWorkspace
 {
     private uint creationDock, creationLeft, creationRight, creationBottom, creationPreview;
     private bool resetCreationLayout;
+    internal uint CreationToolsDockId { get; private set; }
+    internal bool MigrateCreationTools { get; set; }
+    private bool fitCreationTools;
+    private float creationToolsHeight;
+    internal void MeasureCreationToolsHeight(float height)
+    { if (fitCreationTools) creationToolsHeight = height; }
     internal float CreationAspect { get; set; } = 16f / 9;
     internal void TrackCreationDock(string title)
     {
@@ -17,12 +23,19 @@ internal sealed partial class DirectorImGuiWorkspace
         else if (title.EndsWith("###vsdirector-creation-properties", StringComparison.Ordinal)) creationRight = InspectorDockId = id;
         else if (title.EndsWith("###vsdirector-creation-timeline", StringComparison.Ordinal)) creationBottom = TimelineDockId = id;
         else if (title.EndsWith("###vsdirector-creation-preview", StringComparison.Ordinal)) creationPreview = id;
+        else if (title.EndsWith("###vsdirector-creation-tools", StringComparison.Ordinal)) CreationToolsDockId = id;
     }
     private CallbackGUIStatus DrawCreationHost()
     {
         using var font = DirectorImGuiRuntime.UseFont(dialog: false);
         ImGui.GetIO().ConfigFlags |= ImGuiConfigFlags.DockingEnable;
         Vector2 frame = ImGui.GetIO().DisplaySize;
+        if (VSDirector.Runtime.DirectorCreationRuntime.Current?.NativeAppearanceEditorOpen == true)
+        {
+            if (creationDock != 0) ImGui.DockSpace(creationDock, Vector2.Zero, ImGuiDockNodeFlags.KeepAliveOnly);
+            previewPosition = Vector2.Zero; previewSize = frame;
+            return CallbackGUIStatus.DontGrabMouse;
+        }
         if (VSDirector.Runtime.DirectorCreationRuntime.Current is { ControllingActor: true } recording)
         {
             if (creationDock != 0) ImGui.DockSpace(creationDock, Vector2.Zero, ImGuiDockNodeFlags.KeepAliveOnly);
@@ -55,6 +68,9 @@ internal sealed partial class DirectorImGuiWorkspace
                 SplitNode(creationDock, ImGuiDir.Down, .30f, out creationBottom, out uint top);
                 SplitNode(top, ImGuiDir.Left, .23f, out creationLeft, out uint center);
                 SplitNode(center, ImGuiDir.Right, .30f, out creationRight, out _);
+                float toolsRatio=Math.Clamp(72*DirectorImGuiTheme.Scale/Math.Max(1,size.Y*.7f),.05f,.38f);
+                SplitNode(creationRight, ImGuiDir.Up, toolsRatio, out uint toolsDock, out creationRight);
+                CreationToolsDockId=toolsDock;DockWindow("###vsdirector-creation-tools",toolsDock);
                 DockWindow("###vsdirector-creation-browser", creationLeft);
                 DockWindow("###vsdirector-creation-properties", creationRight);
                 DockWindow("###vsdirector-creation-bones", creationRight);
@@ -62,7 +78,37 @@ internal sealed partial class DirectorImGuiWorkspace
                 DockWindow("###vsdirector-creation-actions", creationRight);
                 DockWindow("###vsdirector-creation-view", creationRight);
                 DockWindow("###vsdirector-creation-timeline", creationBottom);
-                creationPreview = 0; resetCreationLayout = false; Finish(creationDock);
+                creationPreview = 0; resetCreationLayout = false; MigrateCreationTools=false;
+                fitCreationTools=true; creationToolsHeight=0; Finish(creationDock);
+            }
+            if(MigrateCreationTools && CreationToolsDockId!=0 && GetNode(CreationToolsDockId)!=0)
+            {
+                fitCreationTools=true; creationToolsHeight=0; MigrateCreationTools=false;
+            }
+            if(MigrateCreationTools && creationRight!=0 && GetNode(creationRight)!=0)
+            {
+                NodeRect(out var rightRect,GetNode(creationRight));
+                float toolsRatio=Math.Clamp(72*DirectorImGuiTheme.Scale/Math.Max(1,rightRect.Max.Y-rightRect.Min.Y),.05f,.38f);
+                SplitNode(creationRight,ImGuiDir.Up,toolsRatio,out uint toolsDock,out creationRight);
+                CreationToolsDockId=toolsDock;DockWindow("###vsdirector-creation-tools",toolsDock);
+                Finish(creationDock);MigrateCreationTools=false;fitCreationTools=true;creationToolsHeight=0;
+            }
+            if (fitCreationTools && creationToolsHeight > 0 && CreationToolsDockId != creationRight
+                && GetNode(CreationToolsDockId) is var toolsNode && toolsNode != 0
+                && GetNode(creationRight) is var propertiesNode && propertiesNode != 0)
+            {
+                NodeRect(out var toolsRect, toolsNode); NodeRect(out var propertiesRect, propertiesNode);
+                // Only fit the default upper-right split; preserve windows moved by the user.
+                if (Math.Abs(toolsRect.Min.X-propertiesRect.Min.X)<1 && Math.Abs(toolsRect.Max.X-propertiesRect.Max.X)<1
+                    && Math.Abs(toolsRect.Max.Y-propertiesRect.Min.Y)<12*DirectorImGuiTheme.Scale)
+                {
+                    float total = toolsRect.Max.Y-toolsRect.Min.Y + propertiesRect.Max.Y-propertiesRect.Min.Y;
+                    float height = Math.Clamp(creationToolsHeight, 48*DirectorImGuiTheme.Scale, Math.Max(48*DirectorImGuiTheme.Scale,total*.45f));
+                    SetNodeSize(CreationToolsDockId,new(toolsRect.Max.X-toolsRect.Min.X,height));
+                    SetNodeSize(creationRight,new(propertiesRect.Max.X-propertiesRect.Min.X,total-height));
+                    Finish(creationDock);
+                }
+                fitCreationTools=false;
             }
             LeftDockId = creationLeft; InspectorDockId = creationRight; TimelineDockId = creationBottom;
             ImGui.SetCursorScreenPos(pos);

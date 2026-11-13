@@ -78,6 +78,21 @@ internal static partial class DirectorImGuiProbe
                 session.Seek(6);Press(ImGuiKey.V);
                 Require(track.Keys.Count==5&&track.Keys.Any(k=>k.Time==6)&&track.Keys.Any(k=>k.Time==7),"Group paste lost relative key spacing");
                 session.Undo();Require(session.Project!.Tracks.Last().Keys.Count==3,"Group paste was not one undo");
+                track=session.Project!.Tracks.Last();
+                Call("SelectTimelineTrack",track);
+                Require(((HashSet<Guid>)Get("selectedTimelineKeys")).SetEquals(track.Keys.Select(k=>k.Id)),
+                    "Track selection omitted keys");
+                Press(ImGuiKey.X);
+                Require(session.Project.Tracks.Last().Keys.Count==0 && session.Project.Objects.Count==1,
+                    "Cut did not remove the selected keys or removed the actor");
+                session.Undo();track=session.Project!.Tracks.Last();
+                Press(ImGuiKey.A);
+                Require(((HashSet<Guid>)Get("selectedTimelineKeys")).Contains(track.Keys[0].Id),
+                    "Timeline Ctrl+A did not select its keys");
+                session.Seek(3);Press(ImGuiKey.LeftArrow);
+                Require(Math.Abs(session.EditTime-2)<.00001,"Previous-key navigation missed the prior key");
+                Press(ImGuiKey.RightArrow);
+                Require(Math.Abs(session.EditTime-4)<.00001,"Next-key navigation missed the next key");
             }
             finally
             {

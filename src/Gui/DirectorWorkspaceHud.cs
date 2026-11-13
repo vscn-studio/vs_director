@@ -2038,6 +2038,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override void OnKeyDown(KeyEvent args)
     {
+        // Native inventory and character dialogs own keyboard input while open,
+        // including their search fields and Escape handling.
+        if (creationWorkspace?.Active == true && owner.Creation.NativeAppearanceEditorOpen) return;
         if (creationWorkspace?.Active == true) { if (args.KeyCode == (int)GlKeys.Escape) { creationWorkspace.RequestEscape(); args.Handled = true; } else args.Handled = !owner.Creation.ControllingActor; return; }
         if (!args.Handled && args.KeyCode == (int)GlKeys.Escape)
         {

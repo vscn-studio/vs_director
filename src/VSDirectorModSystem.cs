@@ -1122,7 +1122,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
     /// <summary>Whether replay recording currently accepts voice frames.</summary>
     public bool IsReplayVoiceCaptureActive
         => voiceApi.IsCaptureEnabled
-            && replay?.IsVoiceRecording == true;
+            && DirectorReplayRuntime.Manager?.IsVoiceRecording == true;
 
     /// <summary>Gets the active live offscreen recording camera used for proximity-audio routing.</summary>
     public bool TryGetActiveVoiceListener(out DirectorVoicePosition position)
@@ -1170,7 +1170,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         out int radiusChunks)
     {
         if (IsReplayVoiceCaptureActive
-            && replay?.TryGetVoiceCaptureRegion(out center, out radiusChunks) == true)
+            && DirectorReplayRuntime.Manager?.TryGetVoiceCaptureRegion(out center, out radiusChunks) == true)
         {
             return true;
         }
@@ -1390,7 +1390,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
             () => config,
             () => capi is not null && !disposed,
             ConsumeVoiceFrame,
-            () => replay?.IsVoiceRecording == true);
+            () => DirectorReplayRuntime.Manager?.IsVoiceRecording == true);
         replay.ActionDecoratorsActive = HasActiveReplayActionDecoration;
         replay.RequiresFullActorSampling = RequiresFullReplayActorSampling;
         replay.RequiresActorPoseSampling = RequiresReplayCameraActorPoseSampling;
@@ -11747,6 +11747,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
     {
         DirectorReplayManager? manager = replay;
         string rawStatus = manager?.ExportStatus ?? "idle";
+        if (rawStatus == "error" && !string.IsNullOrWhiteSpace(manager?.ExportError))
+            return ReplayErrorText(manager.ExportError, string.Empty);
         string localizedStatus = Lang.Get("vsdirector:replay-export-state-" + rawStatus);
         string currentName = string.IsNullOrWhiteSpace(manager?.ExportCurrentTrackName)
             ? Lang.Get("vsdirector:inactive")
@@ -14192,7 +14194,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         MonitorOffscreenCapture();
         UpdateVanillaActionLibrary();
         UpdateLiveActionWorkflow();
-        replay?.OnGameTick(deltaTime);
+        DirectorReplayRuntime.Manager?.OnGameTick(deltaTime);
         RestoreWorkspaceAfterReplayExport();
         UpdateReplayTimelinePathFollow();
         UpdatePendingWorkflowReplayRecording();
@@ -14208,13 +14210,14 @@ public sealed partial class VSDirectorModSystem : ModSystem
         }
         PendingRemoteFollow? remoteFollow = pendingRemoteFollow;
         PendingRemoteLiveOffscreen? remoteOffscreen = pendingRemoteLiveOffscreen;
-        bool replayIsActive = replay?.IsLoading == true || replay?.IsPlaying == true;
+        DirectorReplayManager? sceneReplay = DirectorReplayRuntime.Manager;
+        bool replayIsActive = sceneReplay?.IsLoading == true || sceneReplay?.IsPlaying == true;
         bool replayOwnsRemoteChunkWindow = replayIsActive
             && remoteFollow is null
             && remoteOffscreen is null;
         int? replayAnchorRadiusOverride = replayOwnsRemoteChunkWindow ? 0 : null;
         CameraPreset? cameraAnchor = controller?.IsActive == true ? controller.CurrentPose : null;
-        CameraPreset? replayAnchor = replay?.TryGetPlaybackAnchorPose(out CameraPreset replayPose) == true
+        CameraPreset? replayAnchor = sceneReplay?.TryGetPlaybackAnchorPose(out CameraPreset replayPose) == true
             ? replayPose
             : null;
         CameraPreset? liveOffscreenAnchor = liveOffscreenSession?.CurrentPose is
@@ -14257,7 +14260,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         {
             chunkPreloadClient?.Stop();
         }
-        else if (replay?.TryGetChunkPreloadPlan(out Guid replayId, out DirectorReplayPreloadPlan preloadPlan) == true)
+        else if (sceneReplay?.TryGetChunkPreloadPlan(out Guid replayId, out DirectorReplayPreloadPlan preloadPlan) == true)
         {
             chunkPreloadClient?.Update(replayId, preloadPlan);
         }
@@ -14298,7 +14301,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
     {
         if (replayEnabled)
         {
-            replay?.CaptureVoiceFrame(frame);
+            DirectorReplayRuntime.Manager?.CaptureVoiceFrame(frame);
         }
         if (offscreenEnabled)
         {

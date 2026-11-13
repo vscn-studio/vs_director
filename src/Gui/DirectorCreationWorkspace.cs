@@ -20,7 +20,7 @@ internal sealed partial class DirectorCreationWorkspace
     private DirectorCreationProject? Project => Session.Project;
     internal bool Active { get; private set; }
     private bool browser = true, properties = true, timeline = true, view = true;
-    private bool bonesPanel = true, ikPanel = false, actionsPanel = true;
+    private bool bonesPanel, ikPanel, actionsPanel;
     private string focusRigPanel = "";
     private string requestedMenu = "", search = "", name = L("creation-new-project"), path = "", modal = "", modalRequest = "", error = "";
     private string modelContext = "";
@@ -33,8 +33,8 @@ internal sealed partial class DirectorCreationWorkspace
     private long displayedGeneration;
     private bool revealPanels;
     internal DirectorCreationWorkspace(ICoreClientAPI api, VSDirectorModSystem owner, DirectorImGuiWorkspace host)
-    { this.api = api; this.owner = owner; this.host = host; try { editorPreferences=api.LoadModConfig<EditorPreferences>("vsdirector-creation-editor.json")??new(); } catch { editorPreferences=new(); } }
-    internal void Menu(string menu) { Enter(); requestedMenu = menu; browser = properties = timeline = true; }
+    { this.api = api; this.owner = owner; this.host = host; try { editorPreferences=api.LoadModConfig<EditorPreferences>("vsdirector-creation-editor.json")??new(); } catch { editorPreferences=new(); } RestoreEditorPreferences(); }
+    internal void Menu(string menu) { Enter(); requestedMenu = menu; }
     internal void Suspend() { if (Active) { Runtime.Suspend(force: true); owner.LeaveCreationMode(); Active = false; host.SetCreationMode(false); } host.CreationPreviewVisible = false; }
     internal void Draw()
     {
@@ -61,6 +61,19 @@ internal sealed partial class DirectorCreationWorkspace
             if (browser) Panel(L("creation-projects") + "###vsdirector-creation-browser", ref browser, host.LeftDockId, DrawProjects);
             return;
         }
+        if (!Runtime.ProjectWorldMatches)
+        {
+            // A retained document must not expose editing tools after a world or
+            // dimension change. Keep the library available even if its panel was closed.
+            bool libraryOpen = true;
+            Panel(L("creation-projects") + "###vsdirector-creation-browser", ref libraryOpen, host.LeftDockId, () =>
+            {
+                ImGui.TextWrapped(L("creation-project-world-mismatch"));
+                DrawProjects();
+            });
+            host.CreationPreviewVisible = false;
+            return;
+        }
         if (displayedProject != Project.Id || displayedGeneration != Session.DocumentGeneration)
         {
             if(activeViewKey is not null)SaveTimelineView();
@@ -69,14 +82,16 @@ internal sealed partial class DirectorCreationWorkspace
             draggingPose = poseContextTime = null; copiedPose = null; selectedObjects.Clear();
             scenePoseDrag = scenePoseOwner = contextScenePose = Guid.Empty; handleAxis = -1;
             draggedKey = draggedClip = Guid.Empty;
-            browser = properties = timeline = revealPanels = true;
+            revealPanels = true; wholeObjectSelection=true;
             modelContext = ""; timelineZoom = 1; timelineStart = 0; timelineEditor = false;
             clipId = keyId = trackId = poseEditorActor = editingSourceClip = Guid.Empty; actionPoseEditorTime=null;
             if (SelectedObject is null) Session.SelectedObject = Project.CameraId;
+            RestoreTool(false);
             Session.AutoKey=editorPreferences.AutoKey; RestoreTimelineView(); sceneContext=null;selectedBones.Clear();
         }
         SyncSelection();
         ImGui.BeginDisabled(Runtime.Exporting || Runtime.PerformanceActive);
+        if (toolsPanel) Panel(L("creation-tools") + "###vsdirector-creation-tools", ref toolsPanel, host.CreationToolsDockId, DrawTools);
         if (browser) Panel(L("creation-objects") + "###vsdirector-creation-browser", ref browser, host.LeftDockId, DrawBrowser, revealPanels);
         if (view) Panel(L("creation-view") + "###vsdirector-creation-view", ref view, host.InspectorDockId, DrawView);
         if (properties) Panel(modelContext.Length > 0 ? L("creation-model-properties") + "###vsdirector-creation-properties" : L("creation-creation-properties") + "###vsdirector-creation-properties", ref properties, host.InspectorDockId, DrawProperties, revealPanels);
@@ -91,7 +106,7 @@ internal sealed partial class DirectorCreationWorkspace
         if (timeline && modelContext.Length == 0) Panel((SelectedAnimation is null ? L("creation-creation-timeline") : L("creation-action-prefix") + SelectedAnimation.Name) + "###vsdirector-creation-timeline", ref timeline, host.TimelineDockId, DrawTimeline, revealPanels, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         revealPanels = false;
         // Viewport tools must not prevent the document panels from being submitted.
-        if (!Runtime.Exporting && !Runtime.PerformanceActive) { try { DrawViewportTools(); } catch (Exception e) { error = Message(e.Message); } }
+        if (!Runtime.Exporting && !Runtime.PerformanceActive) { try { DrawViewportTools(); } catch (Exception e) { Session.CancelGesture();gizmoUsing=false;handleAxis=-1;pullStart=null;pullChain=null;error = Message(e.Message); } }
         host.CreationAspect = Project.Output.Width / (float)Math.Max(1, Project.Output.Height);
         host.CreationPreviewVisible = Runtime.Preview;
         if (Runtime.Preview) DrawPreview();
@@ -108,7 +123,7 @@ internal sealed partial class DirectorCreationWorkspace
     {
         if (dock != 0) ImGui.SetNextWindowDockID(dock, reveal ? ImGuiCond.Always : ImGuiCond.FirstUseEver);
         if (reveal) { ImGui.SetNextWindowCollapsed(false); ImGui.SetNextWindowFocus(); }
-        ImGui.SetNextWindowSize(new(320, 320), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(new Vector2(320, title.EndsWith("###vsdirector-creation-tools", StringComparison.Ordinal) ? 72 : 320) * DirectorImGuiTheme.Scale, ImGuiCond.FirstUseEver);
         bool visible = ImGui.Begin(title, ref open, flags);
         ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         host.TrackCreationDock(title);
@@ -135,13 +150,13 @@ internal sealed partial class DirectorCreationWorkspace
             Item(L("creation-cancel-video-export"), Runtime.CancelExport);
             return;
         }
-        bool ready = Project is not null;
+        bool ready = Project is not null && Runtime.ProjectWorldMatches;
         if (menu is "创作" or "项目")
         {
             Item(L("creation-new-project-16"), () => { name = L("creation-new-project"); Ask(L("creation-new-project-16"), value => Runtime.New(value)); });
             Item(L("creation-open-project-recent"), () => auxiliary = "projects");
             Item(L("creation-save-project"), Session.Save, ready);
-            Item(L("creation-duplicate-project"), () => { Session.Save(); Session.Open(Session.Store.Duplicate(Project!)); }, ready);
+            Item(L("creation-duplicate-project"), () => Runtime.DuplicateProject(Project!.Id), ready && Runtime.ProjectWorldMatches);
             Item(L("creation-rename-project"), () => Ask(L("creation-rename-project"), v => Session.Edit(L("creation-rename-project"), p => p.Name = v), Project!.Name), ready);
             Item(L("creation-project-settings"), () => auxiliary = "settings", ready);
             Item(L("creation-project-folder"), () => Ask(L("creation-project-folder"), v => Session.Edit(L("creation-project-category"), p => p.Folder = v), Project!.Folder), ready);
@@ -212,6 +227,7 @@ internal sealed partial class DirectorCreationWorkspace
                         () => Session.Edit(L("creation-timeline-display"), p => p.TimeDisplay = display), selected: TimeDisplay == display);
                 ImGui.EndMenu();
             }
+            Item(L("creation-tools"), () => toolsPanel = !toolsPanel, selected: toolsPanel);
             Item(L("creation-view"), () => view = true, selected: view);
             Item(L("creation-bones-tab"), () => { bonesPanel = true; focusRigPanel = "bones"; }, selected: bonesPanel);
             Item("IK", () => { ikPanel = true; focusRigPanel = "ik"; }, selected: ikPanel);
@@ -221,7 +237,7 @@ internal sealed partial class DirectorCreationWorkspace
             Item(L("creation-creation-timeline"), () => timeline = true, enabled: modelContext.Length == 0, selected: timeline && modelContext.Length == 0);
             Item(L("creation-camera-preview"), () => Runtime.Preview = !Runtime.Preview, selected: Runtime.Preview);
             Item(L("creation-composition-guides"), () => Runtime.Guides = !Runtime.Guides, selected: Runtime.Guides);
-            Item(L("creation-reset-layout"), host.ResetLayout);
+            Item(L("creation-reset-layout"), () => { toolsPanel=properties=browser=timeline=view=true;bonesPanel=ikPanel=actionsPanel=false;host.ResetLayout(); });
         }
     }
     private CreationSceneObject? SelectedObject => Project?.Objects.Find(o => o.Id == Session.SelectedObject);
@@ -231,10 +247,12 @@ internal sealed partial class DirectorCreationWorkspace
     private bool structureCapture;
     private CreationVector structureFirst;
     private void Select(CreationSceneObject obj)
-    { SelectWithinPose(obj.Id, () => { if(Session.ScenePoseEditing && Session.ScenePoseActor!=obj.Id) Session.EndScenePose(); if (SelectedAnimation is not null && Session.AnimationObject != obj.Id && !Session.IsAnimationControl(obj.Id)) Session.LeaveAnimation(); selectedObjects.Clear(); selectedObjects.Add(obj.Id); selectedBones.Clear();selectionArea=SelectionArea.Objects;Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; modelId = obj.ModelId; modelContext = ""; clipId = keyId = trackId = Guid.Empty; RevealTimelineSelection(obj.Id,Guid.Empty);
-        if (IsIkControl(obj.Id)) { operation = ImGuizmoNET.OPERATION.TRANSLATE; if(ikPanel) focusRigPanel = "ik"; } }); }
+    { Continue(() => { if(Session.ScenePoseEditing) Session.EndScenePose(); if (SelectedAnimation is not null && Session.AnimationObject != obj.Id && !Session.IsAnimationControl(obj.Id)) Session.LeaveAnimation(); selectedObjects.Clear(); selectedObjects.Add(obj.Id); selectedBones.Clear();selectionArea=SelectionArea.Objects;Session.SelectedObject = obj.Id; Session.SelectedPart = Guid.Empty; modelId = obj.ModelId; modelContext = ""; clipId = keyId = trackId = Guid.Empty; RevealTimelineSelection(obj.Id,Guid.Empty);
+        wholeObjectSelection=true;RestoreTool(false);
+        if (IsIkControl(obj.Id)) { ChooseTool(CreationTool.Move); if(ikPanel) focusRigPanel = "ik"; } }); }
     private void SelectBone(Guid actor, Guid part) => SelectWithinPose(actor, () =>
     {
+        bool wasPart=PartScope;wholeObjectSelection=false;
         if (Session.AnimationEditing && SelectedAnimation is null && Session.ScenePoseActor != actor) Session.BeginScenePose(actor);
         if (SelectedAnimation is not null && Session.AnimationObject != actor) Session.LeaveAnimation();
         if(!ImGui.GetIO().KeyCtrl || Session.SelectedObject!=actor)selectedBones.Clear();
@@ -242,7 +260,7 @@ internal sealed partial class DirectorCreationWorkspace
         selectedObjects.Clear(); selectedObjects.Add(actor); Session.SelectedObject = actor; Session.SelectedPart = selectedBones.Contains(part)?part:selectedBones.First();
         selectionArea=SelectionArea.Bones;ClearTimelineSelection(); RevealTimelineSelection(actor,part);
         if(bonesPanel) focusRigPanel = "bones"; selectedIkChain = Guid.Empty;
-        posePull = false; operation = ImGuizmoNET.OPERATION.ROTATE; transformMode = ImGuizmoNET.MODE.LOCAL;
+        if(!wasPart)RestoreTool(true);
     });
     private void SelectWithinPose(Guid actor, Action action)
     { if (Session.PoseEditing && actor == Session.PoseActor) Run(action); else Continue(action); }
@@ -513,17 +531,41 @@ internal sealed partial class DirectorCreationWorkspace
     {
         if (Button(L("creation-new-project-16"))) Ask(L("creation-new-project-16"), Runtime.New);
         if (DateTime.UtcNow >= projectListAt) { projectEntries = Session.Store.List(); projectListAt = DateTime.UtcNow.AddSeconds(2); }
-        foreach (var entry in projectEntries.Where(p => Match(p.Name + p.Folder)))
+        bool Compatible(CreationProjectEntry entry) => Runtime.MatchesProjectWorld(entry.WorldId, entry.Dimension);
+        var matching = projectEntries.Where(p => Match(p.Name + p.Folder)).ToArray();
+        void OpenProject(CreationProjectEntry entry, bool recovery = false)
+        { Runtime.Open(entry.Id, recovery); auxiliary = ""; projectListAt = default; }
+        foreach (var entry in matching.Where(Compatible))
         {
-            if (ImGui.Selectable((entry.Folder.Length > 0 ? entry.Folder + "/" : "") + entry.Name + (entry.Recovery ? L("creation-recovery-available") : "") + "##" + entry.Id)) Continue(() => { Runtime.Open(entry.Id); auxiliary = ""; });
+            if (ImGui.Selectable((entry.Folder.Length > 0 ? entry.Folder + "/" : "") + entry.Name + (entry.Recovery ? L("creation-recovery-available") : "") + "##" + entry.Id)) Continue(() => OpenProject(entry));
             if (ImGui.BeginPopupContextItem("project-" + entry.Id))
             {
-                Item(L("creation-recover-autosave"), () => Runtime.Open(entry.Id, true), entry.Recovery);
-                Item(L("creation-duplicate"), () => Session.Open(Session.Store.Duplicate(Session.Store.Load(entry.Id))));
+                Item(L("creation-recover-autosave"), () => OpenProject(entry, true), entry.Recovery);
+                Item(L("creation-duplicate"), () => { Runtime.DuplicateProject(entry.Id); auxiliary = ""; projectListAt = default; });
                 Item(L("creation-delete-move-to-local-trash"), () => { if (Project?.Id == entry.Id) throw new InvalidOperationException(L("creation-open-another-project-before-deleting-the-current-project")); Session.Store.Delete(entry.Id); });
                 ImGui.EndPopup();
             }
         }
+        if (!matching.Any(Compatible)) ImGui.TextWrapped(L("creation-no-world-projects"));
+        var others = matching.Where(p => !Compatible(p)).ToArray();
+        // Deliberately closed: these are migration sources, not editable works
+        // belonging to the current world. Never open them through Selectable.
+        if (others.Length > 0 && ImGui.CollapsingHeader(L("creation-other-world-projects")))
+        {
+            ImGui.TextWrapped(L("creation-copy-world-help"));
+            foreach (var entry in others)
+            {
+                ImGui.PushID(entry.Id.ToString());
+                ImGui.TextWrapped((entry.Folder.Length > 0 ? entry.Folder + "/" : "") + entry.Name);
+                ImGui.TextWrapped(L("creation-project-world-details", entry.WorldId.Length == 0 ? L("creation-world-unbound") : entry.WorldId, entry.Dimension));
+                if (Button(L("creation-copy-to-current-world"))) Continue(() =>
+                { Runtime.DuplicateProject(entry.Id, toCurrentWorld: true); auxiliary = ""; projectListAt = default; });
+                if (entry.Recovery && Button(L("creation-copy-recovery-to-world"))) Continue(() =>
+                { Runtime.DuplicateProject(entry.Id, toCurrentWorld: true, recovery: true); auxiliary = ""; projectListAt = default; });
+                ImGui.PopID();
+            }
+        }
+        if (error.Length > 0) ImGui.TextWrapped(error);
     }
     private void Ask(string title, Action<string> accept, string initial = "") { if (title == L("creation-animation-name")) { newActionDuration = 3; newActionLoop = false; } modalRequest = title; name = initial; acceptPath = accept; pathDialog = false; }
     private void FileDialog(string title, Action<string> accept, string filename = "")

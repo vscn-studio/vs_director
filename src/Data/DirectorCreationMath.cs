@@ -4,6 +4,15 @@ namespace VSDirector.Data;
 
 public static class DirectorCreationMath
 {
+    // Native held-item composition, adapted to row vectors from InGameDevTools
+    // VanillaAnimationEditor.PreviewSupport.cs (MIT, see THIRD-PARTY.txt).
+    public static Matrix4x4 HeldItemMatrix(CreationVector attachmentPosition, CreationVector attachmentRotation,
+        CreationVector origin, CreationVector scale, CreationVector translation, CreationVector rotation)
+        => Matrix4x4.CreateTranslation(-origin.Float())
+            * CreationTransform.RotationMatrix(attachmentRotation + rotation)
+            * Matrix4x4.CreateTranslation((attachmentPosition * (1d / 16) + translation).Float())
+            * Matrix4x4.CreateScale(scale.Float()) * Matrix4x4.CreateTranslation(origin.Float());
+
     public static float[] ProjectView(double[] view, CreationVector origin, double dimensionOffset)
     {
         var result = view.Select(v => (float)v).ToArray();
