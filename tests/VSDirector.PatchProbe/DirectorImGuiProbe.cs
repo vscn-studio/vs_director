@@ -64,13 +64,12 @@ internal static partial class DirectorImGuiProbe
             AccessTools.Method(runtime, "InstallBackendPatches").Invoke(null, [backendHarmony]);
             AccessTools.Method(runtime, "InstallFontPatches").Invoke(null, [backendHarmony]);
             string project = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
-            AccessTools.Field(runtime, "iconFontPath").SetValue(null,
-                Path.Combine(project, "assets/vsdirector/fonts/tabler/tabler-icons.ttf"));
+            ConfigureProbeFonts(assembly, project);
             CheckDefaultFontLifecycle(assembly);
             var io = ImGui.GetIO();
             string gamePath = Environment.GetEnvironmentVariable("VINTAGE_STORY") ?? Path.GetFullPath(Path.Combine(project, "../Vintagestory"));
             var font = io.Fonts.AddFontFromFileTTF(Path.Combine(gamePath, "assets/game/fonts/Montserrat-Regular.ttf"), 18);
-            // The host supplies text; Director merges only icons before upload.
+            // The host supplies the base font; Director supplies missing CJK and icons.
             AccessTools.Method(runtime, "PrepareFontTexture").Invoke(null, null);
             io.Fonts.GetTexDataAsRGBA32(out nint _, out int atlasWidth, out int atlasHeight);
             var icons = (Dictionary<string, string>)AccessTools.Field(Runtime("DirectorImGuiIcons"), "Glyphs").GetValue(null)!;
@@ -343,7 +342,7 @@ internal static partial class DirectorImGuiProbe
                 Type stateType = Runtime("DirectorPreloadMapState");
                 var state = System.Linq.Expressions.Expression.Lambda(typeof(Func<>).MakeGenericType(stateType),
                     System.Linq.Expressions.Expression.Constant(null, stateType)).Compile();
-                object preload = Activator.CreateInstance(Runtime("DirectorPreloadRmlWindow"), BindingFlags.Instance | BindingFlags.NonPublic,
+                object preload = Activator.CreateInstance(Runtime("DirectorPreloadWindow"), BindingFlags.Instance | BindingFlags.NonPublic,
                     null, [api, state, (Action<int, int, int, int, bool>)((_, _, _, _, _) => { }), (Action<int, int>)((_, _) => { }),
                         (Action<double>)(_ => { }), true, 60d, 0d], null)!;
                 windows.Add((IDisposable)preload);

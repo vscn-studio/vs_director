@@ -1,5 +1,6 @@
 VS Director
 Copyright (c) 2026 HansJack (VSCN-Studio)
+Copyright (c) 2026 HanosThePlacid
 
 Original code, interface, and documentation are licensed under the MIT License.
 See LICENSE for the full license text. The companion OBS binary linked with

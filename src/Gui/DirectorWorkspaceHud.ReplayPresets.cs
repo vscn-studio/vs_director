@@ -770,7 +770,7 @@ internal sealed partial class DirectorWorkspaceHud
         return true;
     }
 
-    private void RmlReplayPlayerPicker(DirectorImGuiForm form)
+    private void ImGuiReplayPlayerPicker(DirectorImGuiForm form)
         => form.ChoiceList(ReplayPlayerSources()
             .Select(source =>
             {
@@ -781,14 +781,14 @@ internal sealed partial class DirectorWorkspaceHud
             .ToArray());
 
     /// <summary>Player-by-name picker for follow and tracking keyframes.</summary>
-    private void RmlReplayPlayerSelect(DirectorImGuiForm form)
-        => RmlReplayActorSelect(form, "entityActorKey", "entityId", "replay-element-player", allowNone: false);
+    private void ImGuiReplayPlayerSelect(DirectorImGuiForm form)
+        => ImGuiReplayActorSelect(form, "entityActorKey", "entityId", "replay-element-player", allowNone: false);
 
     /// <summary>Second actor for two-shots and over-the-shoulder tracking.</summary>
-    private void RmlReplaySecondaryPlayerSelect(DirectorImGuiForm form)
-        => RmlReplayActorSelect(form, "secondaryActorKey", "secondaryEntityId", "replay-track-secondary", allowNone: true);
+    private void ImGuiReplaySecondaryPlayerSelect(DirectorImGuiForm form)
+        => ImGuiReplayActorSelect(form, "secondaryActorKey", "secondaryEntityId", "replay-track-secondary", allowNone: true);
 
-    private void RmlReplayActorSelect(DirectorImGuiForm form, string keyField, string idField, string label, bool allowNone)
+    private void ImGuiReplayActorSelect(DirectorImGuiForm form, string keyField, string idField, string label, bool allowNone)
     {
         IReadOnlyList<DirectorReplayActorPathSource> players = allowNone
             ? owner.ReplayActorPathSources.OrderByDescending(item => item.IsPlayer).ThenBy(PlayerLabel).ToList()
@@ -808,7 +808,7 @@ internal sealed partial class DirectorWorkspaceHud
             options.Add((current, Lang.Get("vsdirector:replay-element-player-other")));
         }
         options.AddRange(players.Select(player => (player.ActorKey, PlayerLabel(player))));
-        form.Select(RmlLabel(label), current, options, value =>
+        form.Select(ImGuiLabel(label), current, options, value =>
         {
             if (allowNone && string.IsNullOrEmpty(value))
             {

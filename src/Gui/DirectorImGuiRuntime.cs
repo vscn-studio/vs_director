@@ -12,7 +12,7 @@ using VSImGui.API;
 
 namespace VSDirector.Gui;
 
-/// <summary>Uses the game's default ImGui font and merges editor icons before texture upload.</summary>
+/// <summary>Supplements the game's default ImGui font before texture upload.</summary>
 internal static class DirectorImGuiRuntime
 {
     private static Harmony? initialization;
@@ -30,6 +30,7 @@ internal static class DirectorImGuiRuntime
 
         iconFontPath = Path.Combine(((ModContainer)mod).FolderPath, "assets", "vsdirector", "fonts", "tabler", "tabler-icons.ttf");
         if (!File.Exists(iconFontPath)) throw new FileNotFoundException("VS Director icon font is missing", iconFontPath);
+        DirectorImGuiTextFont.Initialize(api);
         initialization = new Harmony("vscn.vsdirector.imgui-initialization");
         InstallFontPatches(initialization);
         InstallBackendPatches(initialization);
@@ -38,7 +39,7 @@ internal static class DirectorImGuiRuntime
     internal static void InstallFontPatches(Harmony harmony)
     {
         // FontSettings rebuilds the shared atlas without calling LoadFonts.
-        // Merge icons on both initial creation and subsequent texture uploads.
+        // Restore text and icons on initial creation and subsequent uploads.
         harmony.Patch(AccessTools.Method(AccessTools.TypeByName("ImGuiController_OpenTK.ImGuiRenderer"), "RecreateFontDeviceTexture"),
             prefix: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(PrepareFontTexture)));
     }
@@ -152,8 +153,10 @@ internal static class DirectorImGuiRuntime
         if (!atlas.IsBuilt() && !atlas.Build()) throw new InvalidOperationException("Game font atlas build failed.");
         var font = CurrentDefaultFont();
         if (font.NativePtr == null) return;
+        bool textAdded = DirectorImGuiTextFont.MergeMissingGlyphs(atlas, font);
         if (DirectorImGuiIcons.HasGlyphs(font))
         {
+            if (textAdded && !atlas.Build()) throw new InvalidOperationException("VS Director font atlas build failed.");
             DirectorImGuiIcons.CenterGlyphs(font);
             return;
         }
@@ -215,6 +218,7 @@ internal static class DirectorImGuiRuntime
         initialization?.UnpatchAll(initialization.Id);
         initialization = null;
         iconFontPath = "";
+        DirectorImGuiTextFont.Dispose();
         if (iconRanges != 0) Marshal.FreeHGlobal(iconRanges);
         iconRanges = 0;
     }

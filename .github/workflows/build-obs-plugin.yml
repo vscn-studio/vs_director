@@ -36,6 +36,7 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item -LiteralPath obs-plugin -Destination obs-studio/plugins/vsdirector-obs -Recurse
+          Copy-Item -LiteralPath modinfo.json -Destination obs-studio/plugins/vsdirector-obs/modinfo.json
           Add-Content -LiteralPath obs-studio/plugins/CMakeLists.txt -Value "`nadd_obs_plugin(vsdirector-obs)`n"
 
       - name: Build against OBS Studio
@@ -58,10 +59,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$Stage/data/obs-plugins/vsdirector-obs" | Out-Null
           Copy-Item -LiteralPath $Plugin.FullName -Destination "$Stage/obs-plugins/64bit/vsdirector-obs.dll"
           Copy-Item -LiteralPath obs-plugin/data/locale -Destination "$Stage/data/obs-plugins/vsdirector-obs/locale" -Recurse
-          ./tools/StageObsCompliance.ps1 -Destination "$Stage/data/obs-plugins/vsdirector-obs"
+          ./tools/StageObsCompliance.ps1 -Destination "$Stage/data/obs-plugins/vsdirector-obs" -ObsBuildDirectory obs-studio/build_x64 -BuildTarget windows-x64
 
           $Package = Join-Path $PWD "artifacts/vsdirector_obs_plugin_${Version}_windows_x64.zip"
-          Compress-Archive -Path "$Stage/*" -DestinationPath $Package -CompressionLevel Optimal -Force
+          # ZipFile includes dot directories such as corresponding-source/.github.
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($Stage, $Package)
+          python tools/CheckObsPackage.py $Package --platform windows
+          if ($LASTEXITCODE -ne 0) { throw 'Windows package validation failed' }
           "package=$Package" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload Windows package
@@ -92,7 +96,13 @@ jobs:
         run: |
           set -euo pipefail
           cp -a obs-plugin obs-studio/plugins/vsdirector-obs
+          cp modinfo.json obs-studio/plugins/vsdirector-obs/modinfo.json
           printf '\nadd_obs_plugin(vsdirector-obs)\n' >> obs-studio/plugins/CMakeLists.txt
+          # Ninja is single-config: --config alone does not override ubuntu-ci's RelWithDebInfo.
+          jq --arg config "$BUILD_CONFIG" \
+            '(.configurePresets[] | select(.name == "ubuntu-ci") | .cacheVariables.CMAKE_BUILD_TYPE) = $config' \
+            obs-studio/CMakePresets.json > obs-studio/CMakePresets.json.tmp
+          mv obs-studio/CMakePresets.json.tmp obs-studio/CMakePresets.json
 
       - name: Build against OBS Studio
         uses: ./obs-studio/.github/actions/build-obs
@@ -114,11 +124,12 @@ jobs:
           mkdir -p "${stage}/bin/64bit" "${stage}/data"
           cp -L "${plugin}" "${stage}/bin/64bit/vsdirector-obs.so"
           cp -a obs-plugin/data/. "${stage}/data/"
-          pwsh -NoProfile -File tools/StageObsCompliance.ps1 -Destination "${stage}/data"
+          pwsh -NoProfile -File tools/StageObsCompliance.ps1 -Destination "${stage}/data" -ObsBuildDirectory obs-studio/build_ubuntu -BuildTarget linux-x86_64
           file "${stage}/bin/64bit/vsdirector-obs.so"
 
           package="${PWD}/artifacts/vsdirector_obs_plugin_${version}_linux_x86_64.tar.gz"
           tar -C "${PWD}/artifacts/linux" -czf "${package}" vsdirector-obs
+          python3 tools/CheckObsPackage.py "${package}" --platform linux
           echo "package=${package}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload Linux package
@@ -158,6 +169,7 @@ jobs:
         shell: zsh --no-rcs --errexit --pipefail {0}
         run: |
           cp -a obs-plugin obs-studio/plugins/vsdirector-obs
+          cp modinfo.json obs-studio/plugins/vsdirector-obs/modinfo.json
           print '\nadd_obs_plugin(vsdirector-obs)\n' >> obs-studio/plugins/CMakeLists.txt
 
       - name: Build against OBS Studio
@@ -179,14 +191,16 @@ jobs:
           mkdir -p artifacts/macos-slice
           ditto "${plugin}" artifacts/macos-slice/vsdirector-obs.plugin
           mkdir -p artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources
-          pwsh -NoProfile -File tools/StageObsCompliance.ps1 -Destination artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources
-          lipo -archs artifacts/macos-slice/vsdirector-obs.plugin/Contents/MacOS/vsdirector-obs
+          pwsh -NoProfile -File tools/StageObsCompliance.ps1 -Destination artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources -ObsBuildDirectory obs-studio/build_macos -BuildTarget macos-${{ matrix.arch }}
+          lipo -verify_arch ${{ matrix.arch }} artifacts/macos-slice/vsdirector-obs.plugin/Contents/MacOS/vsdirector-obs
+          # Preserve hidden source files, symlinks and permissions across jobs.
+          tar -C artifacts/macos-slice -czf artifacts/macos-slice.tar.gz vsdirector-obs.plugin
 
       - name: Upload macOS slice
         uses: actions/upload-artifact@v4
         with:
           name: vsdirector-obs-macos-slice-${{ matrix.arch }}
-          path: artifacts/macos-slice
+          path: artifacts/macos-slice.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -213,21 +227,29 @@ jobs:
           output_bundle=artifacts/macos/vsdirector-obs.plugin
           output_binary="${output_bundle}/Contents/MacOS/vsdirector-obs"
 
+          for arch in arm64 x86_64; do
+            slice="artifacts/slices/vsdirector-obs-macos-slice-${arch}"
+            tar -xzf "${slice}/macos-slice.tar.gz" -C "${slice}"
+          done
           mkdir -p artifacts/macos
           ditto "${arm_bundle}" "${output_bundle}"
+          # Keep the Intel build's generated headers and provenance as well.
+          source_relative=Contents/Resources/corresponding-source
+          cp -a "${intel_bundle}/${source_relative}/build-inputs/macos-x86_64" \
+            "${output_bundle}/${source_relative}/build-inputs/"
           lipo -create \
             "${arm_bundle}/Contents/MacOS/vsdirector-obs" \
             "${intel_bundle}/Contents/MacOS/vsdirector-obs" \
             -output "${output_binary}"
           chmod 755 "${output_binary}"
           codesign --force --deep --sign - "${output_bundle}"
-          lipo -archs "${output_binary}" | tee /dev/stderr | grep -q arm64
-          lipo -archs "${output_binary}" | grep -q x86_64
+          lipo -verify_arch arm64 x86_64 "${output_binary}"
           codesign --verify --deep --strict "${output_bundle}"
 
           version="$(jq -r .version modinfo.json)"
           package="${PWD}/artifacts/vsdirector_obs_plugin_${version}_macos_universal.zip"
           ditto -c -k --sequesterRsrc --keepParent "${output_bundle}" "${package}"
+          python3 tools/CheckObsPackage.py "${package}" --platform macos
           print "package=${package}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload macOS package

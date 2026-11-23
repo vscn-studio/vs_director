@@ -106,7 +106,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private readonly DirectorSolidTextureRenderer solidTextureRenderer;
     private readonly DirectorTimelineMarkerRenderer timelineMarkerRenderer;
     private readonly DirectorWorkspaceFloatingEditorDialog floatingEditorDialog;
-    private DirectorImGuiWindow? rmlInspectorWindow, rmlViewWindow;
+    private DirectorImGuiWindow? imGuiInspectorWindow, imGuiViewWindow;
     private readonly DirectorReplayExportDialog exportDialog;
     private DirectorWorkspaceDocument layout;
     private DirectorWorkspaceSection section;
@@ -356,7 +356,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private bool preloadEraseMode;
     private bool preloadEditorExpanded;
     private bool workflowEditorWindowOpen;
-    private DirectorPreloadRmlWindow? preloadRmlWindow;
+    private DirectorPreloadWindow? preloadImGuiWindow;
     private bool selectingPreloadGrid;
     private bool panningPreloadGrid;
     private bool preloadGridChanged;
@@ -408,7 +408,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private ElementBounds? pathEditorTimelineBounds;
     private ElementBounds? workflowBoardBounds;
     private ElementBounds? preloadGridBounds;
-    private DirectorRmlConfirmWindow? invalidWorkflowDialog;
+    private DirectorConfirmWindow? invalidWorkflowDialog;
     private bool routingFloatingEditorInput;
     private bool disposed;
     private Guid synchronizedActiveReplayId;
@@ -627,7 +627,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (creationWorkspace?.Active == true) return;
         // The native ImGui layer can dispose the inspector before our LeaveWorld handler. Pending edits
         // still save on close, but their callbacks must not rebuild destroyed documents.
-        if (disposed || owner.IsShuttingDown || rmlInspectorWindow?.Document?.IsDisposed == true) return;
+        if (disposed || owner.IsShuttingDown || imGuiInspectorWindow?.Document?.IsDisposed == true) return;
         PreserveInputs();
         SynchronizeReplaySelectionWithActivePlayback(force: false);
         ComposeAll();
@@ -680,19 +680,19 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     {
         creationWorkspace.Suspend();
         FinishCameraTransform(cancel: false);
-        rmlTransformWindow?.Close();
+        imGuiTransformWindow?.Close();
         CloseReplayCameraPreview();
         CloseReplayCameraObservation();
         imGuiWorkspace.Close();
         waveformCancellation?.Cancel();
         waveformKey = "";
-        rmlTimeline?.Close();
-        DisposeKeyframeRml();
-        preloadRmlWindow?.Dispose(); preloadRmlWindow = null;
-        rmlInspectorWindow?.Close();
-        rmlViewWindow?.Close();
-        rmlToolbarWindow?.Close();
-        rmlResourceWindow?.Close();
+        imGuiTimeline?.Close();
+        DisposeKeyframeImGui();
+        preloadImGuiWindow?.Dispose(); preloadImGuiWindow = null;
+        imGuiInspectorWindow?.Close();
+        imGuiViewWindow?.Close();
+        imGuiToolbarWindow?.Close();
+        imGuiResourceWindow?.Close();
         sceneBrowser?.Close();
         DirectorToolWindows.Close();
         DirectorToolWindows.CloseWorkspaceMenu = null;
@@ -718,7 +718,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     {
         if (creationWorkspace?.Active == true) { UpdateCreationViewport(); DirectorWorkspaceViewportRuntime.UseGameHudViewport(); return; }
         CheckPaneSplitRelease();
-        UpdateRmlTimelineFrame();
+        UpdateImGuiTimelineFrame();
         UpdateInspectorBounds();
         UpdateGameViewportRuntime();
         var previewPanel = layout.Panel("preview");
@@ -1795,7 +1795,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
         // The native timeline reads the same physical wheel through ImGui.
         // Consume the game event here so zoom/pan runs exactly once.
-        if (!routingFloatingEditorInput && rmlTimeline?.IsOpened == true
+        if (!routingFloatingEditorInput && imGuiTimeline?.IsOpened == true
             && !PointInsideFloatingEditor(capi.Input.MouseX, capi.Input.MouseY)
             && layout.Panel("timeline") is { } timelinePanel
             && capi.Input.MouseX >= GuiElement.scaled(timelinePanel.X)
@@ -2230,16 +2230,16 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         creationWorkspace.Suspend();
         DisposeTimelineMedia();
         owner.SetWorkspaceInputOverride(false);
-        rmlTimeline?.Dispose(); rmlTimeline = null;
-        rmlInspectorWindow?.Close();
-        preloadRmlWindow?.Dispose(); preloadRmlWindow = null;
-        rmlToolbarWindow?.Dispose(); rmlToolbarWindow = null;
-        rmlResourceWindow?.Dispose(); rmlResourceWindow = null;
+        imGuiTimeline?.Dispose(); imGuiTimeline = null;
+        imGuiInspectorWindow?.Close();
+        preloadImGuiWindow?.Dispose(); preloadImGuiWindow = null;
+        imGuiToolbarWindow?.Dispose(); imGuiToolbarWindow = null;
+        imGuiResourceWindow?.Dispose(); imGuiResourceWindow = null;
         sceneBrowser?.Dispose(); sceneBrowser = null;
-        rmlInspectorWindow?.Dispose();
-        rmlViewWindow?.Dispose(); rmlViewWindow = null;
-        rmlTransformWindow?.Dispose(); rmlTransformWindow = null;
-        rmlInspectorWindow = null;
+        imGuiInspectorWindow?.Dispose();
+        imGuiViewWindow?.Dispose(); imGuiViewWindow = null;
+        imGuiTransformWindow?.Dispose(); imGuiTransformWindow = null;
+        imGuiInspectorWindow = null;
         EndReplayViewportFreeCameraPointerInput();
         ResetWorkspacePointerInteraction();
         DirectorWorkspaceViewportRuntime.Deactivate(this);
@@ -2249,7 +2249,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         invalidWorkflowDialog?.Dispose();
         invalidWorkflowDialog = null;
         floatingEditorDialog.Dispose();
-        DisposeKeyframeRml();
+        DisposeKeyframeImGui();
         exportDialog.Dispose();
         timelineMarkerRenderer.Dispose();
         solidTextureRenderer.Dispose();
@@ -2259,7 +2259,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void ComposeAll()
     {
-        if (disposed || owner.IsShuttingDown || rmlInspectorWindow?.Document?.IsDisposed == true) return;
+        if (disposed || owner.IsShuttingDown || imGuiInspectorWindow?.Document?.IsDisposed == true) return;
         PreserveInputs();
         NormalizeFeatureVisibility();
         NormalizeLayoutToViewport();
@@ -2272,7 +2272,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         ComposeResources();
     }
 
-    private void ComposeToolbar() => ComposeRmlToolbar();
+    private void ComposeToolbar() => ComposeImGuiToolbar();
 
     private bool OpenReplayExport()
         => exportDialog.OpenForCurrentScene();
@@ -2288,7 +2288,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         UpdateGameViewportRuntime();
     }
 
-    private void ComposeResources() => ComposeRmlResources();
+    private void ComposeResources() => ComposeImGuiResources();
 
 
 
@@ -2305,10 +2305,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             or DirectorWorkspaceSection.Paths or DirectorWorkspaceSection.Replay)
         {
             Composers.Remove(key);
-            ComposeRmlTimeline();
+            ComposeImGuiTimeline();
             return;
         }
-        rmlTimeline?.Close();
+        imGuiTimeline?.Close();
         if (section == DirectorWorkspaceSection.LiveOffscreen)
         {
             Composers.Remove(key);
@@ -2567,7 +2567,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     {
         if (!preloadEditorExpanded || !CanManageChunkPreload || !HasPreloadEditorTarget()
             || (section == DirectorWorkspaceSection.Replay && replayFloatingEditorKind != ReplayFloatingEditorKind.None))
-        { preloadRmlWindow?.Dispose(); preloadRmlWindow = null; }
+        { preloadImGuiWindow?.Dispose(); preloadImGuiWindow = null; }
         const string key = WorkflowCanvasKey;
         if (section == DirectorWorkspaceSection.Replay
             && replayFloatingEditorKind != ReplayFloatingEditorKind.None)
@@ -2697,10 +2697,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     {
         if (replayFloatingEditorKind != ReplayFloatingEditorKind.None)
         {
-            ComposeKeyframeRml(replay: true);
+            ComposeKeyframeImGui(replay: true);
             return;
         }
-        DisposeKeyframeRml();
+        DisposeKeyframeImGui();
         double width = ReplayPropertyPopupWidth;
         double height = ReplayFloatingEditorHeight();
         ClampReplayFloatingEditorPosition(width, height);
@@ -4047,10 +4047,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private void ComposePreloadCanvas(string key)
     {
         RemoveFloatingEditorComposer();
-        if (preloadRmlWindow is null)
+        if (preloadImGuiWindow is null)
         {
             var replay = section == DirectorWorkspaceSection.Replay ? PreloadEditorReplayInfo() : null;
-            preloadRmlWindow = new DirectorPreloadRmlWindow(capi, () =>
+            preloadImGuiWindow = new DirectorPreloadWindow(capi, () =>
             {
                 if (!TryGetPreloadGridState(out var state)) return null;
                 return new DirectorPreloadMapState(state.CenterChunkX, state.CenterChunkZ, state.TargetChunkX, state.TargetChunkZ,
@@ -4063,11 +4063,11 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 ApplyPreloadGridSelection(); if (preloadGridChanged) SavePreloadGridChanges();
             }, (x, z) => { preloadPanChunkX = x; preloadPanChunkZ = z; },
                 time => preloadReplayTime = time, replay is not null, replay?.DurationSeconds ?? 0, preloadReplayTime);
-            preloadRmlWindow.Closed += () => { preloadEditorExpanded = false; };
+            preloadImGuiWindow.Closed += () => { preloadEditorExpanded = false; };
         }
-        preloadRmlWindow.SetEmptyMessage(PreloadGridSummary());
-        if (IsOpened() && !preloadRmlWindow.IsOpened) preloadRmlWindow.Open();
-        preloadRmlWindow.Refresh();
+        preloadImGuiWindow.SetEmptyMessage(PreloadGridSummary());
+        if (IsOpened() && !preloadImGuiWindow.IsOpened) preloadImGuiWindow.Open();
+        preloadImGuiWindow.Refresh();
     }
 
     private void ComposeCameraResources(GuiComposer composer, CairoFont small, CairoFont detail, ref int y)
@@ -4333,7 +4333,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
         invalidWorkflowDialog?.TryClose();
         invalidWorkflowDialog?.Dispose();
-        invalidWorkflowDialog = new DirectorRmlConfirmWindow(
+        invalidWorkflowDialog = new DirectorConfirmWindow(
             capi,
             Lang.Get("vsdirector:workflow-invalid-dialog-title"),
             Lang.Get("vsdirector:workflow-invalid-dialog-message", workflow.Name, reason),
@@ -8245,7 +8245,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void ClearEditors()
     {
-        preloadRmlWindow?.Dispose(); preloadRmlWindow = null;
+        preloadImGuiWindow?.Dispose(); preloadImGuiWindow = null;
         replayFloatingEditorKind = ReplayFloatingEditorKind.None;
         replayEntityPopupEntity = null;
         replayFloatingTrackId = Guid.Empty;
@@ -13851,7 +13851,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         QueueConfiguredReplayView();
         Composers[InspectorKey]?.GetDynamicText("autoSaveStatus")?.SetNewText(
             AutoSaveStatusText(), false, true, false);
-        UpdateRmlMenuStatus();
+        UpdateImGuiMenuStatus();
         if (section != DirectorWorkspaceSection.Replay)
         {
             Composers[TimelineKey]?.GetDynamicText("timelineText")?.SetNewText(
@@ -13915,9 +13915,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void UpdateReplayTimelineButtonStates()
     {
-        if (rmlTimeline is not null && section is DirectorWorkspaceSection.Paths or DirectorWorkspaceSection.Replay)
+        if (imGuiTimeline is not null && section is DirectorWorkspaceSection.Paths or DirectorWorkspaceSection.Replay)
         {
-            ComposeRmlTimeline();
+            ComposeImGuiTimeline();
             return;
         }
         GuiComposer? composer = Composers[TimelineKey];
@@ -20887,7 +20887,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (section is DirectorWorkspaceSection.Paths or DirectorWorkspaceSection.Replay)
         {
             UpdateInspectorBounds();
-            ComposeRmlTimeline();
+            ComposeImGuiTimeline();
         }
         else ComposeAll();
         SaveLayout();
@@ -20929,7 +20929,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         }
         UpdateGameViewportRuntime();
         UpdateInspectorBounds();
-        rmlTimelineDirty = true;
+        imGuiTimelineDirty = true;
         layoutSaveAccumulator = 0f;
     }
 
@@ -21428,7 +21428,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             || panningWorkflow;
 
     private DirectorWorkspaceSection? HoveredToolbarResourceSection(int x, int y)
-        => RmlToolbarSectionAt(x, y);
+        => ImGuiToolbarSectionAt(x, y);
 
     private void CloseResourceMenu()
     {
@@ -21440,18 +21440,18 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         PreserveInputs();
         resourceMenuSection = null;
         resourceMenuPointerCapture = false;
-        rmlResourceWindow?.Close();
-        if (rmlToolbarWindow?.Document is { IsDisposed: false } menu)
+        imGuiResourceWindow?.Close();
+        if (imGuiToolbarWindow?.Document is { IsDisposed: false } menu)
             foreach (var button in menu.Root.QuerySelectorAll(".menu-command.selected")) button.SetClass("selected", false);
     }
 
     private bool PointInsideResourceMenu(int x, int y)
         => resourceMenuSection is not null
-            && RmlResourceContains(x, y);
+            && ImGuiResourceContains(x, y);
 
     private bool RouteResourceMouseDown(MouseEvent args)
     {
-        if (rmlResourceWindow?.IsOpened == true) return false;
+        if (imGuiResourceWindow?.IsOpened == true) return false;
         if (!PointInsideResourceMenu(args.X, args.Y))
         {
             return false;
@@ -21480,7 +21480,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private bool RouteResourceMouseMove(MouseEvent args)
     {
-        if (rmlResourceWindow?.IsOpened == true) return false;
+        if (imGuiResourceWindow?.IsOpened == true) return false;
         bool inside = PointInsideResourceMenu(args.X, args.Y);
         if (!resourceMenuPointerCapture && !inside)
         {
@@ -21494,7 +21494,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private bool RouteResourceMouseUp(MouseEvent args)
     {
-        if (rmlResourceWindow?.IsOpened == true) return false;
+        if (imGuiResourceWindow?.IsOpened == true) return false;
         bool captured = resourceMenuPointerCapture;
         bool inside = PointInsideResourceMenu(args.X, args.Y);
         if (!captured && !inside)
@@ -21523,7 +21523,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private bool RouteResourceMouseWheel(MouseWheelEventArgs args)
     {
-        if (rmlResourceWindow?.IsOpened == true) return false;
+        if (imGuiResourceWindow?.IsOpened == true) return false;
         if (args.IsHandled
             || !PointInsideResourceMenu(capi.Input.MouseX, capi.Input.MouseY)
             || Composers[ResourceMenuKey] is not GuiComposer composer)
@@ -21552,7 +21552,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void RemoveFloatingEditorComposer()
     {
-        DisposeKeyframeRml();
+        DisposeKeyframeImGui();
         floatingEditorDialog.RemoveComposer();
         workflowBoardBounds = null;
         pathGlobalTimelineBounds = null;
@@ -21779,7 +21779,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         panel.Width = size.X; panel.Height = size.Y;
         if (id == "timeline" && section is DirectorWorkspaceSection.Cameras or DirectorWorkspaceSection.Follows
             or DirectorWorkspaceSection.Paths or DirectorWorkspaceSection.Replay)
-            ComposeRmlTimeline();
+            ComposeImGuiTimeline();
         if (id == "preview") UpdateGameViewportRuntime();
     }
 

@@ -38,7 +38,7 @@ internal sealed partial class DirectorWorkspaceHud
         return true;
     }
 
-    private void RmlReplayEntityPopup(DirectorImGuiForm form)
+    private void ImGuiReplayEntityPopup(DirectorImGuiForm form)
     {
         if (replayEntityPopupEntity is not { } info) return;
         var entity = info.Entity;
@@ -50,9 +50,9 @@ internal sealed partial class DirectorWorkspaceHud
         Detail("replay-element-entity-id", runtimeId);
         Detail("replay-entity-popup-code", info.EntityCode);
         Detail("replay-entity-popup-position", FormattableString.Invariant($"{position.Item1:0.###}, {position.Item2:0.###}, {position.Item3:0.###}  D{entity.Pos.Dimension}"));
-        form.Note(RmlLabel(info.IsGhost ? "replay-entity-popup-ghost" : "replay-entity-popup-live"));
-        form.Select(RmlLabel("replay-entity-popup-body"), replayEntityPopupBodyPart,
-            new[] { "head", "body", "root" }.Select(v => (v, RmlLabel("replay-entity-popup-" + (v == "body" ? "center" : v)))),
+        form.Note(ImGuiLabel(info.IsGhost ? "replay-entity-popup-ghost" : "replay-entity-popup-live"));
+        form.Select(ImGuiLabel("replay-entity-popup-body"), replayEntityPopupBodyPart,
+            new[] { "head", "body", "root" }.Select(v => (v, ImGuiLabel("replay-entity-popup-" + (v == "body" ? "center" : v)))),
             v => OnReplayEntityPopupBodyPartChanged(v, true));
         Row("look-at", LookAtReplayPopupEntity, "track", AddReplayEntityTrackingKeyframe);
         Row("orbit", AddReplayEntityOrbitKeyframe, "follow", AddReplayEntityFollowSegment);
@@ -61,10 +61,10 @@ internal sealed partial class DirectorWorkspaceHud
         Row("copy-key", CopyReplayPopupActorKey, "copy-id", CopyReplayPopupEntityId);
 
         void Detail(string label, string value)
-            => form.Detail(RmlLabel(label), value);
+            => form.Detail(ImGuiLabel(label), value);
         void Row(string left, Func<bool> leftAction, string right, Func<bool> rightAction)
-            => form.ButtonRow((RmlLabel("replay-entity-popup-" + left), () => leftAction(), true, "normal", ""),
-                (RmlLabel("replay-entity-popup-" + right), () => rightAction(), true, "normal", ""));
+            => form.ButtonRow((ImGuiLabel("replay-entity-popup-" + left), () => leftAction(), true, "normal", ""),
+                (ImGuiLabel("replay-entity-popup-" + right), () => rightAction(), true, "normal", ""));
     }
 
     private void ComposeReplayEntityPopup(

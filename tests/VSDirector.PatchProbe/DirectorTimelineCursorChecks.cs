@@ -26,7 +26,7 @@ internal static partial class DirectorImGuiProbe
         var hud = RuntimeHelpers.GetUninitializedObject(R("DirectorWorkspaceHud"));
         var layout = new DirectorWorkspaceDocument();
         var panel = layout.Panel("timeline"); panel.Width = 700; panel.Height = 260;
-        Set(hud, "owner", new VSDirectorModSystem()); Set(hud, "layout", layout); Set(hud, "rmlTimeline", timeline);
+        Set(hud, "owner", new VSDirectorModSystem()); Set(hud, "layout", layout); Set(hud, "imGuiTimeline", timeline);
         Set(hud, "section", DirectorWorkspaceSection.Replay);
         var key = new DirectorReplayElementKeyframe { TimeSeconds = 1 };
         Set(hud, "replayViewportDraftTimeline", new DirectorReplayViewportTimeline { ElementKeyframes = [key] });
@@ -38,7 +38,7 @@ internal static partial class DirectorImGuiProbe
             foreach (string language in new[] { "zh-cn", "en" })
             {
                 LoadCreationProbeLanguage(language);
-                Call(hud, "UpdateRmlTimelinePlayhead");
+                Call(hud, "UpdateImGuiTimelinePlayhead");
                 if ((string)Get(timeline, "cursorLabel") != "60 " + Lang.Get("vsdirector:creation-unit-frames")
                     || (double)Get(timeline, "cursorDragX") <= (double)Get(timeline, "cursorOriginalX") || key.TimeSeconds != 1)
                     throw new Exception("Replay drag feedback lost source/target time or localized frame label");
@@ -48,10 +48,10 @@ internal static partial class DirectorImGuiProbe
             var path = new CameraPath { Keyframes = [new CameraKeyframe { TimeSeconds = 1 }] };
             Set(hud, "pathTimelineDragBefore", path); Mode(hud, "pathTimelineDragKind", "Camera");
             Set(hud, "pathTimelineCameraDragIndex", 0); Set(hud, "pathTimelineDragTime", 3d);
-            Call(hud, "UpdateRmlTimelinePlayhead");
+            Call(hud, "UpdateImGuiTimelinePlayhead");
             if (!((double)Get(timeline, "cursorDragX") > (double)Get(timeline, "cursorOriginalX")))
                 throw new Exception("Path drag feedback lost original keyframe time");
-            Set(hud, "pathTimelineDragTime", double.NaN); Call(hud, "UpdateRmlTimelinePlayhead");
+            Set(hud, "pathTimelineDragTime", double.NaN); Call(hud, "UpdateImGuiTimelinePlayhead");
             if (!double.IsNaN((double)Get(timeline, "cursorDragX"))) throw new Exception("Timeline destination line survived drag release");
 
             var io = ImGui.GetIO();

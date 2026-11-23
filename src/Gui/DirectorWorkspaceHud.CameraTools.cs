@@ -85,18 +85,18 @@ internal sealed partial class DirectorWorkspaceHud
             if (ImGui.BeginPopup("vsdirector-camera-context"))
             {
                 foreach (CameraTool mode in Enum.GetValues<CameraTool>())
-                    if (ImGui.MenuItem(RmlLabel("camera-tool-" + mode.ToString().ToLowerInvariant()), "", cameraTool == mode))
+                    if (ImGui.MenuItem(ImGuiLabel("camera-tool-" + mode.ToString().ToLowerInvariant()), "", cameraTool == mode))
                         cameraTool = mode;
                 ImGui.Separator();
-                if (ImGui.MenuItem(RmlLabel("camera-transform-title")))
+                if (ImGui.MenuItem(ImGuiLabel("camera-transform-title")))
                 {
                     transformTabDismissed = false;
                     ComposeCameraTransform();
-                    rmlTransformWindow?.FocusNextFrame();
+                    imGuiTransformWindow?.FocusNextFrame();
                 }
-                if (ImGui.MenuItem(RmlLabel("camera-tool-preview"))) OpenReplayCameraPreview();
-                if (ImGui.MenuItem(RmlLabel("camera-observation-title"))) OpenReplayCameraObservation();
-                if (ImGui.MenuItem(RmlLabel("camera-tool-reset-pivot"))) ResetSelectedCameraPivot();
+                if (ImGui.MenuItem(ImGuiLabel("camera-tool-preview"))) OpenReplayCameraPreview();
+                if (ImGui.MenuItem(ImGuiLabel("camera-observation-title"))) OpenReplayCameraObservation();
+                if (ImGui.MenuItem(ImGuiLabel("camera-tool-reset-pivot"))) ResetSelectedCameraPivot();
                 ImGui.EndPopup();
             }
         }
@@ -546,7 +546,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4));
         if (cameraPreviewFocus) { ImGui.SetNextWindowFocus(); cameraPreviewFocus = false; }
-        bool visible = ImGui.Begin(RmlLabel("camera-preview-title") + "###vsdirector-camera-preview", ref cameraPreviewOpen,
+        bool visible = ImGui.Begin(ImGuiLabel("camera-preview-title") + "###vsdirector-camera-preview", ref cameraPreviewOpen,
             ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         try
         {
@@ -570,7 +570,7 @@ internal sealed partial class DirectorWorkspaceHud
                 else
                 {
                     cameraPreviewSink.Texture = 0;
-                    ImGui.TextWrapped(string.IsNullOrEmpty(cameraPreviewError) ? RmlLabel("camera-preview-waiting") : cameraPreviewError);
+                    ImGui.TextWrapped(string.IsNullOrEmpty(cameraPreviewError) ? ImGuiLabel("camera-preview-waiting") : cameraPreviewError);
                 }
             }
             else

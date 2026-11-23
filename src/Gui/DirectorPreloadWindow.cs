@@ -12,7 +12,7 @@ internal sealed record DirectorPreloadMapState(int CenterX, int CenterZ, int Tar
     IReadOnlySet<DirectorReplayPreloadColumn> Excluded, IReadOnlySet<DirectorReplayPreloadColumn> Final);
 
 /// <summary>Native ImGui preload map editor used by the workspace floating tool.</summary>
-internal sealed class DirectorPreloadRmlWindow : DirectorImGuiDialog
+internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
 {
     private readonly ICoreClientAPI api;
     private readonly Func<DirectorPreloadMapState?> state;
@@ -34,7 +34,7 @@ internal sealed class DirectorPreloadRmlWindow : DirectorImGuiDialog
     internal event Action? Closed;
     private static string L(string key) => Lang.Get("vsdirector:" + key);
 
-    internal DirectorPreloadRmlWindow(ICoreClientAPI api, Func<DirectorPreloadMapState?> state,
+    internal DirectorPreloadWindow(ICoreClientAPI api, Func<DirectorPreloadMapState?> state,
         Action<int, int, int, int, bool> paint, Action<int, int> pan, Action<double> seek, bool replay, double duration, double time)
         : base(api, L("preload-editor-title"), "preload", false, ImGuiWindowFlags.None)
     {

@@ -138,10 +138,10 @@ internal sealed partial class DirectorWorkspaceHud
     {
         if (pathFloatingEditorKind != PathFloatingEditorKind.None)
         {
-            ComposeKeyframeRml(replay: false);
+            ComposeKeyframeImGui(replay: false);
             return;
         }
-        DisposeKeyframeRml();
+        DisposeKeyframeImGui();
         double width = ReplayPropertyPopupWidth;
         double height = PathFloatingEditorHeight();
         ClampPathFloatingEditorPosition(width, height);
@@ -694,7 +694,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         CameraKeyframe? frame = SelectedPathFloatingCameraKeyframe();
         GuiComposer? composer = floatingEditorDialog.Composer;
-        if (pathEdit is null || frame is null || (composer is null && keyframeRmlWindow is null)
+        if (pathEdit is null || frame is null || (composer is null && keyframeImGuiWindow is null)
             || !TryPathFloatingNumber(composer, "cameraTime", out double time)
             || !TryPathFloatingNumber(composer, "cameraDuration", out double duration)
             || !TryPathFloatingNumber(composer, "cameraHold", out double hold)
@@ -787,7 +787,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         DirectorPathElementKeyframe? frame = SelectedPathElementKeyframe();
         GuiComposer? composer = floatingEditorDialog.Composer;
-        if (pathEdit is null || frame is null || (composer is null && keyframeRmlWindow is null)
+        if (pathEdit is null || frame is null || (composer is null && keyframeImGuiWindow is null)
             || !TryPathFloatingNumber(composer, "elementTime", out double time)
             || time < 0d || time > Math.Max(pathEdit.DurationSeconds, 0d))
         {
@@ -906,7 +906,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         value = 0d;
         string key = "pathFloating" + UpperFirst(field);
-        string? text = keyframeRmlWindow is not null ? keyframeRmlValues.GetValueOrDefault(key)
+        string? text = keyframeImGuiWindow is not null ? keyframeImGuiValues.GetValueOrDefault(key)
             : composer?.GetNumberInput(key)?.GetText();
         return double.TryParse(text, System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out value)

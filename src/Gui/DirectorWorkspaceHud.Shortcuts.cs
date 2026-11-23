@@ -30,9 +30,9 @@ internal sealed partial class DirectorWorkspaceHud
             UnFocus();
             floatingEditorDialog.UnFocus();
         }
-        rmlInspectorWindow?.SetInputEnabled(!layout.NavigationMode);
-        rmlViewWindow?.SetInputEnabled(!layout.NavigationMode);
-        rmlToolbarWindow?.SetInputEnabled(!layout.NavigationMode);
-        rmlTimeline?.SetInputEnabled(!layout.NavigationMode);
+        imGuiInspectorWindow?.SetInputEnabled(!layout.NavigationMode);
+        imGuiViewWindow?.SetInputEnabled(!layout.NavigationMode);
+        imGuiToolbarWindow?.SetInputEnabled(!layout.NavigationMode);
+        imGuiTimeline?.SetInputEnabled(!layout.NavigationMode);
     }
 }

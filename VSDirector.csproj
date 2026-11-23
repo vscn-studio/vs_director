@@ -7,9 +7,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>VSDirector</AssemblyName>
     <RootNamespace>VSDirector</RootNamespace>
-    <Version>1.0.4-pre.5</Version>
-    <Authors>HansJack (VSCN-Studio)</Authors>
-    <Copyright>Copyright (c) 2026 HansJack (VSCN-Studio)</Copyright>
+    <Version>1.0.4-pre.6</Version>
+    <Authors>HansJack (VSCN-Studio);HanosThePlacid</Authors>
+    <Copyright>Copyright (c) 2026 HansJack (VSCN-Studio), HanosThePlacid</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <!-- Prefer the declared SDK over stale DLLs in test/build output folders. -->
@@ -118,6 +118,7 @@
     <Copy SourceFiles="$(MSBuildProjectDirectory)\modinfo.json" DestinationFolder="$(ObsSourcePackageDirectory)" />
     <Copy SourceFiles="$(MSBuildProjectDirectory)\.github\workflows\build-obs-plugin.yml" DestinationFolder="$(ObsSourcePackageDirectory)\.github\workflows" />
     <Copy SourceFiles="$(MSBuildProjectDirectory)\tools\StageObsCompliance.ps1" DestinationFolder="$(ObsSourcePackageDirectory)\tools" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\tools\CheckObsPackage.py" DestinationFolder="$(ObsSourcePackageDirectory)\tools" />
     <ZipDirectory
       SourceDirectory="$(ObsSourcePackageDirectory)"
       DestinationFile="$(MSBuildProjectDirectory)\artifacts\vsdirector_obs_source_$(Version).zip"

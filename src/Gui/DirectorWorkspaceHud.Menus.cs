@@ -8,7 +8,7 @@ namespace VSDirector.Gui;
 
 internal sealed partial class DirectorWorkspaceHud
 {
-    private DirectorImGuiWindow? rmlToolbarWindow, rmlResourceWindow;
+    private DirectorImGuiWindow? imGuiToolbarWindow, imGuiResourceWindow;
     private DirectorSceneBrowser? sceneBrowser;
     private DirectorWorkspaceSection sceneCategory = DirectorWorkspaceSection.Cameras;
     private string sceneSearch = "";
@@ -19,14 +19,14 @@ internal sealed partial class DirectorWorkspaceHud
             Composers[key] = capi.Gui.CreateCompo(key, ElementBounds.Fixed(-2, -2, 1, 1)).Compose(false);
     }
 
-    private void ComposeRmlToolbar()
+    private void ComposeImGuiToolbar()
     {
         EmptyMenuComposer(ToolbarKey);
         var commands = new List<DirectorWorkspaceMenus.Command>();
         commands.Add(new("creation", DirectorCreationText.L("creation-creation"), EnterCreationWorkspace));
         if (SceneSections().Any()) commands.Add(new("scene", Lang.Get("vsdirector:workspace-scene"), OpenSceneWindow));
         if (IsSectionAvailable(DirectorWorkspaceSection.Replay))
-            commands.Add(new("tab-replay", SectionLabel(DirectorWorkspaceSection.Replay), () => OpenRmlResourceMenu(DirectorWorkspaceSection.Replay), Selected: resourceMenuSection == DirectorWorkspaceSection.Replay));
+            commands.Add(new("tab-replay", SectionLabel(DirectorWorkspaceSection.Replay), () => OpenImGuiResourceMenu(DirectorWorkspaceSection.Replay), Selected: resourceMenuSection == DirectorWorkspaceSection.Replay));
         if (IsSectionAvailable(DirectorWorkspaceSection.Replay))
             commands.Add(new("export", Lang.Get("vsdirector:export"), () => OpenReplayExport(), owner.IsReplayPlaying));
         commands.Add(new("settings", Lang.Get("vsdirector:workspace-settings-button"), () => owner.ToggleSettings()));
@@ -34,33 +34,33 @@ internal sealed partial class DirectorWorkspaceHud
         commands.Add(new("hud", Lang.Get(owner.Config.HideHudOnCamera ? "vsdirector:workspace-show-hud" : "vsdirector:workspace-hide-hud"), () => ToggleCameraHud()));
         commands.Add(new("reset-layout", Lang.Get("vsdirector:workspace-reset-layout"), imGuiWorkspace.ResetLayout));
         var form = DirectorWorkspaceMenus.Toolbar(commands);
-        rmlToolbarWindow ??= new DirectorImGuiWindow(capi, "workspace-menu", docked: true, escape: () => OnEscapePressed(), overlay: true, workspace: imGuiWorkspace);
-        rmlToolbarWindow.Render("", form);
-        rmlToolbarWindow.SetInputEnabled(!layout.NavigationMode);
+        imGuiToolbarWindow ??= new DirectorImGuiWindow(capi, "workspace-menu", docked: true, escape: () => OnEscapePressed(), overlay: true, workspace: imGuiWorkspace);
+        imGuiToolbarWindow.Render("", form);
+        imGuiToolbarWindow.SetInputEnabled(!layout.NavigationMode);
         var panel = layout.Panel("toolbar");
         panel.Height = DirectorWorkspacePanelLayout.ToolbarHeight;
-        rmlToolbarWindow.SetDockBounds(panel.X, panel.Y, panel.Width, panel.Height);
-        if (IsOpened()) rmlToolbarWindow.Open();
+        imGuiToolbarWindow.SetDockBounds(panel.X, panel.Y, panel.Width, panel.Height);
+        if (IsOpened()) imGuiToolbarWindow.Open();
     }
 
-    private void OpenRmlResourceMenu(DirectorWorkspaceSection target)
+    private void OpenImGuiResourceMenu(DirectorWorkspaceSection target)
     {
         if (DirectorToolWindows.HasOpenTool || !IsSectionAvailable(target) || resourceMenuSection == target) return;
         PreserveInputs();
         resourceMenuSection = target;
         resourceScrollOffset = 0;
         ComposeResources();
-        UpdateRmlMenuStatus();
+        UpdateImGuiMenuStatus();
     }
 
-    private void ComposeRmlResources()
+    private void ComposeImGuiResources()
     {
         if (sceneBrowser?.IsOpened == true) ComposeSceneWindow();
         EmptyMenuComposer(ResourceMenuKey);
         replayResourceSplitBounds = replayResourceTopBounds = replayResourceViewBounds = null;
         if (resourceMenuSection is not { } target || !IsSectionAvailable(target))
         {
-            rmlResourceWindow?.Close();
+            imGuiResourceWindow?.Close();
             return;
         }
         var resources = new List<DirectorWorkspaceMenus.Resource>();
@@ -119,44 +119,44 @@ internal sealed partial class DirectorWorkspaceHud
             () => { StartReplayRecording(); ComposeResources(); }, () => { StopReplayRecording(); ComposeResources(); },
             () => { RefreshReplayIndex(); ComposeResources(); },
             !owner.IsReplayRecording && !owner.HasPendingReplaySave, owner.IsReplayRecording || owner.HasFailedReplaySave);
-        if (rmlResourceWindow is null)
+        if (imGuiResourceWindow is null)
         {
-            rmlResourceWindow = new DirectorImGuiWindow(capi, "resource-browser", docked: true, escape: () => OnEscapePressed(), overlay: true, workspace: imGuiWorkspace);
-            rmlResourceWindow.Closed += CloseResourceMenu;
+            imGuiResourceWindow = new DirectorImGuiWindow(capi, "resource-browser", docked: true, escape: () => OnEscapePressed(), overlay: true, workspace: imGuiWorkspace);
+            imGuiResourceWindow.Closed += CloseResourceMenu;
         }
-        rmlResourceWindow.Render(SectionLabel(target), form);
+        imGuiResourceWindow.Render(SectionLabel(target), form);
         var panel = layout.Panel("resources");
         ConfigureResourceMenuPanel(panel);
-        rmlResourceWindow.SetDockBounds(panel.X, panel.Y, panel.Width, panel.Height);
-        if (IsOpened()) rmlResourceWindow.Open();
+        imGuiResourceWindow.SetDockBounds(panel.X, panel.Y, panel.Width, panel.Height);
+        if (IsOpened()) imGuiResourceWindow.Open();
     }
 
-    private void UpdateRmlMenuStatus()
+    private void UpdateImGuiMenuStatus()
     {
-        if (rmlToolbarWindow?.Document is { IsDisposed: false })
+        if (imGuiToolbarWindow?.Document is { IsDisposed: false })
         {
-            rmlToolbarWindow.SetEnabled("export", owner.IsReplayPlaying);
+            imGuiToolbarWindow.SetEnabled("export", owner.IsReplayPlaying);
         }
-        if (rmlResourceWindow?.Document is { IsDisposed: false })
-            DirectorWorkspaceMenus.UpdateRecordingButton(rmlResourceWindow,
+        if (imGuiResourceWindow?.Document is { IsDisposed: false })
+            DirectorWorkspaceMenus.UpdateRecordingButton(imGuiResourceWindow,
                 !owner.IsReplayRecording && !owner.HasPendingReplaySave, owner.IsReplayRecording || owner.HasFailedReplaySave);
     }
 
-    private DirectorWorkspaceSection? RmlToolbarSectionAt(int x, int y)
+    private DirectorWorkspaceSection? ImGuiToolbarSectionAt(int x, int y)
     {
-        if (rmlToolbarWindow?.Document is { IsDisposed: false } doc)
+        if (imGuiToolbarWindow?.Document is { IsDisposed: false } doc)
             foreach (var target in VisibleToolbarSections())
                 if (doc.GetElementById(ToolbarTabKey(target)) is { } element && element.Bounds.Width > 0 && Contains(element.Bounds, x, y)) return target;
 
         return null;
     }
-    private double RmlToolbarAnchor(DirectorWorkspaceSection target)
+    private double ImGuiToolbarAnchor(DirectorWorkspaceSection target)
     {
-        if (rmlToolbarWindow?.Document?.GetElementById(ToolbarTabKey(target)) is { } element
+        if (imGuiToolbarWindow?.Document?.GetElementById(ToolbarTabKey(target)) is { } element
             && element.Bounds.Width > 0)
             return element.Bounds.X / Math.Max(.001, GuiElement.scaled(1));
 
-        if (rmlToolbarWindow?.Document?.GetElementById("toolbar-overflow") is { } overflow
+        if (imGuiToolbarWindow?.Document?.GetElementById("toolbar-overflow") is { } overflow
             && overflow.Bounds.Width > 0)
             return overflow.Bounds.X / Math.Max(.001, GuiElement.scaled(1));
 
@@ -169,8 +169,8 @@ internal sealed partial class DirectorWorkspaceHud
             anchor += ToolbarButtonWidth(Lang.Get("vsdirector:workspace-scene")) + 4d;
         return anchor;
     }
-    private bool RmlResourceContains(int x, int y)
-        => rmlResourceWindow?.IsOpened == true && rmlResourceWindow.ContainsScreenPoint(x, y);
+    private bool ImGuiResourceContains(int x, int y)
+        => imGuiResourceWindow?.IsOpened == true && imGuiResourceWindow.ContainsScreenPoint(x, y);
     private static bool Contains(DirectorImGuiElementBounds bounds, int x, int y)
         => x >= bounds.X && y >= bounds.Y && x < bounds.X + bounds.Width && y < bounds.Y + bounds.Height;
 

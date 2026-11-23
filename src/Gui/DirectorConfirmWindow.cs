@@ -6,7 +6,7 @@ using VSImGui.API;
 namespace VSDirector.Gui;
 
 /// <summary>Native ImGui confirmation dialog used for destructive actions.</summary>
-internal sealed class DirectorRmlConfirmWindow : IDisposable
+internal sealed class DirectorConfirmWindow : IDisposable
 {
     private readonly ICoreClientAPI api;
     private readonly string title;
@@ -14,7 +14,7 @@ internal sealed class DirectorRmlConfirmWindow : IDisposable
     private readonly Action onConfirm;
     private DirectorConfirmDialog? window;
 
-    internal DirectorRmlConfirmWindow(ICoreClientAPI api, string title, string message, Action onConfirm)
+    internal DirectorConfirmWindow(ICoreClientAPI api, string title, string message, Action onConfirm)
     {
         this.api = api;
         this.title = title;

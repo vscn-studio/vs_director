@@ -20,6 +20,11 @@ using VSDirector.Networking;
 using ProtoBuf;
 
 const string harmonyId = "vscn.vsdirector.patch-probe";
+if (args.Contains("--imgui-fonts"))
+{
+    DirectorImGuiProbe.RunFontChecks();
+    return 0;
+}
 DirectorBinaryCompatibilityChecks.Run(typeof(VSDirectorModSystem).Assembly);
 DirectorGameCompatibilityChecks.Run();
 DirectorClientCompatibilityChecks.Run();
@@ -1716,10 +1721,10 @@ try
         ?? throw new MissingMethodException(
             surfaceExtensionsType.FullName,
             "AddDirectorOpaqueWindowSurface");
-    MethodInfo composeRmlResources = workspaceType.GetMethod("ComposeRmlResources", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    MethodInfo composeImGuiResources = workspaceType.GetMethod("ComposeImGuiResources", BindingFlags.Instance | BindingFlags.NonPublic)!;
     Type workspaceMenusType = workspaceType.Assembly.GetType("VSDirector.Gui.DirectorWorkspaceMenus", throwOnError: true)!;
-    if (!CallsMethod(composeResources, composeRmlResources)
-        || !CallsMethod(composeRmlResources, workspaceMenusType.GetMethod("Browser", BindingFlags.Static | BindingFlags.NonPublic)!)
+    if (!CallsMethod(composeResources, composeImGuiResources)
+        || !CallsMethod(composeImGuiResources, workspaceMenusType.GetMethod("Browser", BindingFlags.Static | BindingFlags.NonPublic)!)
         || workspaceType.GetMethod("ComposeLiveOffscreenResources", BindingFlags.Instance | BindingFlags.NonPublic) is not null
         || workspaceType.GetField(
             "resourceMenuSection",
@@ -2562,7 +2567,7 @@ try
     object? emptyResolution = resolvePreloadReplay.Invoke(
         null,
         new object?[] { null, Guid.Empty, preloadReplays });
-    Type preloadWindowType = directorAssembly.GetType("VSDirector.Gui.DirectorPreloadRmlWindow", throwOnError: true)!;
+    Type preloadWindowType = directorAssembly.GetType("VSDirector.Gui.DirectorPreloadWindow", throwOnError: true)!;
     MethodInfo preloadOpen = preloadWindowType.GetMethod("Open", BindingFlags.Instance | BindingFlags.NonPublic)!;
     MethodInfo preloadRefresh = preloadWindowType.GetMethod("Refresh", BindingFlags.Instance | BindingFlags.NonPublic)!;
     if (!CallsMethodReference(composePreloadCanvas, preloadOpen)

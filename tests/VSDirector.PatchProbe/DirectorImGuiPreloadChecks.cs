@@ -11,7 +11,7 @@ internal static partial class DirectorImGuiProbe
 {
     private static void CheckPreloadWindow(Assembly assembly, ICoreClientAPI api, Action<string> capture)
     {
-        Type windowType = assembly.GetType("VSDirector.Gui.DirectorPreloadRmlWindow", true)!;
+        Type windowType = assembly.GetType("VSDirector.Gui.DirectorPreloadWindow", true)!;
         Type stateType = assembly.GetType("VSDirector.Gui.DirectorPreloadMapState", true)!;
         var automatic = new HashSet<DirectorReplayPreloadColumn> { new(0, 0, 0), new(1, 0, 0) };
         var included = new HashSet<DirectorReplayPreloadColumn> { new(1, 1, 0) };

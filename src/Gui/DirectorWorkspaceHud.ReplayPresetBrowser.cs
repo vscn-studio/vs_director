@@ -38,7 +38,7 @@ internal sealed partial class DirectorWorkspaceHud
     private DirectorReplayPresetUsage presetUsage => presetUsageStore ??= DirectorReplayPresetUsage.Load(
         Path.Combine(capi.GetOrCreateDataPath("ModData"), "VSDirector", "replay-preset-usage.json"));
 
-    private void RmlReplayPresetBrowser(DirectorImGuiForm form)
+    private void ImGuiReplayPresetBrowser(DirectorImGuiForm form)
     {
         if (presetBrowserCategory.Length == 0)
         {

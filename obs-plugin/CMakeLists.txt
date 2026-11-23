@@ -16,6 +16,18 @@ set_target_properties(vsdirector-obs PROPERTIES PREFIX "")
 if(COMMAND set_target_properties_obs)
   # OBS' in-tree helper supplies the native plugin layout and embeds data files.
   set_target_properties_obs(vsdirector-obs PROPERTIES FOLDER plugins PREFIX "")
+  if(APPLE)
+    # OBS' in-tree helper defaults third-party modules to OBS' own identity.
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/modinfo.json" director_metadata)
+    string(JSON director_version GET "${director_metadata}" version)
+    string(REGEX REPLACE "-.*$" "" director_bundle_version "${director_version}")
+    set_target_properties(vsdirector-obs PROPERTIES
+      XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "studio.vscn.vsdirector-obs"
+      XCODE_ATTRIBUTE_MARKETING_VERSION "${director_bundle_version}"
+      XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION "${director_bundle_version}"
+      XCODE_ATTRIBUTE_INFOPLIST_KEY_NSHumanReadableCopyright "Copyright (c) 2026 HansJack (VSCN-Studio)"
+    )
+  endif()
 elseif(APPLE)
   file(GLOB_RECURSE VSDIRECTOR_OBS_DATA CONFIGURE_DEPENDS data/*)
   foreach(data_file IN LISTS VSDIRECTOR_OBS_DATA)

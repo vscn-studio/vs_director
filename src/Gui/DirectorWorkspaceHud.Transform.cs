@@ -7,7 +7,7 @@ namespace VSDirector.Gui;
 
 internal sealed partial class DirectorWorkspaceHud
 {
-    private DirectorImGuiWindow? rmlTransformWindow;
+    private DirectorImGuiWindow? imGuiTransformWindow;
     private CameraPreset? transformPose;
     private DirectorReplayViewportTimeline? transformTimeline;
     private Guid transformClipId, transformReplayId, transformSceneId;
@@ -15,26 +15,26 @@ internal sealed partial class DirectorWorkspaceHud
 
     private void ComposeCameraTransform()
     {
-        if (rmlTransformWindow is null)
+        if (imGuiTransformWindow is null)
         {
-            rmlTransformWindow = new DirectorImGuiWindow(capi, "transform", docked: true,
+            imGuiTransformWindow = new DirectorImGuiWindow(capi, "transform", docked: true,
                 escape: () => OnEscapePressed(), workspace: imGuiWorkspace);
-            rmlTransformWindow.Closed += () => { transformTabDismissed = true; FinishCameraTransform(cancel: false); };
+            imGuiTransformWindow.Closed += () => { transformTabDismissed = true; FinishCameraTransform(cancel: false); };
             var form = new DirectorImGuiForm { Docked = true, ClassName = "inspector" };
             form.AddControl(DrawCameraTransform);
-            rmlTransformWindow.Render(RmlLabel("camera-transform-title"), form, 320, 500);
+            imGuiTransformWindow.Render(ImGuiLabel("camera-transform-title"), form, 320, 500);
         }
         var panel = layout.Panel("inspector");
-        rmlTransformWindow.SetDockBounds(panel.X, panel.Y, panel.Width, panel.Height);
-        rmlTransformWindow.SetInputEnabled(!layout.NavigationMode);
-        if (IsOpened() && !transformTabDismissed && !rmlTransformWindow.IsOpened) rmlTransformWindow.Open();
+        imGuiTransformWindow.SetDockBounds(panel.X, panel.Y, panel.Width, panel.Height);
+        imGuiTransformWindow.SetInputEnabled(!layout.NavigationMode);
+        if (IsOpened() && !transformTabDismissed && !imGuiTransformWindow.IsOpened) imGuiTransformWindow.Open();
     }
 
     private void DrawCameraTransform()
     {
         if (section != DirectorWorkspaceSection.Replay)
         {
-            ImGui.TextWrapped(RmlLabel("camera-transform-select"));
+            ImGui.TextWrapped(ImGuiLabel("camera-transform-select"));
             return;
         }
         var timeline = transformTimeline ?? owner.ReplayViewportTimeline;
@@ -43,7 +43,7 @@ internal sealed partial class DirectorWorkspaceHud
         var pose = clip is null ? null : transformPose ?? cameraDragPose ?? ReplayCameraElementPose(clip);
         if (clip is null || pose is null)
         {
-            ImGui.TextWrapped(RmlLabel("camera-transform-select"));
+            ImGui.TextWrapped(ImGuiLabel("camera-transform-select"));
             return;
         }
         ImGui.TextWrapped(clip.Name);
@@ -78,21 +78,21 @@ internal sealed partial class DirectorWorkspaceHud
         });
         ImGui.EndDisabled();
         ImGui.Spacing();
-        ImGui.TextDisabled(RmlLabel("camera-transform-axes"));
-        ImGui.TextWrapped(RmlLabel("camera-transform-pivot-help"));
-        ImGui.TextWrapped(RmlLabel("transform-number-help"));
+        ImGui.TextDisabled(ImGuiLabel("camera-transform-axes"));
+        ImGui.TextWrapped(ImGuiLabel("camera-transform-pivot-help"));
+        ImGui.TextWrapped(ImGuiLabel("transform-number-help"));
 
         void Row(string name, double[] values, Action<int, double> edit)
         {
             ImGui.PushID(name);
             float labelWidth = new[] { "position", "rotation", "pivot" }
-                .Max(key => ImGui.CalcTextSize(RmlLabel("camera-transform-" + key)).X);
-            DrawCameraTransformAxes(RmlLabel("camera-transform-" + name), labelWidth, i =>
+                .Max(key => ImGui.CalcTextSize(ImGuiLabel("camera-transform-" + key)).X);
+            DrawCameraTransformAxes(ImGuiLabel("camera-transform-" + name), labelWidth, i =>
             {
                 ImGui.PushID(i);
                 uint[] colors = [0xff6161f2, 0xff66cc66, 0xfff2a666];
                 double value = values[i];
-                string tooltip = Lang.Get("vsdirector:camera-transform-axis-tooltip", "XYZ"[i].ToString(), RmlLabel("camera-transform-" + name));
+                string tooltip = Lang.Get("vsdirector:camera-transform-axis-tooltip", "XYZ"[i].ToString(), ImGuiLabel("camera-transform-" + name));
                 if (DirectorImGuiNumeric.TransformDouble("##value", ref value, 1, colors[i], tooltip, out bool finished))
                 {
                     if (transformPose is null)

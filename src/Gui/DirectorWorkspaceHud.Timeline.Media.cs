@@ -93,14 +93,14 @@ internal sealed partial class DirectorWorkspaceHud
             capi.Logger.Warning("VS Director waveform unavailable: {0}", job.Exception?.GetBaseException().Message);
         }
         else waveformKey = "";
-        rmlTimelineDirty = true;
+        imGuiTimelineDirty = true;
     }
     private void DrawVoiceWaveform(DirectorReplayViewportTimeline timeline, DirectorReplayElementTrack track,
         double y, double height, double label, double width)
     {
         if (waveforms is null || !waveforms.TryGetValue(track.SpeakerId, out var peaks))
         {
-            rmlTimeline!.Shape("wave-loading-" + track.Id, "timeline-wave-message", label + 8, y + 10, width - label - 16, 20,
+            imGuiTimeline!.Shape("wave-loading-" + track.Id, "timeline-wave-message", label + 8, y + 10, width - label - 16, 20,
                 Lang.Get(waveformFailed ? "vsdirector:timeline-wave-unavailable"
                     : waveformFrames is { Count: > 0 } ? "vsdirector:timeline-wave-loading" : "vsdirector:timeline-wave-empty"));
             return;
@@ -111,7 +111,7 @@ internal sealed partial class DirectorWorkspaceHud
         int stamp = hash.ToHashCode();
         if (waveformMarkup.TryGetValue(track.Id, out var cached) && ReferenceEquals(cached.Peaks, peaks) && cached.Hash == stamp)
         {
-            rmlTimeline!.Waveform("wave-" + track.Id, label, y, width - label, height, cached.Markup); return;
+            imGuiTimeline!.Waveform("wave-" + track.Id, label, y, width - label, height, cached.Markup); return;
         }
         var sampleFrame = new DirectorReplayVoiceFrame { SpeakerId = track.SpeakerId, SourceId = track.SpeakerId };
         var voiceTimeline = new DirectorReplayViewportTimeline { Tracks = [track], ElementKeyframes = frames.ToList() };
@@ -135,7 +135,7 @@ internal sealed partial class DirectorWorkspaceHud
         string html = markup.ToString();
         if (waveformMarkup.Count > 128) waveformMarkup.Clear();
         waveformMarkup[track.Id] = (peaks, stamp, html);
-        rmlTimeline!.Waveform("wave-" + track.Id, label, y, width - label, height, html);
+        imGuiTimeline!.Waveform("wave-" + track.Id, label, y, width - label, height, html);
     }
     private void DisposeTimelineMedia()
     {

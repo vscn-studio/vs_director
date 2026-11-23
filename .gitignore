@@ -3,6 +3,7 @@
 [Oo]bj/
 artifacts/
 TestResults/
+__pycache__/
 *.trx
 *.coverage
 *.coveragexml

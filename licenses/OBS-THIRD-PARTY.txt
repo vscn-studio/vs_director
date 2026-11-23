@@ -16,6 +16,12 @@ Source archive: https://github.com/obsproject/obs-studio/archive/dcdbd2e9048ae66
 
 The CI binary packages include corresponding-source/ with the exact original
 plugin source and build workflow used for that package, plus libobs interface
-headers. Obtain the separately installed OBS runtime, its complete source,
-submodules and platform build dependencies from the pinned upstream revision.
-No OBS runtime binary is bundled in these plugin packages.
+headers and per-architecture generated configuration. The upstream/ directory
+contains the pinned OBS source archive and recursively pinned submodule source
+archives, retaining their individual copyright and license notices. The build
+manifests record the commits, extraction paths and archive checksums. See the
+included obs-plugin/README.md for reconstruction instructions.
+The separately installed OBS runtime and external platform SDKs/build
+dependencies are not bundled. Dependency versions and download hashes are
+recorded in OBS' buildspec.json and its build scripts. No OBS runtime binary
+is bundled in these plugin packages.

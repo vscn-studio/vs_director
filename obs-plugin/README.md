@@ -56,5 +56,27 @@ Original plugin source is licensed under the [MIT License](../LICENSE) by
 HansJack (VSCN-Studio). See [third-party notices](../licenses/OBS-THIRD-PARTY.txt)
 for the OBS/libobs dependency. Binaries linked with libobs are distributed
 under GPL-2.0-or-later. CI packages include the plugin source, build scripts,
-and interface headers in `corresponding-source/`. Keep those materials and
-the included GPL text with redistributed binaries.
+interface headers, generated configuration and pinned OBS/submodule source
+archives in `corresponding-source/`. Keep those materials and the included GPL
+text with redistributed binaries. The final archives are checked for these
+files, the install layout and the expected binary architectures before upload.
+
+`build-inputs/<platform-architecture>/manifest.json` records the source commits,
+archive paths and SHA-256 checksums. To reconstruct the upstream source tree,
+extract `upstream/obs-studio.tar.gz` into an `obs-studio` directory, then extract
+each submodule archive into its `path` under that directory, in manifest order.
+The workflow shows how to add `obs-plugin` and `modinfo.json` to that tree and
+build it. Generated headers and the modified plugin list are retained for each
+architecture; the universal macOS package includes both slices' build inputs.
+Platform SDKs, compilers and external dependencies listed in OBS' `buildspec.json`
+and build scripts are still needed. The archives do not include the installed
+OBS runtime or an offline copy of every external build dependency.
+
+Packaging regression checks (Python 3, PowerShell 7 and Git required):
+
+```sh
+python -m unittest discover -s tests -p test_obs_packaging.py -v
+```
+
+These checks use synthetic binaries to exercise archive validation; verify
+actual OBS loading on each supported platform after the Actions build.

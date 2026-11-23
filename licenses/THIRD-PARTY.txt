@@ -7,7 +7,22 @@ Source: https://github.com/tabler/tabler-icons/tree/v3.34.1
 Distributed resources: assets/vsdirector/fonts/tabler/tabler-icons.ttf and
 assets/vsdirector/textures/icons/tabler/*.svg.
 SVG resources include outline and filled variants. Icon glyphs are merged
-into the game's current default ImGui font; no text font is bundled.
+into the game's current default ImGui font.
+
+FontSettings (神麤詭末 / scgm0)
+Copyright (c) 2024 神麤詭末
+Source: https://github.com/scgm0/FontSettings
+Reference revision: d411c7dca871f0ea78c4b47be5b93ac73d4f1ee5
+License: MIT; full text: FontSettings-MIT.txt.
+DirectorImGuiTextFont.cs adapts the ImGui font synchronization workflow from
+FontSettings/ImGuiCompat.cs: preserve locale glyph coverage and restore fonts
+when the renderer uploads a rebuilt atlas. Director merges missing glyphs
+into the live default without clearing the shared atlas or FontManager cache.
+FontSettings retains font selection and rebuild ownership when installed.
+Missing characters are supplied by locally installed system fonts. No system
+font files or CJK font resources are redistributed in the mod package.
+Its settings UI, system-font collection and other compatibility patches are
+not included; FontSettings is optional and its assembly is not bundled.
 
 InGameDevTools (Alodh and contributors)
 Source: https://github.com/Alodh1/InGameDevTools

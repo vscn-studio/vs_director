@@ -55,7 +55,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(4));
         if (cameraObservationFocus) { ImGui.SetNextWindowFocus(); cameraObservationFocus = false; }
-        bool visible = ImGui.Begin(RmlLabel("camera-observation-title") + "###vsdirector-camera-observation", ref cameraObservationOpen,
+        bool visible = ImGui.Begin(ImGuiLabel("camera-observation-title") + "###vsdirector-camera-observation", ref cameraObservationOpen,
             ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         try
         {
@@ -83,8 +83,8 @@ internal sealed partial class DirectorWorkspaceHud
                 else
                 {
                     cameraObservationSink.Texture = 0;
-                    ImGui.TextWrapped(subject is null ? RmlLabel("camera-observation-missing")
-                        : string.IsNullOrEmpty(cameraObservationError) ? RmlLabel("camera-preview-waiting") : cameraObservationError);
+                    ImGui.TextWrapped(subject is null ? ImGuiLabel("camera-observation-missing")
+                        : string.IsNullOrEmpty(cameraObservationError) ? ImGuiLabel("camera-preview-waiting") : cameraObservationError);
                 }
             }
             else
@@ -102,7 +102,7 @@ internal sealed partial class DirectorWorkspaceHud
         0 => "east", 1 => "west", 2 => "top", 3 => "bottom", 4 => "south", 5 => "north", _ => "orbit"
     });
 
-    private static string ObservationSideLabel(int side) => RmlLabel(ObservationSideKey(side));
+    private static string ObservationSideLabel(int side) => ImGuiLabel(ObservationSideKey(side));
 
     private void DrawCameraObservationViewport(Vector2 min, Vector2 size, CameraPreset eye, CameraPreset subject, int texture, float aspect)
     {
@@ -123,10 +123,10 @@ internal sealed partial class DirectorWorkspaceHud
                 for (int side = -1; side < 6; side++)
                     if (ImGui.Selectable(ObservationSideLabel(side), cameraObservation.Side == side)) cameraObservation.Snap(side);
                 ImGui.Separator();
-                if (ImGui.Selectable(RmlLabel("camera-observation-reset"))) cameraObservation.Reset();
+                if (ImGui.Selectable(ImGuiLabel("camera-observation-reset"))) cameraObservation.Reset();
                 ImGui.EndCombo();
             }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(RmlLabel("camera-observation-controls"));
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(ImGuiLabel("camera-observation-controls"));
         }
         ImGui.SetCursorScreenPos(min);
         ImGui.InvisibleButton("camera-observation-viewport", size, ImGuiButtonFlags.MouseButtonLeft);
@@ -205,7 +205,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         if (hit >= 0)
         {
-            ImGui.SetTooltip(RmlLabel(ObservationSideKey(hit) + "-tooltip"));
+            ImGui.SetTooltip(ImGuiLabel(ObservationSideKey(hit) + "-tooltip"));
             if (ImGui.IsMouseClicked(ImGuiMouseButton.Left)) cameraObservation.Snap(hit);
         }
         return hovered && Vector2.DistanceSquared(mouse, center) <= extent * extent;

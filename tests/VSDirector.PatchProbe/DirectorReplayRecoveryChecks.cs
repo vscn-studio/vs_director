@@ -22,7 +22,7 @@ internal static partial class DirectorImGuiProbe
         Set("owner", new VSDirectorModSystem());
         object legacy = Activator.CreateInstance(assembly.GetType("VSDirector.Gui.DirectorWorkspaceFloatingEditorDialog", true)!, api, hud)!;
         Set("floatingEditorDialog", legacy);
-        Set("keyframeRmlValues", new Dictionary<string, string>());
+        Set("keyframeImGuiValues", new Dictionary<string, string>());
         var clip = new DirectorReplayViewportClip { Name = "Camera keyframe", SourceType = DirectorReplayViewportSourceType.StaticCamera, CameraPose = new CameraPreset() };
         Set("replayViewportDraftTimeline", new DirectorReplayViewportTimeline { Clips = [clip] });
         Set("selectedReplayViewportClipId", clip.Id);
@@ -40,8 +40,8 @@ internal static partial class DirectorImGuiProbe
                 Set("keyframeAnchorX", 940f / scale);
                 Set("keyframeAnchorY", 800f / scale);
                 kind.SetValue(hud, Enum.Parse(kind.FieldType, "CameraKeyframe"));
-                Call(hud, "ComposeKeyframeRml", true);
-                object window = AccessTools.Field(hudType, "keyframeRmlWindow").GetValue(hud)!;
+                Call(hud, "ComposeKeyframeImGui", true);
+                object window = AccessTools.Field(hudType, "keyframeImGuiWindow").GetValue(hud)!;
                 Vector2 position = default, size = default;
                 bool collapsed = false;
                 void Frame()
@@ -73,7 +73,7 @@ internal static partial class DirectorImGuiProbe
                 io.MousePos += new Vector2(-100, -20); Frame(); Frame();
                 io.MouseDown[0] = false; Frame();
                 Vector2 moved = position;
-                Call(hud, "ComposeKeyframeRml", true);
+                Call(hud, "ComposeKeyframeImGui", true);
                 for (int frame = 0; frame < 8; frame++) Frame();
                 if (Vector2.Distance(resized, size) > 1 || Vector2.Distance(moved, position) > 1)
                     throw new Exception("Refreshing the keyframe editor reset its user-selected size or position.");
@@ -92,7 +92,7 @@ internal static partial class DirectorImGuiProbe
         }
         finally
         {
-            Call(hud, "DisposeKeyframeRml");
+            Call(hud, "DisposeKeyframeImGui");
             ((IDisposable)legacy).Dispose();
             io.MouseDown[0] = false; io.MousePos = new Vector2(-100);
             io.DisplaySize = savedDisplay; RuntimeEnv.GUIScale = savedScale;
