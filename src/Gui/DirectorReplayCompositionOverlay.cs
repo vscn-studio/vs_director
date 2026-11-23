@@ -77,11 +77,25 @@ internal sealed class DirectorReplayCompositionOverlay : IRenderer, IDisposable
             Horizontal(context, frame, 0.5d);
         }
         context.Stroke();
+        if (composition.VerticalGuide)
+        {
+            // Centred 9:16 frame; the area a vertical crop removes is dimmed.
+            double cropWidth = Math.Min(width, height * 9d / 16d);
+            double left = (width - cropWidth) / 2d;
+            context.SetSourceRGBA(0d, 0d, 0d, 0.45d);
+            context.Rectangle(0d, 0d, left, height);
+            context.Rectangle(left + cropWidth, 0d, width - left - cropWidth, height);
+            context.Fill();
+            context.SetSourceRGBA(1d, 0.82d, 0.3d, 0.9d);
+            context.LineWidth = Math.Max(2d, width / 960d);
+            context.Rectangle(left, 0d, cropWidth, height);
+            context.Stroke();
+        }
         capi.Gui.LoadOrUpdateCairoTexture(surface, linearMag: true, ref texture);
     }
 
     private static bool HasVisibleOverlay(DirectorReplayCompositionVisuals value)
-        => value.RuleOfThirds || value.CenterGuide;
+        => value.RuleOfThirds || value.CenterGuide || value.VerticalGuide;
 
     private static int VisualHash(
         DirectorReplayCompositionVisuals value,
@@ -93,6 +107,7 @@ internal sealed class DirectorReplayCompositionOverlay : IRenderer, IDisposable
         hash.Add(height);
         hash.Add(value.RuleOfThirds);
         hash.Add(value.CenterGuide);
+        hash.Add(value.VerticalGuide);
         return hash.ToHashCode();
     }
 

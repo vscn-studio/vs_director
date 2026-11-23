@@ -49,7 +49,7 @@ internal sealed partial class DirectorWorkspaceHud
             };
         }
         bool entityPopup = replay && replayFloatingEditorKind == ReplayFloatingEditorKind.EntityPopup;
-        bool addMenu = replay ? replayFloatingEditorKind == ReplayFloatingEditorKind.AddElement : pathFloatingEditorKind == PathFloatingEditorKind.AddElement;
+        bool addMenu = replay ? replayFloatingEditorKind is ReplayFloatingEditorKind.AddElement or ReplayFloatingEditorKind.PlayerPicker : pathFloatingEditorKind == PathFloatingEditorKind.AddElement;
         var form = new DirectorImGuiForm
         {
             // A scrolling property body needs a stable height. Auto-fitting a
@@ -61,6 +61,7 @@ internal sealed partial class DirectorWorkspaceHud
         if (replay)
         {
             if (entityPopup) RmlReplayEntityPopup(form);
+            else if (replayFloatingEditorKind == ReplayFloatingEditorKind.PlayerPicker) RmlReplayPlayerPicker(form);
             else if (replayFloatingEditorKind is ReplayFloatingEditorKind.AddElement or ReplayFloatingEditorKind.Track or ReplayFloatingEditorKind.NewScene or ReplayFloatingEditorKind.RenameScene)
                 RmlReplayTimelineMenu(form);
             else if (replayFloatingEditorKind == ReplayFloatingEditorKind.CameraKeyframe) RmlReplayCameraKeyframe(form);
@@ -74,7 +75,7 @@ internal sealed partial class DirectorWorkspaceHud
             else RmlPathElementKeyframe(form);
         }
         keyframeRmlWindow.Render(replay ? ReplayFloatingEditorTitle() : PathFloatingEditorTitle(), form,
-            entityPopup ? 400 : addMenu ? 280 : 440, entityPopup ? 460 : addMenu ? (replay ? 430 : 330) : Math.Clamp(180 + form.FieldCount * 56, 300, 680));
+            entityPopup ? 400 : addMenu ? (replay ? 680 : 280) : 440, entityPopup ? 460 : addMenu ? (replay ? 640 : 330) : Math.Clamp(180 + form.FieldCount * 56, 300, 680));
         if (opening || keyframeAnchorPending)
         {
             keyframeRmlWindow.SetAnchor(keyframeAnchorX, keyframeAnchorY);
@@ -104,8 +105,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         if (replayFloatingEditorKind == ReplayFloatingEditorKind.AddElement)
         {
-            var options = ReplayViewportSourceOptions();
-            form.ChoiceList(options.Select(o => (o.Value, o.Name, (Action)(() => AddReplayElementTrack(o.Value)), "plus")).ToArray());
+            RmlReplayPresetBrowser(form);
             return;
         }
         if (replayFloatingEditorKind is ReplayFloatingEditorKind.NewScene or ReplayFloatingEditorKind.RenameScene)
@@ -250,6 +250,7 @@ internal sealed partial class DirectorWorkspaceHud
         form.NumericText("Yaw", replayViewportYawText, v => replayViewportYawText = v);
         form.NumericText("Pitch", replayViewportPitchText, v => replayViewportPitchText = v);
         form.NumericText(RmlLabel("roll"), replayViewportRollText, v => replayViewportRollText = v);
+        form.Check(RmlLabel("replay-element-ends"), replayViewportEndsShot, v => replayViewportEndsShot = v);
         KeyframeAction(form, "apply", ApplyReplayViewport, "primary");
         KeyframeAction(form, "recapture", RecaptureSelectedReplayCameraKeyframe, refresh: true);
         KeyframeAction(form, "delete", DeleteReplayViewport, "danger");
@@ -272,12 +273,18 @@ internal sealed partial class DirectorWorkspaceHud
         }
         void N(string field, string label) => Number(field, RmlLabel(label));
         void Select(string field, string label, params (string, string)[] choices)
-            => form.Select(RmlLabel(label), ReplayElementField(field), choices.Select(v => (v.Item1, RmlLabel(v.Item2))), v => replayElementFieldValues[field] = v);
+            => form.Select(RmlLabel(label), ReplayElementField(field), choices.Select(v => (v.Item1, RmlLabel(v.Item2))), v =>
+            {
+                replayElementFieldValues[field] = v;
+                // These choices show or hide other fields.
+                if (field is "trackMode" or "timeEffect" && keyframeRmlWindow is not null) ComposeKeyframeRml(true);
+            });
         void Check(string field, string label, bool clearView = false)
             => form.Check(RmlLabel(label), ReplayElementField(field) == "true", v => SetReplayElementSwitch(field, v), !clearView || owner.HasClearView);
         if (frame.TrackType != DirectorReplayElementTrackType.Timelapse) N("time", "replay-element-time-seconds");
         if (frame.TrackType is not (DirectorReplayElementTrackType.Freeze or DirectorReplayElementTrackType.BlockOverride
-            or DirectorReplayElementTrackType.VoiceAudio or DirectorReplayElementTrackType.Timelapse or DirectorReplayElementTrackType.FollowEntity))
+            or DirectorReplayElementTrackType.VoiceAudio or DirectorReplayElementTrackType.Timelapse or DirectorReplayElementTrackType.FollowEntity
+            or DirectorReplayElementTrackType.Title))
             form.Select(RmlLabel("replay-element-interpolation"), ReplayElementField("interpolation"),
                 new[] { "smooth", "linear", "ease-in", "ease-out", "ease-in-out", "hold", "hermite" }
                     .Select(v => (v, RmlLabel((v is "linear" or "hold" ? "replay-speed-interpolation-" : "replay-element-interpolation-") + v))),
@@ -286,20 +293,49 @@ internal sealed partial class DirectorWorkspaceHud
         {
             case DirectorReplayElementTrackType.CameraOrbit:
                 Number("x", "X"); Number("y", "Y"); Number("z", "Z"); N("dimension", "camera-dimension");
-                N("distance", "replay-element-distance"); Number("yaw", "Yaw"); Number("pitch", "Pitch"); break;
+                N("distance", "replay-element-distance"); Number("yaw", "Yaw"); Number("pitch", "Pitch"); N("roll", "roll"); break;
             case DirectorReplayElementTrackType.TrackEntity:
+            {
+                Select("trackMode", "replay-track-mode", ("attached", "replay-track-mode-attached"), ("tripod", "replay-track-mode-tripod"),
+                    ("shoulder", "replay-track-mode-shoulder"));
+                string mode = ReplayElementField("trackMode", "attached");
+                RmlReplayPlayerSelect(form);
                 Text("entityActorKey", RmlLabel("replay-element-actor-key")); Text("entityId", RmlLabel("replay-element-entity-id"));
                 Select("bodyPart", "replay-element-body-part", ("head", "replay-element-body-head"), ("body", "replay-element-body-center"), ("root", "replay-element-body-root"));
-                foreach (string axis in new[] { "X", "Y", "Z" })
+                if (mode == "attached")
                 {
-                    N("offset" + axis, "replay-element-offset-" + axis.ToLowerInvariant());
-                    N("viewOffset" + axis, "replay-element-view-" + axis.ToLowerInvariant());
+                    foreach (string axis in new[] { "X", "Y", "Z" })
+                    {
+                        N("offset" + axis, "replay-element-offset-" + axis.ToLowerInvariant());
+                        N("viewOffset" + axis, "replay-element-view-" + axis.ToLowerInvariant());
+                    }
+                    N("yaw", "replay-element-yaw-offset"); N("pitch", "replay-element-pitch-offset");
                 }
-                N("yaw", "replay-element-yaw-offset"); N("pitch", "replay-element-pitch-offset"); N("roll", "roll");
+                else
+                {
+                    RmlReplaySecondaryPlayerSelect(form);
+                    if (mode == "tripod")
+                    {
+                        Number("x", "X"); Number("y", "Y"); Number("z", "Z");
+                        N("targetBlend", "replay-track-target-blend");
+                    }
+                    else
+                    {
+                        N("viewOffsetX", "replay-track-shoulder-side"); N("viewOffsetY", "replay-track-shoulder-up");
+                        N("viewOffsetZ", "replay-track-shoulder-back");
+                    }
+                    Check("frameGroup", "replay-track-frame-group");
+                    Check("autoFrame", "replay-track-auto-frame");
+                    N("frameSize", "replay-track-frame-size");
+                    N("trackSmooth", "replay-track-smooth");
+                }
+                N("roll", "roll");
                 Check("clearView", "follow-clear-view", true); break;
+            }
             case DirectorReplayElementTrackType.FollowEntity:
                 Select("followRole", "replay-follow-role", ("start", "replay-follow-start"), ("end", "replay-follow-end"));
                 // Keep start parameters editable when changing an end keyframe into a start.
+                RmlReplayPlayerSelect(form);
                 Text("entityActorKey", RmlLabel("replay-element-actor-key")); Text("entityId", RmlLabel("replay-element-entity-id"));
                 Select("followView", "follow-view-mode", ("first", "follow-view-first"), ("third", "follow-view-third"));
                 Select("followMotion", "follow-motion-mode", ("immediate", "follow-motion-immediate"), ("smooth", "follow-motion-smooth"), ("delayed", "follow-motion-delayed"));
@@ -308,22 +344,52 @@ internal sealed partial class DirectorWorkspaceHud
                 foreach (var field in new[] { ("followOffsetX", "offset-x"), ("followOffsetY", "offset-y"), ("followOffsetZ", "offset-z"),
                     ("followDistance", "distance"), ("followHeight", "height"), ("followOrbitAngle", "orbit-angle"), ("followOrbitSpeed", "orbit-speed"),
                     ("followSmooth", "smooth-time"), ("followDelay", "delay"), ("followFov", "fov") }) N(field.Item1, "follow-" + field.Item2);
+                N("roll", "roll");
+                Check("followWorld", "replay-follow-world-aligned");
+                Select("followBlend", "replay-follow-blend", ("hold", "replay-follow-blend-none"), ("linear", "replay-speed-interpolation-linear"),
+                    ("ease-in", "replay-element-interpolation-ease-in"), ("ease-out", "replay-element-interpolation-ease-out"),
+                    ("ease-in-out", "replay-element-interpolation-ease-in-out"));
                 break;
             case DirectorReplayElementTrackType.CameraShake:
                 Check("split", "replay-element-split-axes");
                 N("frequencyX", "replay-element-frequency-x"); N("amplitudeX", "replay-element-amplitude-x");
-                N("frequencyY", "replay-element-frequency-y"); N("amplitudeY", "replay-element-amplitude-y"); break;
+                N("frequencyY", "replay-element-frequency-y"); N("amplitudeY", "replay-element-amplitude-y");
+                N("roll", "replay-element-shake-roll"); break;
             case DirectorReplayElementTrackType.Fov: N("fov", "fov"); break;
             case DirectorReplayElementTrackType.Speed: N("speed", "replay-element-speed"); break;
             case DirectorReplayElementTrackType.Timelapse: N("timelapseDuration", "replay-element-duration-seconds"); break;
             case DirectorReplayElementTrackType.TimeOfDay: N("timeOfDay", "replay-element-time-tick"); break;
             case DirectorReplayElementTrackType.Freeze:
-                Check("frozen", "replay-element-frozen"); N("freezeDelay", "replay-element-freeze-delay"); break;
+                Check("frozen", "replay-element-frozen");
+                Select("timeEffect", "replay-time-effect", ("freeze", "replay-time-effect-freeze"), ("rewind", "replay-time-effect-rewind"),
+                    ("stutter", "replay-time-effect-stutter"), ("slow", "replay-time-effect-slow"));
+                switch (ReplayElementField("timeEffect", "freeze"))
+                {
+                    case "rewind": N("effectSeconds", "replay-time-effect-seconds"); N("effectRate", "replay-time-effect-duration"); break;
+                    case "stutter": N("effectRate", "replay-time-effect-fps"); break;
+                    case "slow": N("effectRate", "replay-time-effect-rate"); break;
+                    default: N("freezeDelay", "replay-element-freeze-delay"); Check("cameraContinues", "replay-time-effect-camera"); break;
+                }
+                break;
+            case DirectorReplayElementTrackType.ColorGrade:
+                N("gradeSepia", "replay-grade-sepia"); N("gradeContrast", "replay-grade-contrast");
+                N("gradeVignette", "replay-grade-vignette"); N("gradeBloom", "replay-grade-bloom"); N("gradeGlitch", "replay-grade-glitch");
+                N("gradeFade", "replay-grade-fade"); break;
+            case DirectorReplayElementTrackType.Title:
+                Text("titleText", RmlLabel("replay-title-text")); Text("titleSubText", RmlLabel("replay-title-subtext"));
+                N("titleDuration", "replay-title-duration");
+                Select("titlePosition", "replay-title-position", ("lower", "replay-title-position-lower"), ("center", "replay-title-position-center"),
+                    ("top", "replay-title-position-top"));
+                break;
             case DirectorReplayElementTrackType.BlockOverride:
                 Number("blockX", "X"); Number("blockY", "Y"); Number("blockZ", "Z"); N("dimension", "camera-dimension");
                 Text("blockCode", RmlLabel("replay-element-block-code")); break;
             case DirectorReplayElementTrackType.VoiceAudio: N("volume", "replay-element-volume"); break;
         }
+        if (frame.TrackType is not (DirectorReplayElementTrackType.Freeze or DirectorReplayElementTrackType.Timelapse
+            or DirectorReplayElementTrackType.FollowEntity or DirectorReplayElementTrackType.Title
+            or DirectorReplayElementTrackType.VoiceAudio or DirectorReplayElementTrackType.BlockOverride))
+            Check("endsElement", "replay-element-ends");
         KeyframeAction(form, "apply", ApplySelectedReplayElementKeyframe, "primary");
         KeyframeAction(form, "delete", DeleteSelectedReplayElementKeyframe, "danger");
     }

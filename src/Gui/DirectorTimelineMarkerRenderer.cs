@@ -246,6 +246,8 @@ internal sealed class DirectorTimelineMarkerRenderer : IDisposable
         yield return (DirectorReplayElementTrackType.Freeze, "snowflake");
         yield return (DirectorReplayElementTrackType.BlockOverride, "cube");
         yield return (DirectorReplayElementTrackType.VoiceAudio, "volume");
+        yield return (DirectorReplayElementTrackType.ColorGrade, "eye");
+        yield return (DirectorReplayElementTrackType.Title, "pencil");
     }
 
     private static IEnumerable<(DirectorPathElementTrackType Type, string Asset)>

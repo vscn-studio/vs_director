@@ -80,12 +80,12 @@ public static class CameraFollowMath
                 target.Dimension,
                 yaw,
                 pitch,
-                0d,
+                NormalizeDegrees(FiniteOr(rig.RollDegrees, 0d)),
                 fov);
         }
 
         double orbitYaw = NormalizeDegrees(
-            yaw + NormalizeDegrees(rig.OrbitAngleDegrees) + FiniteOr(runtimeOrbitOffsetDegrees, 0d));
+            (rig.WorldAligned ? 0d : yaw) + NormalizeDegrees(rig.OrbitAngleDegrees) + FiniteOr(runtimeOrbitOffsetDegrees, 0d));
         Basis orbitBasis = CreateBasis(orbitYaw, 0d);
         double distance = NormalizeDistance(rig.Distance);
         double height = NormalizeHeight(rig.Height);
@@ -115,7 +115,7 @@ public static class CameraFollowMath
             target.Dimension,
             lookYaw,
             lookPitch,
-            0d,
+            NormalizeDegrees(FiniteOr(rig.RollDegrees, 0d)),
             fov);
     }
 

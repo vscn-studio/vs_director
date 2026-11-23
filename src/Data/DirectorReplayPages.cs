@@ -22,9 +22,14 @@ public sealed class DirectorReplayPages
     public bool PrefetchEnabled { get; set; } = true;
     private static readonly JsonSerializerOptions Options = new() { PropertyNameCaseInsensitive = true };
 
+    // The header embeds the replay document, and a reader trusts it without normalizing.
+    // 4: written with replay schema 23. Readers expecting 3 ignore the cache and load the
+    // native replay, which they reject, instead of opening tracks they would drop on save.
+    internal const int CurrentVersion = 4;
+
     public sealed class Header
     {
-        public int Version { get; set; } = 3;
+        public int Version { get; set; } = CurrentVersion;
         public long SourceBytes { get; set; }
         public long SourceTicks { get; set; }
         public string CompanionStamp { get; set; } = "";
@@ -69,7 +74,9 @@ public sealed class DirectorReplayPages
         using var stream = new GZipStream(file, CompressionMode.Decompress, true);
         Header h = JsonSerializer.Deserialize<Header>(stream, Options) ?? throw new InvalidDataException("Empty replay page header.");
         var source = new FileInfo(sourcePath);
-        if (h.Version != 3 || h.SourceBytes != source.Length || h.SourceTicks != source.LastWriteTimeUtc.Ticks) return null;
+        if (h.Version != CurrentVersion
+            || h.Document.SchemaVersion > DirectorReplayDocument.CurrentSchemaVersion
+            || h.SourceBytes != source.Length || h.SourceTicks != source.LastWriteTimeUtc.Ticks) return null;
         if (h.CompanionStamp.Length > 0 && h.Document.ServerReplay is { } link)
         {
             string? manifest = DirectorServerReplayCompanion.FindManifest(Path.GetDirectoryName(Path.GetFullPath(sourcePath))!, link);

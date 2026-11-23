@@ -497,34 +497,79 @@ internal sealed class DirectorImGuiForm
     public void EndSection() => controlVisibility = static () => true;
 
     public void ChoiceList(params (string Id, string Label, Action Click, string Icon)[] choices)
+        => ChoiceList(choices.Select(c => new DirectorImGuiChoice(c.Id, c.Label, c.Click, c.Icon)).ToArray());
+
+    /// <summary>
+    /// Searchable list of actions. Choices with a description get a "(?)" marker that
+    /// explains them on hover; choices with a group are listed under a group heading.
+    /// </summary>
+    public void ChoiceList(IReadOnlyList<DirectorImGuiChoice> choices)
     {
         AutoHeight = true;
         string query = string.Empty;
         AddControl(() =>
         {
-            if (choices.Length > 6)
+            if (choices.Count > 6)
             {
                 ImGui.SetNextItemWidth(-1);
                 ImGui.InputTextWithHint("##choice-search", Lang.Get("vsdirector:element-search"), ref query, 128);
                 ImGui.Separator();
             }
+            string needle = query.Trim();
             int visible = 0;
+            string? group = null;
             foreach (var choice in choices)
             {
                 ClearItemBounds(choice.Id);
-                if (!choice.Label.Contains(query.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                if (needle.Length > 0
+                    && !choice.Label.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    && !choice.Group.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                    && !choice.Description.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
                 visible++;
+                if (choice.Group.Length > 0 && choice.Group != group)
+                {
+                    ImGui.Spacing();
+                    ImGui.SeparatorText(choice.Group);
+                }
+                group = choice.Group;
+                bool help = choice.Description.Length > 0;
+                float helpWidth = help ? ImGui.CalcTextSize("(?)").X + ImGui.GetStyle().ItemSpacing.X * 2 : 0;
+                float rowWidth = Math.Max(1, ImGui.GetContentRegionAvail().X - helpWidth);
                 if (ImGui.Selectable(Caption(choice.Label, choice.Icon) + "###choice-" + choice.Id, false,
-                    ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight())))
+                    ImGuiSelectableFlags.None, new Vector2(rowWidth, ImGui.GetFrameHeight())))
                 {
                     BeforeAction?.Invoke();
                     choice.Click();
                 }
                 UpdateItemBounds(choice.Id);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(choice.Label);
+                bool rowHovered = ImGui.IsItemHovered();
+                if (help)
+                {
+                    ImGui.SameLine();
+                    ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (ImGui.GetFrameHeight() - ImGui.GetTextLineHeight()) * .5f);
+                    ImGui.TextDisabled("(?)");
+                    rowHovered |= ImGui.IsItemHovered();
+                }
+                if (rowHovered) ChoiceTooltip(choice);
             }
             if (visible == 0) ImGui.TextDisabled(Lang.Get("vsdirector:scene-empty"));
         });
+    }
+
+    private static void ChoiceTooltip(DirectorImGuiChoice choice)
+    {
+        if (choice.Description.Length == 0)
+        {
+            ImGui.SetTooltip(choice.Label);
+            return;
+        }
+        ImGui.BeginTooltip();
+        ImGui.PushTextWrapPos(ImGui.GetFontSize() * 26f);
+        ImGui.TextUnformatted(choice.Label);
+        ImGui.Separator();
+        ImGui.TextUnformatted(choice.Description);
+        ImGui.PopTextWrapPos();
+        ImGui.EndTooltip();
     }
 
     public void Section(string title, bool visible) { if (visible) Group(title); }
@@ -822,7 +867,6 @@ internal sealed class DirectorImGuiForm
     }
 }
 
-
-
-
-
+/// <summary>An entry of <see cref="DirectorImGuiForm.ChoiceList(IReadOnlyList{DirectorImGuiChoice})"/>.</summary>
+internal sealed record DirectorImGuiChoice(
+    string Id, string Label, Action Click, string Icon, string Description = "", string Group = "");

@@ -55,6 +55,14 @@ internal sealed partial class DirectorWorkspaceHud
             "freezeDelay" => new(0d, DirectorReplayElementTimeline.MaxFreezeDelayTicks, 1d, 1, "0"),
             "volume" => new(0d, 200d, 1d, 1, "0"),
             "audioPitch" => new(0.1d, 2d, 100d, 1, "0.00"),
+            "targetBlend" or "frameSize" or "gradeSepia" or "gradeVignette" or "gradeGlitch" or "gradeFade"
+                => new(0d, 1d, 100d, 1, "0.00"),
+            "gradeContrast" => new(-1d, 1d, 100d, 1, "0.00"),
+            "gradeBloom" => new(0d, 2d, 100d, 1, "0.00"),
+            "trackSmooth" => new(0d, 10d, 100d, 1, "0.00"),
+            "effectSeconds" => new(0.1d, 30d, 10d, 1, "0.0"),
+            "effectRate" => new(0.05d, 30d, 100d, 1, "0.00"),
+            "titleDuration" => new(0.2d, 60d, 10d, 1, "0.0"),
             _ => null
         };
     }

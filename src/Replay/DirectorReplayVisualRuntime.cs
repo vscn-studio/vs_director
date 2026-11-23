@@ -18,6 +18,23 @@ internal static class DirectorReplayVisualRuntime
         set => Volatile.Write(ref current, value);
     }
 
+    private static DirectorReplayScreenGrade? grade;
+    private static DirectorReplayActiveTitle? title;
+
+    /// <summary>Colour grade of the active ColorGrade element (null = untouched).</summary>
+    internal static DirectorReplayScreenGrade? Grade
+    {
+        get => grade;
+        set => grade = value;
+    }
+
+    /// <summary>Title card currently on screen, if any.</summary>
+    internal static DirectorReplayActiveTitle? Title
+    {
+        get => title;
+        set => title = value;
+    }
+
     internal static double ReplaySpeed
     {
         get => Volatile.Read(ref replaySpeed);
@@ -314,3 +331,14 @@ internal sealed class DirectorReplayVisualEnvironmentController
         }
     }
 }
+
+/// <summary>Additive post-process values on top of the game's own grading.</summary>
+internal readonly record struct DirectorReplayScreenGrade(
+    float Sepia, float Contrast, float Vignette, float Bloom, float Glitch, float Fade = 0f)
+{
+    internal bool IsNeutral => Sepia <= 0.0001f && Math.Abs(Contrast) <= 0.0001f && Vignette <= 0.0001f
+        && Bloom <= 0.0001f && Glitch <= 0.0001f && Fade <= 0.0001f;
+}
+
+internal sealed record DirectorReplayActiveTitle(
+    string Text, string SubText, VSDirector.Data.DirectorReplayTitlePosition Position, float Alpha);

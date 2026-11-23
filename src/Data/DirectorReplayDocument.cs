@@ -4,7 +4,10 @@ public sealed class DirectorReplayDocument
 {
     [System.Text.Json.Serialization.JsonIgnore]
     public DirectorReplayPages? Pages { get; internal set; }
-    public const int CurrentSchemaVersion = 22;
+    // 23: ColorGrade and Title element tracks, and new element keyframe and camera
+    // clip fields (EndsElement, EndsShot, tracking modes, time effects, follow blend).
+    // An older reader drops tracks it does not know, so it must reject these files.
+    public const int CurrentSchemaVersion = 23;
 
     public const int CurrentParticleCaptureVersion = 1;
 

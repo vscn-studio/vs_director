@@ -115,6 +115,8 @@ internal static class SmokeTests
         ("replay viewport clips normalize clone and persist", RunSync(ReplayViewportClipsNormalizeCloneAndPersist)),
         ("replay visual settings normalize clone migrate and persist", RunSync(ReplayVisualSettingsWork)),
         ("replay curves preserve shape, local control, clock bounds and camera capture", RunSync(ReplayElementCurveChecks.Run)),
+        ("replay presets: element end, time effects, follow blend, look-at, usage store", RunSync(ReplayPresetEngineChecks.Run)),
+        ("camera view angles: free-camera pitch stored in -90..90 form, presets and blending", RunSync(CameraViewAngleChecks.Run)),
         ("Replay elements normalize sample and persist", RunSync(ReplayElementsNormalizeSampleAndPersist)),
         ("replay entity follow intervals sample and normalize", RunSync(ReplayEntityFollowIntervalsWork)),
         ("replay camera orbit and entity tracking math", RunSync(ReplayCameraElementMathWorks)),
@@ -5527,8 +5529,10 @@ internal static class SmokeTests
         Check.False(custom.Camera.CameraCollision);
         Check.False(custom.Camera.OverrideNearClip);
         Check.True(custom.Audio.PreservePitchWithReplaySpeed);
+        Check.False(custom.Camera.AvoidOcclusion);
+        Check.False(custom.Composition.VerticalGuide);
         Check.Equal(
-            44,
+            46,
             typeof(DirectorReplayWorldVisuals).GetProperties().Length
             + typeof(DirectorReplaySkyVisuals).GetProperties().Length
             + typeof(DirectorReplayEnvironmentVisuals).GetProperties().Length
@@ -5622,7 +5626,7 @@ internal static class SmokeTests
             ViewportTimeline = timeline
         });
         Check.Equal(DirectorReplayDocument.CurrentSchemaVersion, migrated.SchemaVersion);
-        Check.Equal(22, migrated.SchemaVersion);
+        Check.Equal(23, migrated.SchemaVersion);
         Check.NearlyEqual(92d, migrated.ViewportTimeline.Visuals.Camera.Fov);
         Check.Equal("#101820", migrated.ViewportTimeline.Visuals.Sky.BackgroundColor);
 

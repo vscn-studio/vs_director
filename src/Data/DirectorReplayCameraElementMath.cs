@@ -53,6 +53,58 @@ public static class DirectorReplayCameraElementMath
             target.Dimension, yaw, pitch, Finite(tracking.Roll), fov);
     }
 
+    /// <summary>A subject to look at: a point and the radius that should stay in frame.</summary>
+    public readonly record struct LookSubject(double X, double Y, double Z, double Radius);
+
+    /// <summary>
+    /// Camera placement for tripod and over-the-shoulder tracking. Tripod keeps the
+    /// keyframe's world X/Y/Z; over-the-shoulder sits behind <paramref name="anchor"/>
+    /// using ViewOffsetX (side), ViewOffsetY (up) and ViewOffsetZ (back). Both turn to
+    /// look at <paramref name="subject"/>. With auto-framing the FOV is chosen so the
+    /// subject's radius fills TrackFrameSize of the frame height.
+    /// </summary>
+    public static CameraPreset EvaluateLookAt(DirectorReplayElementKeyframe tracking,
+        LookSubject subject, LookSubject? anchor, int dimension, float fov)
+    {
+        ArgumentNullException.ThrowIfNull(tracking);
+        Vector position;
+        if (tracking.TrackMode == DirectorReplayTrackMode.OverShoulder && anchor is LookSubject from)
+        {
+            double dx = from.X - subject.X;
+            double dz = from.Z - subject.Z;
+            double length = Math.Sqrt(dx * dx + dz * dz);
+            if (length < 0.0001d) { dx = 0d; dz = 1d; length = 1d; }
+            dx /= length; dz /= length;
+            // Right of the anchor when looking from the anchor toward the subject.
+            double rightX = dz;
+            double rightZ = -dx;
+            position = new Vector(
+                from.X + dx * Finite(tracking.ViewOffsetZ, 1.8d) + rightX * Finite(tracking.ViewOffsetX),
+                from.Y + Finite(tracking.ViewOffsetY),
+                from.Z + dz * Finite(tracking.ViewOffsetZ, 1.8d) + rightZ * Finite(tracking.ViewOffsetX));
+        }
+        else
+        {
+            position = new Vector(Finite(tracking.X), Finite(tracking.Y), Finite(tracking.Z));
+        }
+        double tx = subject.X - position.X;
+        double ty = subject.Y - position.Y;
+        double tz = subject.Z - position.Z;
+        double horizontal = Math.Sqrt(tx * tx + tz * tz);
+        double distance = Math.Sqrt(horizontal * horizontal + ty * ty);
+        double yaw = horizontal > 0.0001d ? Math.Atan2(-tx, -tz) * 180d / Math.PI : Finite(tracking.Yaw);
+        double pitch = distance > 0.0001d ? Math.Atan2(ty, Math.Max(horizontal, 0.0001d)) * 180d / Math.PI : 0d;
+        float resolvedFov = fov;
+        if (tracking.TrackAutoFrame && distance > 0.05d)
+        {
+            double size = Math.Clamp(Finite(tracking.TrackFrameSize, 0.45d), 0.05d, 1d);
+            double half = Math.Atan(Math.Max(0.3d, subject.Radius) / (distance * size));
+            resolvedFov = (float)Math.Clamp(half * 2d * 180d / Math.PI, 4d, 120d);
+        }
+        return Pose("Replay entity look-at", position, dimension, yaw, Math.Clamp(pitch, -89.5d, 89.5d),
+            Finite(tracking.Roll), resolvedFov);
+    }
+
     public static void ConfigureTrackFromCamera(DirectorReplayElementKeyframe tracking,
         DirectorReplayTrackedTargetPose target, CameraPreset camera)
     {

@@ -5,7 +5,8 @@ namespace VSDirector.Data;
 
 public sealed class DirectorReplayTimelineEditDocument
 {
-    public const int CurrentSchemaVersion = 7;
+    // 8: see DirectorReplayDocument schema 23 (same new track types and fields).
+    public const int CurrentSchemaVersion = 8;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -83,6 +84,10 @@ public static class DirectorReplayTimelineEditIO
             DirectorReplayViewportTimeline.MigrateLegacyTwentyTickTimebase(
                 document.ViewportTimeline);
         }
+        if (document.SchemaVersion < 8)
+        {
+            DirectorReplayViewportTimeline.MigrateLegacyElementRoll(document.ViewportTimeline);
+        }
         document.SchemaVersion = DirectorReplayTimelineEditDocument.CurrentSchemaVersion;
         return document;
     }
@@ -140,6 +145,10 @@ public static class DirectorReplayTimelineEditIO
         if (edits.SchemaVersion < 6)
         {
             DirectorReplayViewportTimeline.MigrateLegacyTwentyTickTimebase(viewportTimeline);
+        }
+        if (edits.SchemaVersion < 8)
+        {
+            DirectorReplayViewportTimeline.MigrateLegacyElementRoll(viewportTimeline);
         }
         replay.ViewportTimeline = DirectorReplayViewportTimeline.Normalize(
             viewportTimeline,

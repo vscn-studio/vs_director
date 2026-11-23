@@ -19,7 +19,7 @@ public sealed partial class VSDirectorModSystem
 
     internal CameraPreset? ReplayShootingPose => replayShootingPose?.DeepClone();
     internal Guid ReplayShootingSourceId => replayShootingSourceId;
-    internal double ReplayCameraSampleTime => replay?.PreparedPlaybackTimeSeconds ?? 0;
+    internal double ReplayCameraSampleTime => replay?.PreparedCameraTimeSeconds ?? 0;
 
     internal CameraPreset ApplyReplayShootingCameraVisuals(CameraPreset source,
         DirectorReplayViewportTimeline timeline, double time)
@@ -33,6 +33,9 @@ public sealed partial class VSDirectorModSystem
         {
             pose.Yaw += (float)(Math.Sin(time * Math.PI * 2 * shake.FrequencyX) * shake.AmplitudeX);
             pose.Pitch += (float)(Math.Sin(time * Math.PI * 2 * shake.FrequencyY + Math.PI / 2) * shake.AmplitudeY);
+            // Shake keyframes use Roll as a roll-sway amplitude (boat, drunk, dizzy).
+            if (Math.Abs(shake.Roll) > 0.0001f)
+                pose.Roll += (float)(Math.Sin(time * Math.PI * shake.FrequencyX + 0.7d) * shake.Roll);
         }
         else if (visual.CameraShake)
         {

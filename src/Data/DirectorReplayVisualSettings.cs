@@ -142,6 +142,8 @@ public sealed class DirectorReplayCameraVisuals
     public bool OverrideRoll { get; set; }
     public float Roll { get; set; }
     public bool CameraCollision { get; set; }
+    /// <summary>Pull the camera in front of blocks that hide the tracked subject.</summary>
+    public bool AvoidOcclusion { get; set; }
     public bool OverrideNearClip { get; set; }
     public float NearClip { get; set; } = 0.05f;
     public bool CameraShake { get; set; }
@@ -194,6 +196,8 @@ public sealed class DirectorReplayCompositionVisuals
     public bool RuleOfThirds { get; set; }
     public bool CenterGuide { get; set; }
     public bool CameraPath { get; set; }
+    /// <summary>Shows a centred 9:16 frame for vertical (Shorts/TikTok) framing.</summary>
+    public bool VerticalGuide { get; set; }
 
     public DirectorReplayCompositionVisuals DeepClone() => (DirectorReplayCompositionVisuals)MemberwiseClone();
     internal void Normalize() { }

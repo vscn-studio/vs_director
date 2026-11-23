@@ -56,6 +56,7 @@ internal sealed partial class DirectorWorkspaceHud
             nameof(DirectorReplayCameraVisuals.OverrideRoll),
             nameof(DirectorReplayCameraVisuals.Roll),
             nameof(DirectorReplayCameraVisuals.CameraCollision),
+            nameof(DirectorReplayCameraVisuals.AvoidOcclusion),
             nameof(DirectorReplayCameraVisuals.OverrideNearClip),
             nameof(DirectorReplayCameraVisuals.NearClip),
             nameof(DirectorReplayCameraVisuals.CameraShake),
@@ -80,7 +81,8 @@ internal sealed partial class DirectorWorkspaceHud
         {
             nameof(DirectorReplayCompositionVisuals.RuleOfThirds),
             nameof(DirectorReplayCompositionVisuals.CenterGuide),
-            nameof(DirectorReplayCompositionVisuals.CameraPath)
+            nameof(DirectorReplayCompositionVisuals.CameraPath),
+            nameof(DirectorReplayCompositionVisuals.VerticalGuide)
         })
     };
 

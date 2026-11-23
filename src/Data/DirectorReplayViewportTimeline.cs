@@ -25,7 +25,39 @@ public enum DirectorReplayElementTrackType
     /// <summary>Legacy manually-triggered audio element. Removed during normalization.</summary>
     Audio = 11,
     VoiceAudio = 12,
-    FollowEntity = 13
+    FollowEntity = 13,
+    ColorGrade = 14,
+    Title = 15
+}
+
+/// <summary>How a TrackEntity keyframe places the camera.</summary>
+public enum DirectorReplayTrackMode
+{
+    /// <summary>Camera rigidly attached to the target's orientation (original behaviour).</summary>
+    Attached,
+    /// <summary>Camera at the keyframe's world X/Y/Z, turning to look at the target.</summary>
+    Tripod,
+    /// <summary>Camera behind the secondary actor's shoulder, looking at the primary target.</summary>
+    OverShoulder
+}
+
+/// <summary>What an active (Frozen) keyframe of a Freeze track does to replay content time.</summary>
+public enum DirectorReplayTimeEffect
+{
+    Freeze,
+    /// <summary>Content runs backwards, then replays forward (instant replay).</summary>
+    Rewind,
+    /// <summary>Content advances in discrete steps (low frame rate look).</summary>
+    Stutter,
+    /// <summary>Content slows to TimeEffectRate while camera elements keep real speed.</summary>
+    Slow
+}
+
+public enum DirectorReplayTitlePosition
+{
+    LowerThird,
+    Center,
+    Top
 }
 
 public enum DirectorReplayElementInterpolation
@@ -232,6 +264,76 @@ public sealed class DirectorReplayElementKeyframe
 
     public float AudioPitch { get; set; } = 1f;
 
+    /// <summary>
+    /// Follow start keyframes: when not Hold, the rig parameters animate from this
+    /// keyframe to the interval's end keyframe using this curve.
+    /// </summary>
+    public DirectorReplayElementInterpolation FollowBlend { get; set; }
+        = DirectorReplayElementInterpolation.Hold;
+
+    /// <summary>Follow orbit angle is measured from world north instead of the target's facing.</summary>
+    public bool FollowWorldAligned { get; set; }
+
+    public DirectorReplayTrackMode TrackMode { get; set; }
+
+    /// <summary>Second actor for two-shots (look-at blend) and over-the-shoulder anchors.</summary>
+    public string SecondaryEntityActorKey { get; set; } = string.Empty;
+
+    public long SecondaryEntityId { get; set; }
+
+    /// <summary>0 looks at the primary target, 1 at the secondary, values between blend.</summary>
+    public double TargetBlend { get; set; }
+
+    /// <summary>Tripod/over-shoulder: frame every recorded player instead of one target.</summary>
+    public bool TrackFrameGroup { get; set; }
+
+    /// <summary>Tripod/over-shoulder: adjust the FOV so the subject keeps its size on screen.</summary>
+    public bool TrackAutoFrame { get; set; }
+
+    /// <summary>Share of the frame height the auto-framed subject fills (0.05-1).</summary>
+    public double TrackFrameSize { get; set; } = 0.45d;
+
+    /// <summary>Tripod/over-shoulder: pan smoothing time; zero turns instantly.</summary>
+    public double TrackSmoothTimeSeconds { get; set; }
+
+    public DirectorReplayTimeEffect TimeEffect { get; set; }
+
+    /// <summary>Rewind: how far the content goes back, in replay seconds.</summary>
+    public double TimeEffectSeconds { get; set; } = 3d;
+
+    /// <summary>Rewind: duration of the backwards run in seconds. Stutter: frames per second.</summary>
+    public double TimeEffectRate { get; set; } = 1d;
+
+    /// <summary>While this effect is active, camera elements keep moving on the logical clock.</summary>
+    public bool FreezeCameraContinues { get; set; }
+
+    public float GradeSepia { get; set; }
+
+    public float GradeContrast { get; set; }
+
+    public float GradeVignette { get; set; }
+
+    public float GradeBloom { get; set; }
+
+    public float GradeGlitch { get; set; }
+
+    /// <summary>0-1 fade to black drawn over the frame.</summary>
+    public float GradeFade { get; set; }
+
+    public string Text { get; set; } = string.Empty;
+
+    public string SubText { get; set; } = string.Empty;
+
+    public double TitleDurationSeconds { get; set; } = 3d;
+
+    public DirectorReplayTitlePosition TitlePosition { get; set; }
+
+    /// <summary>
+    /// The element stops at this keyframe: from its time on the track has no value,
+    /// so camera, FOV, shake, speed and grade return to whatever is underneath.
+    /// </summary>
+    public bool EndsElement { get; set; }
+
     public DirectorReplayElementKeyframe DeepClone() => (DirectorReplayElementKeyframe)MemberwiseClone();
 }
 
@@ -272,6 +374,9 @@ public sealed class DirectorReplayViewportClip
     public bool Enabled { get; set; } = true;
 
     public bool Loop { get; set; }
+
+    /// <summary>The camera row stops driving the view from this keyframe's time.</summary>
+    public bool EndsShot { get; set; }
 
     public DirectorVideoTransition? TransitionIn { get; set; }
 
@@ -986,6 +1091,25 @@ public sealed class DirectorReplayViewportTimeline
             ? Math.Clamp(NormalizeFinite(result.Volume, 1f), 0f, 2f)
             : Math.Clamp(NormalizeFinite(result.Volume, 1f), 0f, 4f);
         result.AudioPitch = Math.Clamp(NormalizeFinite(result.AudioPitch, 1f), 0.1f, 4f);
+        if (!Enum.IsDefined(result.FollowBlend)) result.FollowBlend = DirectorReplayElementInterpolation.Hold;
+        if (!Enum.IsDefined(result.TrackMode)) result.TrackMode = DirectorReplayTrackMode.Attached;
+        result.SecondaryEntityActorKey = result.SecondaryEntityActorKey?.Trim() ?? string.Empty;
+        result.TargetBlend = Math.Clamp(NormalizeFinite(result.TargetBlend), 0d, 1d);
+        result.TrackFrameSize = Math.Clamp(NormalizeFinite(result.TrackFrameSize, 0.45d), 0.05d, 1d);
+        result.TrackSmoothTimeSeconds = Math.Clamp(NormalizeFinite(result.TrackSmoothTimeSeconds), 0d, 10d);
+        if (!Enum.IsDefined(result.TimeEffect)) result.TimeEffect = DirectorReplayTimeEffect.Freeze;
+        result.TimeEffectSeconds = Math.Clamp(NormalizeFinite(result.TimeEffectSeconds, 3d), 0.1d, 60d);
+        result.TimeEffectRate = Math.Clamp(NormalizeFinite(result.TimeEffectRate, 1d), 0.05d, 60d);
+        result.GradeSepia = Math.Clamp(NormalizeFinite(result.GradeSepia), 0f, 1f);
+        result.GradeContrast = Math.Clamp(NormalizeFinite(result.GradeContrast), -1f, 1f);
+        result.GradeVignette = Math.Clamp(NormalizeFinite(result.GradeVignette), 0f, 1f);
+        result.GradeBloom = Math.Clamp(NormalizeFinite(result.GradeBloom), 0f, 2f);
+        result.GradeGlitch = Math.Clamp(NormalizeFinite(result.GradeGlitch), 0f, 1f);
+        result.GradeFade = Math.Clamp(NormalizeFinite(result.GradeFade), 0f, 1f);
+        result.Text = result.Text ?? string.Empty;
+        result.SubText = result.SubText ?? string.Empty;
+        result.TitleDurationSeconds = Math.Clamp(NormalizeFinite(result.TitleDurationSeconds, 3d), 0.2d, 600d);
+        if (!Enum.IsDefined(result.TitlePosition)) result.TitlePosition = DirectorReplayTitlePosition.LowerThird;
         return result;
     }
 
@@ -1131,6 +1255,40 @@ public sealed class DirectorReplayViewportTimeline
                             keyframe.FreezeDelayTicks,
                             scale);
                         break;
+                }
+            }
+        }
+
+        Migrate(timeline.ElementKeyframes);
+        foreach (DirectorReplayElementScene scene in timeline.Scenes
+            ?? new List<DirectorReplayElementScene>())
+        {
+            Migrate(scene?.ElementKeyframes);
+        }
+    }
+
+    /// <summary>
+    /// Files written before follow roll and shake roll sway existed (replay schema 22,
+    /// timeline edit schema 7 and older) store the capture camera's roll on FollowEntity
+    /// and CameraShake keyframes, where it had no effect. Clear it so those keyframes play
+    /// back as they did.
+    /// </summary>
+    public static void MigrateLegacyElementRoll(DirectorReplayViewportTimeline? timeline)
+    {
+        if (timeline is null)
+        {
+            return;
+        }
+
+        static void Migrate(IEnumerable<DirectorReplayElementKeyframe>? keyframes)
+        {
+            foreach (DirectorReplayElementKeyframe keyframe in keyframes
+                ?? Array.Empty<DirectorReplayElementKeyframe>())
+            {
+                if (keyframe?.TrackType is DirectorReplayElementTrackType.FollowEntity
+                    or DirectorReplayElementTrackType.CameraShake)
+                {
+                    keyframe.Roll = 0f;
                 }
             }
         }

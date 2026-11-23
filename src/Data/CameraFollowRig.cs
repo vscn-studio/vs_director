@@ -78,6 +78,18 @@ public sealed class CameraFollowRig
 
     public float Fov { get; set; } = CameraFollowMath.DefaultFov;
 
+    // WorldAligned and RollDegrees are only set at runtime from replay FollowEntity
+    // keyframes. They are not saved, so camera library and preset package files keep
+    // their current format.
+
+    /// <summary>Orbit angle measured from world north instead of the target's facing.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool WorldAligned { get; set; }
+
+    /// <summary>Extra camera roll in degrees (Dutch angle).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public double RollDegrees { get; set; }
+
     /// <summary>
     /// Optional Alt+number quick-switch slot. Valid values are 1 through 10.
     /// </summary>
@@ -113,6 +125,8 @@ public sealed class CameraFollowRig
             SmoothTimeSeconds = SmoothTimeSeconds,
             DelaySeconds = DelaySeconds,
             Fov = Fov,
+            WorldAligned = WorldAligned,
+            RollDegrees = RollDegrees,
             QuickSlot = QuickSlot,
             CreatedUtc = CreatedUtc,
             ModifiedUtc = ModifiedUtc

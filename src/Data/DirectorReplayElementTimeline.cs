@@ -3,7 +3,21 @@ namespace VSDirector.Data;
 public readonly record struct DirectorReplayElementFreezeState(
     bool Frozen,
     bool FullyFrozen,
-    double ReplayTimeSeconds);
+    double ReplayTimeSeconds)
+{
+    /// <summary>
+    /// Clock for camera elements. Equal to the content clock unless the active
+    /// time effect lets the camera keep moving (freeze with a moving camera,
+    /// rewind and stutter), where it follows the logical timeline.
+    /// </summary>
+    public double? CameraTimeSeconds { get; init; }
+
+    /// <summary>The active effect, when <see cref="Frozen"/>.</summary>
+    public DirectorReplayTimeEffect Effect { get; init; }
+
+    /// <summary>0-1 strength of the rewind look (for a glitch overlay).</summary>
+    public double RewindAmount { get; init; }
+}
 
 public static class DirectorReplayElementTimeline
 {
@@ -48,11 +62,19 @@ public static class DirectorReplayElementTimeline
         int upperIndex = track.FindIndex(keyframe => keyframe.TimeSeconds > timeSeconds + TimeEpsilon);
         if (upperIndex <= 0)
         {
+            if (track[^1].EndsElement)
+            {
+                return false;
+            }
             sample = track[^1].DeepClone();
             return true;
         }
 
         DirectorReplayElementKeyframe left = track[upperIndex - 1];
+        if (left.EndsElement)
+        {
+            return false;
+        }
         DirectorReplayElementKeyframe right = track[upperIndex];
         if (left.InterpolationToNext == DirectorReplayElementInterpolation.Hold
             || right.TimeSeconds <= left.TimeSeconds + TimeEpsilon)
@@ -283,6 +305,10 @@ public static class DirectorReplayElementTimeline
         }
 
         DirectorReplayElementKeyframe transitionStart = activeTrack[transitionStartIndex];
+        if (transitionStart.TimeEffect != DirectorReplayTimeEffect.Freeze)
+        {
+            return SampleTimeEffect(transitionStart, logicalTime);
+        }
         int delayTicks = Math.Clamp(
             transitionStart.FreezeDelayTicks,
             0,
@@ -299,7 +325,62 @@ public static class DirectorReplayElementTimeline
         return new DirectorReplayElementFreezeState(
             Frozen: true,
             FullyFrozen: fullyFrozen,
-            ReplayTimeSeconds: replayTime);
+            ReplayTimeSeconds: replayTime)
+        {
+            CameraTimeSeconds = transitionStart.FreezeCameraContinues ? logicalTime : null,
+            Effect = DirectorReplayTimeEffect.Freeze
+        };
+    }
+
+    /// <summary>
+    /// Rewind: over TimeEffectRate seconds the content runs back TimeEffectSeconds,
+    /// then plays forward again from there. Stutter: the content advances in
+    /// steps of 1/TimeEffectRate seconds. In both cases the camera elements stay
+    /// on the logical clock so camera moves remain smooth.
+    /// </summary>
+    internal static DirectorReplayElementFreezeState SampleTimeEffect(
+        DirectorReplayElementKeyframe effect,
+        double logicalTime)
+    {
+        double start = effect.TimeSeconds;
+        double elapsed = Math.Max(0d, logicalTime - start);
+        double content;
+        double rewindAmount = 0d;
+        if (effect.TimeEffect == DirectorReplayTimeEffect.Rewind)
+        {
+            double distance = Math.Clamp(double.IsFinite(effect.TimeEffectSeconds) ? effect.TimeEffectSeconds : 3d, 0.1d, 60d);
+            double duration = Math.Clamp(double.IsFinite(effect.TimeEffectRate) ? effect.TimeEffectRate : 1d, 0.05d, 60d);
+            if (elapsed < duration)
+            {
+                double u = elapsed / duration;
+                double eased = (1d - Math.Cos(u * Math.PI)) / 2d;
+                content = start - distance * eased;
+                rewindAmount = Math.Sin(u * Math.PI) * 0.5d + 0.5d;
+            }
+            else
+            {
+                content = start - distance + (elapsed - duration);
+            }
+        }
+        else if (effect.TimeEffect == DirectorReplayTimeEffect.Slow)
+        {
+            double rate = Math.Clamp(double.IsFinite(effect.TimeEffectRate) ? effect.TimeEffectRate : 0.25d, 0.01d, 1d);
+            content = start + elapsed * rate;
+        }
+        else
+        {
+            double fps = Math.Clamp(double.IsFinite(effect.TimeEffectRate) ? effect.TimeEffectRate : 12d, 0.5d, 60d);
+            content = start + Math.Floor(elapsed * fps + TimeEpsilon) / fps;
+        }
+        return new DirectorReplayElementFreezeState(
+            Frozen: true,
+            FullyFrozen: false,
+            ReplayTimeSeconds: Math.Max(0d, Math.Min(logicalTime, content)))
+        {
+            CameraTimeSeconds = logicalTime,
+            Effect = effect.TimeEffect,
+            RewindAmount = rewindAmount
+        };
     }
 
     private static double FreezeReplayTicks(double elapsedTicks, int delayTicks)
@@ -417,6 +498,14 @@ public static class DirectorReplayElementTimeline
         result.TimeOfDayTick = (int)Math.Round(SampleChannel(frames, index, u, frame => frame.TimeOfDayTick, 24000d));
         result.Volume = (float)SampleChannel(frames, index, u, frame => frame.Volume);
         result.AudioPitch = (float)SampleChannel(frames, index, u, frame => frame.AudioPitch);
+        result.TargetBlend = SampleChannel(frames, index, u, frame => frame.TargetBlend);
+        result.TrackFrameSize = SampleChannel(frames, index, u, frame => frame.TrackFrameSize);
+        result.GradeSepia = (float)SampleChannel(frames, index, u, frame => frame.GradeSepia);
+        result.GradeContrast = (float)SampleChannel(frames, index, u, frame => frame.GradeContrast);
+        result.GradeVignette = (float)SampleChannel(frames, index, u, frame => frame.GradeVignette);
+        result.GradeBloom = (float)SampleChannel(frames, index, u, frame => frame.GradeBloom);
+        result.GradeGlitch = (float)SampleChannel(frames, index, u, frame => frame.GradeGlitch);
+        result.GradeFade = (float)SampleChannel(frames, index, u, frame => frame.GradeFade);
         return result;
     }
 

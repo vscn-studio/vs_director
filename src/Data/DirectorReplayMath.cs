@@ -156,6 +156,10 @@ public static class DirectorReplayMath
         {
             DirectorReplayViewportTimeline.MigrateLegacyTwentyTickTimebase(sourceViewportTimeline);
         }
+        if (sourceSchemaVersion < 23)
+        {
+            DirectorReplayViewportTimeline.MigrateLegacyElementRoll(sourceViewportTimeline);
+        }
         result.ViewportTimeline = DirectorReplayViewportTimeline.Normalize(
             sourceViewportTimeline,
             result.DurationSeconds);

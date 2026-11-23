@@ -528,6 +528,17 @@ internal sealed partial class DirectorReplayManager : IDisposable
             ? active.PreparedTimeSeconds
             : PlaybackTimeSeconds;
 
+    /// <summary>
+    /// Clock for camera elements: the content clock, except while a time effect
+    /// (rewind, stutter, freeze with moving camera) keeps the camera on the logical timeline.
+    /// </summary>
+    internal double PreparedCameraTimeSeconds
+        => playback is { PreparedCameraTimeSeconds: >= 0d } active
+            ? active.PreparedCameraTimeSeconds
+            : PreparedPlaybackTimeSeconds;
+
+    internal double PreparedRewindAmount => playback?.PreparedRewindAmount ?? 0d;
+
     public double PlaybackDurationSeconds
         => playback?.Document.DurationSeconds
             ?? pendingPlaybackStart?.Document.DurationSeconds
@@ -7520,6 +7531,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
         active.TimeSeconds = freeze.ReplayTimeSeconds;
         active.PreparedTimeSeconds = active.TimeSeconds;
+        active.PreparedCameraTimeSeconds = freeze.CameraTimeSeconds ?? active.TimeSeconds;
+        active.PreparedRewindAmount = freeze.RewindAmount;
         replayAllowsOffscreenActorRendering = false;
         long animationFrame = ++replayAnimationFrame;
         double previousTime = active.AppliedTimeSeconds;
@@ -11317,6 +11330,10 @@ internal sealed partial class DirectorReplayManager : IDisposable
         public double AppliedTimeSeconds { get; set; } = -1d;
 
         public double PreparedTimeSeconds { get; set; } = -1d;
+
+        public double PreparedCameraTimeSeconds { get; set; } = -1d;
+
+        public double PreparedRewindAmount { get; set; }
 
         public double Speed { get; set; } = 1d;
 

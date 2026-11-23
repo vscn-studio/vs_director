@@ -254,6 +254,11 @@ internal sealed class DirectorCameraController : IDisposable
         int dimension = preparedCameraPose?.Dimension
             ?? activeCamera?.Dimension
             ?? entity.Pos.Dimension;
+        // Free look keeps the game's 180-centred pitch; store the same view direction in
+        // the -90..90 form the keyframe, preset and blending maths expect.
+        (float yaw, float pitch) = CameraViewAngles.Normalize(
+            (float)(capi.World.Player.CameraYaw * DegreesPerRadian),
+            (float)(capi.World.Player.CameraPitch * DegreesPerRadian));
         preset = new CameraPreset
         {
             Name = name,
@@ -261,8 +266,8 @@ internal sealed class DirectorCameraController : IDisposable
             Y = eye.Y - dimension * 32768d,
             Z = eye.Z,
             Dimension = dimension,
-            Yaw = (float)(capi.World.Player.CameraYaw * DegreesPerRadian),
-            Pitch = (float)(capi.World.Player.CameraPitch * DegreesPerRadian),
+            Yaw = yaw,
+            Pitch = pitch,
             Roll = (float)(capi.World.Player.CameraRoll * DegreesPerRadian),
             Fov = (float)(DirectorClientCompatibility.GetFov(game.MainCamera) * DegreesPerRadian),
             CreatedUtc = DateTimeOffset.UtcNow,
