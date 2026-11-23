@@ -192,7 +192,7 @@ jobs:
           ditto "${plugin}" artifacts/macos-slice/vsdirector-obs.plugin
           mkdir -p artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources
           pwsh -NoProfile -File tools/StageObsCompliance.ps1 -Destination artifacts/macos-slice/vsdirector-obs.plugin/Contents/Resources -ObsBuildDirectory obs-studio/build_macos -BuildTarget macos-${{ matrix.arch }}
-          lipo -verify_arch ${{ matrix.arch }} artifacts/macos-slice/vsdirector-obs.plugin/Contents/MacOS/vsdirector-obs
+          lipo artifacts/macos-slice/vsdirector-obs.plugin/Contents/MacOS/vsdirector-obs -verify_arch ${{ matrix.arch }}
           # Preserve hidden source files, symlinks and permissions across jobs.
           tar -C artifacts/macos-slice -czf artifacts/macos-slice.tar.gz vsdirector-obs.plugin
 
@@ -243,7 +243,7 @@ jobs:
             -output "${output_binary}"
           chmod 755 "${output_binary}"
           codesign --force --deep --sign - "${output_bundle}"
-          lipo -verify_arch arm64 x86_64 "${output_binary}"
+          lipo "${output_binary}" -verify_arch arm64 x86_64
           codesign --verify --deep --strict "${output_bundle}"
 
           version="$(jq -r .version modinfo.json)"
