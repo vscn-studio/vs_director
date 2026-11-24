@@ -134,12 +134,6 @@ internal static partial class DirectorImGuiProbe
                     }
                     Clear();
                     ImGui.NewFrame();
-                    Call("DrawCameraPivotBox", ImGui.GetForegroundDrawList(), new Vec3d(), .475f, axis, 0xff77cf75u);
-                    ImGui.Render();
-                    if (faces.Count < 4 || faces.Cast<object>().Any(f => (int)Call("CameraHandleAxisAt", FaceCenter(f), 0f)! != axis))
-                        throw new Exception("A pivot cube cannot be picked across its filled faces.");
-                    Clear();
-                    ImGui.NewFrame();
                     Call("DrawCameraMovePlane", ImGui.GetForegroundDrawList(), new Vec3d(), .475f, axis, 0xff77cf75u, facing);
                     ImGui.Render();
                     if (Math.Abs(component) > .08 && (faces.Count != 2
@@ -205,8 +199,8 @@ internal static partial class DirectorImGuiProbe
             }
             // Circular sections taper to two tips on the ring. The cone axis
             // must remain straight, while the endpoints follow rotation.
-            // The blue outer ring is circular in screen pixels and encloses
-            // the projected model, including rotated heads and offset pivots.
+            // The blue outer ring keeps its screen radius even when a rotated
+            // head or an offset pivot makes the camera outline much larger.
             RuntimeEnv.GUIScale = 1;
             Set("cameraTool", Mode("Rotate"));
             foreach (var eye in new[] { new Vector3(3, 2, 4), new Vector3(-3, -2, -4), Vector3.UnitZ })
@@ -218,7 +212,6 @@ internal static partial class DirectorImGuiProbe
                 var pose = new CameraPreset { Yaw = yaw, Pitch = 35, EditorPivotOffsetX = .3 };
                 Guid id = Guid.NewGuid();
                 Call("DrawCameraHead", ImGui.GetForegroundDrawList(), id, pose, 0xffffffffu);
-                var body = lines.Cast<object>().ToArray();
                 Call("DrawCameraHandles", ImGui.GetForegroundDrawList(), pose);
                 ImGui.Render();
                 Vec3d pivot = (Vec3d)Call("CameraPivot", pose)!;
@@ -230,9 +223,8 @@ internal static partial class DirectorImGuiProbe
                 float radius = Vector2.Distance(A(outer[0]), center);
                 if (outer.Any(line => Math.Abs(Vector2.Distance(A(line), center) - radius) > .01f))
                     throw new Exception("Screen rotation ring becomes an ellipse when the view changes.");
-                float bodyRadius = body.SelectMany(line => new[] { A(line), B(line) }).Max(point => Vector2.Distance(point, center));
-                if (radius < bodyRadius + 39 || radius < 81.9f)
-                    throw new Exception("The rotation rings do not enclose the camera outline.");
+                if (Math.Abs(radius - 82 * RuntimeEnv.GUIScale) > .1f)
+                    throw new Exception("The rotation rings grow with the camera outline instead of retaining their screen size.");
                 Vector2 midpoint = (A(outer[8]) + B(outer[8])) / 2;
                 if ((int)Call("CameraHandleAxisAt", midpoint, 5f)! != 6)
                     throw new Exception("The screen ring cannot be picked independently of XYZ.");
@@ -275,7 +267,7 @@ internal static partial class DirectorImGuiProbe
             }
             keys[(int)GlKeys.LControl] = false;
             Set("cameraDragOriginal", null); Set("cameraDragPose", null); Set("cameraDragAxisIndex", -1);
-            Console.WriteLine("PASS circular blue screen rotation ring surrounds projected cameras/pivots at 0.5-1000 blocks; picking and real pointer rotation preserve the full camera frame and pivot, both directions, snap and large coordinates");
+            Console.WriteLine("PASS fixed-size screen rotation ring at 0.5-1000 blocks; picking and real pointer rotation preserve the full camera frame and pivot, both directions, snap and large coordinates");
             foreach (float scale in new[] { 1f, 1.5f, 2f })
             foreach (float distance in new[] { .5f, 1f, 4f, 1000f })
             foreach (string mode in new[] { "Move", "Pivot" })
@@ -299,23 +291,21 @@ internal static partial class DirectorImGuiProbe
                     || axisColors.Any(color => !Enumerable.Range(start, draw.VtxBuffer.Size - start).Any(i => draw.VtxBuffer[i].col == color)))
                     throw new Exception("Camera origin axes are missing RGB lines or intercept picking.");
                 Call("DrawCameraHead", draw, id, pose, 0xffffffffu);
-                var body = lines.Cast<object>().ToArray();
                 Clear();
                 Call("DrawCameraHandles", draw, pose);
                 ImGui.Render();
                 Vector2 A(object line) => (Vector2)AccessTools.Property(line.GetType(), "A").GetValue(line)!;
                 Vector2 B(object line) => (Vector2)AccessTools.Property(line.GetType(), "B").GetValue(line)!;
                 Vector2 center = Project((Vec3d)Call("CameraPivot", pose)!);
-                float bodyRadius = body.SelectMany(line => new[] { A(line), B(line) }).Max(p => Vector2.Distance(p, center));
                 float handleRadius = lines.Cast<object>().SelectMany(line => new[] { A(line), B(line) }).Max(p => Vector2.Distance(p, center));
-                if (handleRadius <= bodyRadius || faces.Count == 0)
-                    throw new Exception($"{mode} controls are hidden inside the camera outline at {distance}/{scale}.");
+                if (handleRadius / scale < 65 || handleRadius / scale > 170 || faces.Count == 0)
+                    throw new Exception($"{mode} controls have an unusable screen size at {distance}/{scale}: {handleRadius / scale}.");
                 for (int axis = 0; axis < 3; axis++)
-                    if (!faces.Cast<object>().Any(face => (int)AccessTools.Property(face.GetType(), "Axis").GetValue(face)! == axis))
-                        throw new Exception($"{mode} axis {axis} disappears near the camera.");
+                    if (faces.Cast<object>().Count(face => (int)AccessTools.Property(face.GetType(), "Axis").GetValue(face)! == axis) != 128)
+                        throw new Exception($"{mode} axis {axis} is missing its closed cone near the camera.");
             }
             RuntimeEnv.GUIScale = 1;
-            Console.WriteLine("PASS move/pivot controls enclose close and distant camera outlines at 100/150/200%; plain RGB camera-origin axes do not intercept picking; unselected heads have no coloured centre");
+            Console.WriteLine("PASS move/pivot controls retain usable screen size at 100/150/200%; plain RGB camera-origin axes do not intercept picking; unselected heads have no coloured centre");
             for (int axis = 0; axis < 3; axis++)
             foreach (float angle in new[] { -.7f, .4f, 2.1f })
             foreach (float along in new[] { -1f, -.5f, 0f, .5f, 1f })
@@ -430,7 +420,7 @@ internal static partial class DirectorImGuiProbe
             ImGui.NewFrame();
             Call("DrawCameraHandles", ImGui.GetForegroundDrawList(), new CameraPreset { Yaw = 30 });
             ImGui.Render(); capture("camera-rotation-feedback");
-            Console.WriteLine("PASS unlit straight 3D rotation double cones with tips on arcs and face picking, pivot cubes, XY/XZ/YZ plane picking and actual pointer drags/snap at large coordinates, mouse angle badge bounds and DPI 100/150/200%");
+            Console.WriteLine("PASS unlit straight 3D rotation double cones with tips on arcs and face picking, pivot cones, XY/XZ/YZ plane picking and actual pointer drags/snap at large coordinates, mouse angle badge bounds and DPI 100/150/200%");
         }
         finally
         {

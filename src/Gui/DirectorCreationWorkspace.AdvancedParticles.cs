@@ -156,7 +156,7 @@ internal sealed partial class DirectorCreationWorkspace
                 ImGui.PushID(field.Name);FocusContentField(field.Name);var node=CreationParticleFields.Find(properties,field.Name);
                 string label=L("creation-particle-field-"+field.Name.ToLowerInvariant());
                 ImGui.TextWrapped((particlePinned.Contains(field.Name)?"★ ":"")+label);
-                if(ImGui.IsItemHovered())ImGui.SetTooltip(field.Name+" · "+P("field-context"));
+                if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(field.Name+" · "+P("field-context"));
                 if(ImGui.BeginPopupContextItem("field-options"))
                 {
                     if(ImGui.MenuItem(P("pin"),"",particlePinned.Contains(field.Name))){if(!particlePinned.Add(field.Name))particlePinned.Remove(field.Name);}

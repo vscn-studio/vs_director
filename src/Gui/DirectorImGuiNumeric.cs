@@ -6,6 +6,10 @@ namespace VSDirector.Gui;
 
 internal static class DirectorImGuiNumeric
 {
+    private static uint stepPointerId;
+    private static int stepPointerRegion;
+    private static bool stepDragged, stepCommitted;
+    internal static bool FinishedEditing => stepCommitted || ImGui.IsItemDeactivatedAfterEdit();
     private static uint transformPointerId, transformTextId;
     private static int transformPointerRegion, transformTextFrame;
     private static bool transformDragged, transformTextFocus;
@@ -110,7 +114,7 @@ internal static class DirectorImGuiNumeric
             if (hovered)
             {
                 ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEW);
-                if (!active) ImGui.SetTooltip(text == full ? tooltip : tooltip + ": " + full);
+                if (!active && text != full) DirectorImGuiTooltip.Show(full);
             }
         }
         if (changed && double.IsFinite(edited)) value = edited;
@@ -121,7 +125,7 @@ internal static class DirectorImGuiNumeric
     // ImGui applies Alt/Shift fine/coarse adjustment. Normalize Alt so Ctrl
     // is the fine modifier throughout the workbench, keeping Shift coarse.
     internal static float DragSpeed(float step, bool control, bool shift, bool nativeShift, bool nativeAlt)
-        => step * (control ? .1f : 1) * (shift ? 10 : 1)
+        => step / (10 * Math.Max(.5f, DirectorImGuiTheme.Scale)) * (control ? .1f : 1) * (shift ? 10 : 1)
             / (nativeShift ? 10 : 1) / (nativeAlt ? .01f : 1);
 
     internal static unsafe bool Double(string id, ref double value, float step = 1,
@@ -132,6 +136,12 @@ internal static class DirectorImGuiNumeric
         bool shift = io.KeyShift || ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
         double edited = value;
         bool changed, nativeControl = io.KeyCtrl;
+        stepCommitted = false;
+        uint widget = ImGui.GetID(id);
+        Vector2 start = ImGui.GetCursorScreenPos();
+        float width = ImGui.CalcItemWidth();
+        float edge = Math.Min(18 * DirectorImGuiTheme.Scale, width * .22f);
+        bool pointerOnEdge = io.MousePos.X < start.X + edge || io.MousePos.X >= start.X + width - edge;
         // Some backends deliver physical modifier keys without aggregate ModCtrl.
         // Normalize just for this widget so Ctrl+click also enters text mode.
         io.KeyCtrl = control;
@@ -139,15 +149,53 @@ internal static class DirectorImGuiNumeric
         {
             changed = ImGui.DragScalar(id, ImGuiDataType.Double, (nint)(&edited),
                 DragSpeed(step, control, shift, io.KeyShift, io.KeyAlt), (nint)(&min), (nint)(&max),
-                format, ImGuiSliderFlags.AlwaysClamp);
+                format, ImGuiSliderFlags.AlwaysClamp | (pointerOnEdge && !io.WantTextInput
+                    && ImGui.IsMouseClicked(ImGuiMouseButton.Left) ? ImGuiSliderFlags.NoInput : ImGuiSliderFlags.None));
         }
         finally { io.KeyCtrl = nativeControl; }
+        Vector2 lo = ImGui.GetItemRectMin(), hi = ImGui.GetItemRectMax();
+        bool hovered = ImGui.IsItemHovered(), active = ImGui.IsItemActive();
+        int Region() => io.MousePos.X < lo.X + edge ? -1 : io.MousePos.X >= hi.X - edge ? 1 : 0;
+        if (hovered && !(active && io.WantTextInput) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            stepPointerId = widget;
+            stepPointerRegion = Region();
+            stepDragged = false;
+        }
+        if (stepPointerId == widget)
+        {
+            stepDragged |= ImGui.IsMouseDragging(ImGuiMouseButton.Left);
+            if (ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+            {
+                if (!stepDragged && hovered && stepPointerRegion != 0 && Region() == stepPointerRegion)
+                {
+                    edited += stepPointerRegion * (double)step * (control ? .1 : 1) * (shift ? 10 : 1);
+                    if (max > min) edited = Math.Clamp(edited, min, max);
+                    changed = stepCommitted = edited != value && double.IsFinite(edited);
+                }
+                stepPointerId = 0;
+            }
+        }
+        if ((hovered || active) && !(active && io.WantTextInput))
+        {
+            var draw = ImGui.GetWindowDrawList();
+            float scale = DirectorImGuiTheme.Scale;
+            draw.PushClipRect(lo, hi, true);
+            for (int direction = -1; direction <= 1; direction += 2)
+            {
+                float x = direction < 0 ? lo.X + edge / 2 : hi.X - edge / 2;
+                float y = (lo.Y + hi.Y) / 2, half = Math.Min(4 * scale, edge * .28f);
+                uint bg = ImGui.GetColorU32(active ? ImGuiCol.FrameBgActive : ImGuiCol.FrameBgHovered);
+                draw.AddRectFilled(new(x - edge / 2, lo.Y), new(x + edge / 2, hi.Y), bg);
+                uint color = ImGui.GetColorU32(hovered && Region() == direction ? ImGuiCol.CheckMark : ImGuiCol.Text);
+                draw.AddLine(new(x - direction * half / 2, y - half), new(x + direction * half / 2, y), color, 1.5f * scale);
+                draw.AddLine(new(x + direction * half / 2, y), new(x - direction * half / 2, y + half), color, 1.5f * scale);
+            }
+            draw.PopClipRect();
+        }
         if (changed && double.IsFinite(edited)) value = edited;
         else changed = false;
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEW);
-        }
+        if (hovered) ImGui.SetMouseCursor(Region() == 0 ? ImGuiMouseCursor.ResizeEW : ImGuiMouseCursor.Hand);
         return changed;
     }
 }

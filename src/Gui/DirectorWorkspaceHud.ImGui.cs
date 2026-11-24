@@ -302,6 +302,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         form.EndSection();
         var visuals = CurrentReplayVisuals();
+        form.Note(ImGuiLabel("replay-visual-baseline-help"));
         foreach (var group in ReplayVisualGroupDefinitions)
         {
             InspectorSection(form, group.Code);

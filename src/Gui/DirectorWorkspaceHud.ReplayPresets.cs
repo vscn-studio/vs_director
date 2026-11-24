@@ -9,8 +9,8 @@ namespace VSDirector.Gui;
 
 /// <summary>
 /// One-click replay element presets. A preset writes ordinary element tracks, keyframes,
-/// camera keyframes, markers or scene visuals at the playhead, so everything it creates
-/// stays editable afterwards. The catalog lives in ReplayPresets.Catalog.cs, the
+/// camera keyframes, markers and visual elements in a single group at the playhead.
+/// Everything it creates stays editable afterwards. The catalog lives in ReplayPresets.Catalog.cs, the
 /// recording-analysis presets in ReplayPresets.Smart.cs and the browser in
 /// ReplayPresetBrowser.cs.
 /// </summary>
@@ -69,6 +69,8 @@ internal sealed partial class DirectorWorkspaceHud
         double PlayerYaw,
         DirectorReplayDocument? Document)
     {
+        internal Guid GroupId { get; set; }
+        internal List<DirectorReplayMarker> AddedMarkers { get; } = new();
         /// <summary>Horizontal forward of the current camera.</summary>
         internal (double X, double Z) Forward
             => (-Math.Sin(Pose.Yaw * Math.PI / 180d), -Math.Cos(Pose.Yaw * Math.PI / 180d));
@@ -157,7 +159,7 @@ internal sealed partial class DirectorWorkspaceHud
         Guid? select;
         try
         {
-            select = preset.Apply(context);
+            select = ApplyPresetElements(preset, context);
         }
         catch (Exception exception)
         {
@@ -165,11 +167,11 @@ internal sealed partial class DirectorWorkspaceHud
             capi.ShowChatMessage(Lang.Get("vsdirector:replay-preset-failed", PresetName(preset.Id)));
             return true;
         }
-        presetUsage.RecordUse(preset.Id);
         if (!CommitReplayViewportTimeline(timeline))
         {
             return true;
         }
+        presetUsage.RecordUse(preset.Id);
         if (select is Guid trackId && trackId != Guid.Empty)
         {
             return SelectReplayTimelineElementTrack(trackId);
@@ -177,6 +179,48 @@ internal sealed partial class DirectorWorkspaceHud
         ComposeInspector();
         ComposeTimeline();
         return true;
+    }
+
+    private static Guid? ApplyPresetElements(ReplayPreset preset, ReplayPresetContext context)
+    {
+        var group = new DirectorReplayElementTrack
+        {
+            TrackType = DirectorReplayElementTrackType.PresetGroup,
+            Name = PresetName(preset.Id)
+        };
+        context.GroupId = group.Id;
+        context.Timeline.Tracks.Add(group);
+        preset.Apply(context);
+        if (context.AddedMarkers.Count > 0)
+        {
+            var markers = PresetSharedTrack(context, DirectorReplayElementTrackType.Marker);
+            foreach (var marker in context.AddedMarkers)
+                AddPresetKeyframe(context, markers, new DirectorReplayElementKeyframe
+                {
+                    TimeSeconds = marker.TimeSeconds, Text = marker.Label, InterpolationToNext = IHold
+                });
+            context.AddedMarkers.Clear();
+        }
+        if (!context.Timeline.Tracks.Any(track => track.ParentGroupId == group.Id))
+        {
+            context.Timeline.Tracks.Remove(group);
+            return null;
+        }
+        return group.Id;
+    }
+
+    private static void VisualPreset(ReplayPresetContext context, DirectorReplayElementTrackType type,
+        double duration, Action<DirectorReplayVisualSettings> configure)
+    {
+        var track = PresetSharedTrack(context, type);
+        var visuals = context.Timeline.Visuals.DeepClone();
+        configure(visuals);
+        AddPresetKeyframe(context, track, new DirectorReplayElementKeyframe
+        {
+            TimeSeconds = context.Start, VisualSettings = visuals, InterpolationToNext = IHold
+        });
+        if (PresetTime(context, duration) > context.Start)
+            EndPresetTrack(context, track, duration);
     }
 
     /// <summary>The block the camera looks at (up to 160 blocks), else 20 blocks ahead.</summary>
@@ -207,17 +251,16 @@ internal sealed partial class DirectorWorkspaceHud
         => ReplayTimelineTickAt(Math.Clamp(c.Start + offset, 0d, c.Duration)) / ReplayTimelineTicksPerSecond;
 
     /// <summary>
-    /// Shake, FOV, speed, freeze, grade and title presets add to the first enabled track
-    /// of their type, so the timeline does not fill with one row per preset.
+    /// Related effects share a child row within this preset instance only.
     /// </summary>
     private static DirectorReplayElementTrack PresetSharedTrack(ReplayPresetContext c,
         DirectorReplayElementTrackType type)
     {
         DirectorReplayElementTrack? track = c.Timeline.Tracks.FirstOrDefault(item =>
-            item.Enabled && item.TrackType == type);
+            item.Enabled && item.TrackType == type && item.ParentGroupId == c.GroupId);
         if (track is null)
         {
-            track = new DirectorReplayElementTrack { TrackType = type };
+            track = new DirectorReplayElementTrack { TrackType = type, ParentGroupId = c.GroupId };
             c.Timeline.Tracks.Add(track);
         }
         return track;
@@ -229,6 +272,7 @@ internal sealed partial class DirectorWorkspaceHud
         var track = new DirectorReplayElementTrack
         {
             TrackType = type,
+            ParentGroupId = c.GroupId,
             Name = PresetName(id) + (suffix is null ? string.Empty : " · " + suffix)
         };
         c.Timeline.Tracks.Add(track);
@@ -598,7 +642,7 @@ internal sealed partial class DirectorWorkspaceHud
         {
             TimeSeconds = PresetTime(c, until),
             InterpolationToNext = DirectorReplayElementInterpolation.Hold,
-            Frozen = false
+            Frozen = false, EndsElement = true
         });
         return track.Id;
     }

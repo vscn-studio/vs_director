@@ -271,7 +271,7 @@ internal sealed class DirectorAnchorServer : IDisposable
                     allowed: true,
                     string.Empty,
                     heartbeat.Columns.Count,
-                    heartbeat.LastCompleteColumns);
+                    heartbeat.LastCompleteColumns, heartbeat.BatchId);
                 return;
             }
 
@@ -338,7 +338,7 @@ internal sealed class DirectorAnchorServer : IDisposable
             return;
         }
 
-        PreloadState next = new(replayId, expanded, now);
+        PreloadState next = new(replayId, expanded, now) { BatchId = request.BatchId };
         RetainPreload(next);
         if (preloads.Remove(player.PlayerUID, out PreloadState? existing))
         {
@@ -357,7 +357,7 @@ internal sealed class DirectorAnchorServer : IDisposable
             allowed: true,
             string.Empty,
             next.Columns.Count,
-            next.LastCompleteColumns);
+            next.LastCompleteColumns, next.BatchId);
     }
 
     private void OnBlockSound(IServerPlayer player, DirectorBlockSoundEvent request)
@@ -650,6 +650,10 @@ internal sealed class DirectorAnchorServer : IDisposable
                 continue;
             }
 
+            var retainedColumn = new AnchorColumn(column.X, column.Z);
+            if (state.RetainedColumns.Add(retainedColumn)) retention.Acquire(retainedColumn);
+            if (column.Dimension != 0 && state.LoadRequestedColumns.Add(column))
+                sapi.WorldManager.LoadChunkColumnForDimension(column.X, column.Z, column.Dimension);
             int dimensionOffset = column.Dimension * DimensionHeight / chunkSize;
             sapi.WorldManager.SendChunk(
                 column.X,
@@ -657,13 +661,8 @@ internal sealed class DirectorAnchorServer : IDisposable
                 column.Z,
                 player,
                 onlyIfInRange: false);
-            // Route preload must never synchronously generate terrain.  That
-            // API can block an integrated server long enough for the game to
-            // declare its host unresponsive.  The anchor owns loading the
-            // small area currently being observed; this advisory path only
-            // sends columns that are already available.
+            // Priority loading above is asynchronous, limited to one column per server tick.
             sapi.WorldManager.ForceSendChunkColumn(player, column.X, column.Z, column.Dimension);
-            state.CompleteColumns.Add(column);
         }
 
         state.NextColumnIndex = columns.Length == 0
@@ -689,7 +688,7 @@ internal sealed class DirectorAnchorServer : IDisposable
             allowed: true,
             string.Empty,
             state.Columns.Count,
-            completeColumns);
+            completeColumns, state.BatchId);
     }
 
     private void RetainAnchorColumn(AnchorState state, AnchorColumn column)
@@ -807,7 +806,7 @@ internal sealed class DirectorAnchorServer : IDisposable
         bool allowed,
         string messageCode,
         int totalColumns,
-        int sentColumns)
+        int sentColumns, int batchId = 0)
     {
         channel.SendPacket(new DirectorChunkPreloadStatus
         {
@@ -815,7 +814,8 @@ internal sealed class DirectorAnchorServer : IDisposable
             ReplayId = replayId,
             MessageCode = messageCode,
             TotalColumns = Math.Max(0, totalColumns),
-            SentColumns = Math.Clamp(sentColumns, 0, Math.Max(0, totalColumns))
+            SentColumns = Math.Clamp(sentColumns, 0, Math.Max(0, totalColumns)),
+            BatchId = batchId
         }, player);
     }
 
@@ -861,13 +861,11 @@ internal sealed class DirectorAnchorServer : IDisposable
 
     private void RetainPreload(PreloadState state)
     {
-        // Route preload is deliberately advisory. Keeping every expanded
-        // column loaded (up to 4096 columns) pins a large portion of the
-        // integrated server world and can make the host watchdog report that
-        // the server is unresponsive. The bounded EnsurePreloadChunks loop
-        // requests columns in small batches instead; the normal anchor keeps
-        // the current observation area alive.
-        _ = state;
+        int size = sapi.WorldManager.ChunkSize;
+        foreach (var column in state.Columns)
+            for (int y = 0; y < (sapi.WorldManager.MapSizeY + size - 1) / size; y++)
+                state.ProtectedChunks.Add(sapi.WorldManager.ChunkIndex3D(column.X,
+                    y + column.Dimension * DimensionHeight / size, column.Z));
     }
 
     private void ReleaseState(AnchorState state)
@@ -1082,6 +1080,8 @@ internal sealed class DirectorAnchorServer : IDisposable
             LastEnsureMs = now;
             EnsurePending = true;
         }
+
+        public int BatchId { get; init; }
 
         public string ReplayId { get; }
 

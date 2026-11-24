@@ -26,6 +26,8 @@ internal sealed partial class DirectorWorkspaceHud
         / Math.Max(.001, GuiElement.scaled(1)) - (replay ? ReplayTimelineHeaderHeight : PathTimelineHeaderHeight);
     private int TimelineRowAt(double mouseY, bool replay)
     {
+        var bounds = replay ? replayTimelineBounds : pathTimelineBounds;
+        if (bounds is null || mouseY >= bounds.renderY + bounds.OuterHeight) return -1;
         var rows = replay ? ReplayRows() : PathRows();
         int first = replay ? replayTimelineFirstVisibleTrack : pathTimelineFirstVisibleTrack;
         double y = TimelineLocalY(mouseY, replay);
@@ -37,7 +39,7 @@ internal sealed partial class DirectorWorkspaceHud
         bool replay = section == DirectorWorkspaceSection.Replay;
         var bounds = replay ? replayTimelineBounds : pathTimelineBounds;
         if (bounds is null || args.X < bounds.renderX || args.X > bounds.renderX + bounds.OuterWidth
-            || args.Y >= bounds.renderY + bounds.OuterHeight) return false;
+            || args.Y >= bounds.renderY + bounds.OuterHeight - GuiElement.scaled(TimelineFooterHeight)) return false;
         var rows = replay ? ReplayRows() : PathRows();
         int first = replay ? replayTimelineFirstVisibleTrack : pathTimelineFirstVisibleTrack;
         double y = TimelineLocalY(args.Y, replay);

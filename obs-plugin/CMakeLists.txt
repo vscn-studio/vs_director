@@ -25,7 +25,7 @@ if(COMMAND set_target_properties_obs)
       XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "studio.vscn.vsdirector-obs"
       XCODE_ATTRIBUTE_MARKETING_VERSION "${director_bundle_version}"
       XCODE_ATTRIBUTE_CURRENT_PROJECT_VERSION "${director_bundle_version}"
-      XCODE_ATTRIBUTE_INFOPLIST_KEY_NSHumanReadableCopyright "Copyright (c) 2026 HansJack (VSCN-Studio)"
+      XCODE_ATTRIBUTE_INFOPLIST_KEY_NSHumanReadableCopyright "Copyright (c) 2026 HansJack"
     )
   endif()
 elseif(APPLE)

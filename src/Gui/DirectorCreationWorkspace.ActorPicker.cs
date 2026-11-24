@@ -125,9 +125,9 @@ internal sealed partial class DirectorCreationWorkspace
         PickerCardLabel(draw, min, max, previewMax.Y, entry.Name, actorPickerSelected == entry.Id, hovered);
         if (hovered)
         {
-            ImGui.BeginTooltip(); ImGui.TextUnformatted(entry.Name); ImGui.TextUnformatted(entry.Code.Length == 0 ? entry.Id : entry.Code);
+            DirectorImGuiTooltip.Begin(); ImGui.TextUnformatted(entry.Name); ImGui.TextUnformatted(entry.Code.Length == 0 ? entry.Id : entry.Code);
             if (preview?.Error.Length > 0) ImGui.TextWrapped(preview.Error);
-            ImGui.EndTooltip();
+            DirectorImGuiTooltip.End();
         }
     }
 

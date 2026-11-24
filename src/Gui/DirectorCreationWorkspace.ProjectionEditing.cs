@@ -65,7 +65,7 @@ internal sealed partial class DirectorCreationWorkspace
                         else{if(!io.KeyCtrl)projectionSelection.Clear();if(!projectionSelection.Add(cell.Id))projectionSelection.Remove(cell.Id);projectionAnchor=cell.Id;}
                         contentView.Section="b.cells";ShowCreationPanel("properties");
                     }
-                    if(ImGui.IsItemHovered())ImGui.SetTooltip(label);
+                    if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(label);
                     ImGui.PopID();
                 }
                 if(end<cells.Length)ImGui.Dummy(new(1,(cells.Length-end)*row));contentView.CellScroll=ImGui.GetScrollY();ImGui.EndChild();

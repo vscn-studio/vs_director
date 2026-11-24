@@ -99,8 +99,8 @@ public static class DirectorReplayElementTimeline
         out DirectorReplayElementKeyframe sample)
     {
         sample = new DirectorReplayElementKeyframe { TrackType = trackType };
-        foreach (DirectorReplayElementTrack track in timeline.Tracks.Where(track =>
-            track.Enabled && track.TrackType == trackType))
+        foreach (DirectorReplayElementTrack track in timeline.EffectTracksInPriorityOrder().Where(track =>
+            timeline.IsTrackEnabled(track) && track.TrackType == trackType))
         {
             if (TrySample(timeline.ElementKeyframes, trackType, track.Id, timeSeconds,
                     out DirectorReplayElementKeyframe candidate))
@@ -179,8 +179,8 @@ public static class DirectorReplayElementTimeline
         double timeSeconds)
     {
         double rate = 1d;
-        foreach (DirectorReplayElementTrack elementTrack in timeline.Tracks.Where(track =>
-            track.Enabled && track.TrackType == DirectorReplayElementTrackType.Timelapse))
+        foreach (DirectorReplayElementTrack elementTrack in timeline.EffectTracksInPriorityOrder().Where(track =>
+            timeline.IsTrackEnabled(track) && track.TrackType == DirectorReplayElementTrackType.Timelapse))
         {
             if (TrySampleTimelapseRate(timeline, elementTrack.Id, timeSeconds, out double sampled))
             {
@@ -201,8 +201,8 @@ public static class DirectorReplayElementTimeline
         double fallback)
     {
         double result = fallback;
-        foreach (DirectorReplayElementTrack track in timeline.Tracks.Where(track =>
-            track.Enabled && track.TrackType == DirectorReplayElementTrackType.Speed))
+        foreach (DirectorReplayElementTrack track in timeline.EffectTracksInPriorityOrder().Where(track =>
+            timeline.IsTrackEnabled(track) && track.TrackType == DirectorReplayElementTrackType.Speed))
         {
             if (TrySample(timeline.ElementKeyframes, track.TrackType, track.Id, timeSeconds,
                     out DirectorReplayElementKeyframe keyframe))
@@ -221,9 +221,9 @@ public static class DirectorReplayElementTimeline
         double timeSeconds,
         double fallback)
     {
-        foreach (DirectorReplayElementTrack track in timeline.Tracks)
+        foreach (DirectorReplayElementTrack track in timeline.EffectTracksInPriorityOrder())
         {
-            if (!track.Enabled)
+            if (!timeline.IsTrackEnabled(track))
             {
                 continue;
             }
@@ -269,8 +269,8 @@ public static class DirectorReplayElementTimeline
         double logicalTime = double.IsFinite(timeSeconds) ? timeSeconds : 0d;
         List<DirectorReplayElementKeyframe>? activeTrack = null;
         int activeIndex = -1;
-        foreach (DirectorReplayElementTrack track in timeline.Tracks.Where(track =>
-            track.Enabled && track.TrackType == DirectorReplayElementTrackType.Freeze))
+        foreach (DirectorReplayElementTrack track in timeline.EffectTracksInPriorityOrder().Where(track =>
+            timeline.IsTrackEnabled(track) && track.TrackType == DirectorReplayElementTrackType.Freeze))
         {
             List<DirectorReplayElementKeyframe> keyframes = timeline.ElementKeyframes
                 .Where(keyframe => keyframe is not null
@@ -281,7 +281,7 @@ public static class DirectorReplayElementTimeline
                 .ToList();
             int candidateIndex = keyframes.FindLastIndex(keyframe =>
                 keyframe.TimeSeconds <= logicalTime + TimeEpsilon);
-            if (candidateIndex >= 0)
+            if (candidateIndex >= 0 && !keyframes[candidateIndex].EndsElement)
             {
                 activeTrack = keyframes;
                 activeIndex = candidateIndex;

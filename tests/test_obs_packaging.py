@@ -107,7 +107,7 @@ class ObsPackagingTests(unittest.TestCase):
             struct.pack_into(">I", data, 28, 0x0100000C)
             files["vsdirector-obs.plugin/Contents/Info.plist"] = plistlib.dumps({
                 "CFBundleIdentifier": "studio.vscn.vsdirector-obs",
-                "NSHumanReadableCopyright": "Copyright (c) 2026 HansJack (VSCN-Studio)",
+                "NSHumanReadableCopyright": "Copyright (c) 2026 HansJack",
             })
             intel = self.stage / "macos-x86_64/corresponding-source/build-inputs"
             files.update({f"{legal}/corresponding-source/build-inputs/{p.relative_to(intel).as_posix()}": p.read_bytes()

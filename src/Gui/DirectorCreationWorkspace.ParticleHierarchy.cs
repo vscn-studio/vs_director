@@ -53,7 +53,7 @@ internal sealed partial class DirectorCreationWorkspace
             if(!ImGui.GetIO().KeyCtrl)particleMulti.Clear();else{if(particleEmitter!=Guid.Empty)particleMulti.Add(particleEmitter);if(!particleMulti.Add(node.Id))particleMulti.Remove(node.Id);}
             particleEmitter=node.Id;contentView.Expanded[expansion]=true;NavigateContent(contentView.Section.StartsWith("p.")&&contentView.Section is not ("p.overview" or "p.files")?contentView.Section:"p.emission",node.Id);
         }
-        if(ImGui.IsItemHovered())ImGui.SetTooltip(P("trigger-"+node.Trigger)+" / "+node.Source);
+        if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(P("trigger-"+node.Trigger)+" / "+node.Source);
         if(ImGui.BeginDragDropSource())
         {particleDragging=node.Id;int token=1;ImGui.SetDragDropPayload("DIRECTOR_PARTICLE_NODE",(IntPtr)(&token),sizeof(int));ImGui.TextUnformatted(node.Name);ImGui.EndDragDropSource();}
         ParticleDrop(effect,node);

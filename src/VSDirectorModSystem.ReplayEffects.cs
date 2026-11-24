@@ -158,6 +158,8 @@ public sealed partial class VSDirectorModSystem
             grade = new DirectorReplayScreenGrade(sampled.GradeSepia, sampled.GradeContrast,
                 sampled.GradeVignette, sampled.GradeBloom, sampled.GradeGlitch, sampled.GradeFade);
         }
+        if (!IsRecordingHeadMotion && DirectorHeadMotion.TrySample(timeline, time, out var headMotion))
+            grade = grade with { Vignette = Math.Max(grade.Vignette, headMotion.Vignette) };
         double rewind = replay?.PreparedRewindAmount ?? 0d;
         if (rewind > 0d)
         {
@@ -171,7 +173,7 @@ public sealed partial class VSDirectorModSystem
     {
         foreach (DirectorReplayElementTrack track in Enumerable.Reverse(timeline.Tracks))
         {
-            if (!track.Enabled || track.TrackType != DirectorReplayElementTrackType.Title)
+            if (!timeline.IsTrackEnabled(track) || track.TrackType != DirectorReplayElementTrackType.Title)
             {
                 continue;
             }

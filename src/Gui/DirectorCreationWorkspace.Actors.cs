@@ -46,7 +46,7 @@ internal sealed partial class DirectorCreationWorkspace
                     string label = Vintagestory.API.Config.Lang.Get("skinpart-" + part.Code);
                     ImGui.TableNextRow(); ImGui.TableNextColumn(); ImGui.AlignTextToFramePadding();
                     ImGui.TextUnformatted(EquipmentLabel(label, ImGui.GetContentRegionAvail().X));
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+                    if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(label);
                     ImGui.TableNextColumn(); ImGui.SetNextItemWidth(-1);
                     if (ImGui.BeginCombo("##skin-" + part.Code, current.Length == 0 ? L("creation-none") : Variant(current)))
                     {
@@ -89,16 +89,16 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.TableSetupColumn("item", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableNextRow(); ImGui.TableNextColumn(); ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(EquipmentLabel(label, ImGui.GetContentRegionAvail().X));
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(label);
         ImGui.TableNextColumn();
         float side = ImGui.GetFrameHeight();
         float width = Math.Max(1, ImGui.GetContentRegionAvail().X - side - ImGui.GetStyle().ItemSpacing.X);
         string display = EquipmentLabel(name, width - ImGui.GetStyle().FramePadding.X * 2);
         if (ImGui.Button(display + "###pick", new(width, 0))) Continue(pick);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(name);
         ImGui.SameLine();
         if (DirectorImGuiIcons.Button(DirectorImGuiIcons.Get("x") + "##clear", new(side, side))) Continue(clear);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-clear-item"));
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-clear-item"));
         ImGui.EndTable();
     }
     private static string EquipmentLabel(string text, float width)

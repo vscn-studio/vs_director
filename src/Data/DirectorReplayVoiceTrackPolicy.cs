@@ -54,7 +54,7 @@ public static class DirectorReplayVoiceTrackPolicy
             // Preserve audible behaviour for old replays that have no rows.
             return true;
         }
-        if (!track.Enabled)
+        if (!timeline.IsTrackEnabled(track))
         {
             gain = 0f;
             return false;
@@ -81,7 +81,7 @@ public static class DirectorReplayVoiceTrackPolicy
         DirectorReplayElementTrack? track = timeline.Tracks.FirstOrDefault(item =>
             item.TrackType == DirectorReplayElementTrackType.VoiceAudio
             && string.Equals(item.SpeakerId, speakerId, StringComparison.Ordinal));
-        return track?.Enabled ?? true;
+        return track is null || timeline.IsTrackEnabled(track);
     }
 
     private static Dictionary<string, string> CollectSpeakers(

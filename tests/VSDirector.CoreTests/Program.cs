@@ -12,6 +12,9 @@ internal static class SmokeTests
 {
     private static readonly (string Name, Func<Task> Run)[] Cases =
     {
+        ("head motion interpolation, local camera axes, trimming, deterministic seek, mute, persistence and undo", RunSync(HeadMotionChecks.Run)),
+        ("preset groups persist, collapse, mute and delete all children; visual elements restore baseline", RunSync(ReplayElementGroupChecks.Run)),
+        ("replay style undo/redo restores visuals, camera and markers atomically; bounded progress history", RunSync(ReplayEditingProgressChecks.Run)),
         ("blueprint projection persistence, automatic/manual particles and bounded export settings", RunSync(CreationProjectionChecks.Run)),
         ("projection editing, layers, growth, stable copies, cell keys, deterministic collision and edge particles", RunSync(ProjectionEditingChecks.Run)),
         ("structure fields, texture dependencies and duplicated identities roundtrip", RunSync(ProjectionEditingChecks.Persistence)),
@@ -5626,7 +5629,6 @@ internal static class SmokeTests
             ViewportTimeline = timeline
         });
         Check.Equal(DirectorReplayDocument.CurrentSchemaVersion, migrated.SchemaVersion);
-        Check.Equal(23, migrated.SchemaVersion);
         Check.NearlyEqual(92d, migrated.ViewportTimeline.Visuals.Camera.Fov);
         Check.Equal("#101820", migrated.ViewportTimeline.Visuals.Sky.BackgroundColor);
 

@@ -113,8 +113,8 @@ internal sealed partial class DirectorWorkspaceHud
                 TimeEffectPreset(c, at + 0.2, at + 3, DirectorReplayTimeEffect.Freeze, cameraContinues: true);
                 GradePreset(c, true, new GradeStep(at - 2d), new GradeStep(at, Sepia: 0.5f, Contrast: 0.2f, Vignette: 0.45f),
                     new GradeStep(at + 3, Sepia: 0.5f, Contrast: 0.2f, Vignette: 0.45f), new GradeStep(at + 4));
-                c.Hud.owner.TryAddReplayMarkerQuietly(PresetLang("vsdirector:replay-preset-marker-death") + " · " + PrettyActorName(victim),
-                    deaths[0].Time);
+                c.AddedMarkers.Add(new DirectorReplayMarker { Label = PresetLang("vsdirector:replay-preset-marker-death") + " · " + PrettyActorName(victim),
+                    TimeSeconds = deaths[0].Time });
                 return track.Id;
             });
         add("smart-highlights", PresetSmartGroup, c =>
@@ -127,7 +127,7 @@ internal sealed partial class DirectorWorkspaceHud
                 }
                 foreach (SmartEvent item in events.Take(60))
                 {
-                    c.Hud.owner.TryAddReplayMarkerQuietly(HighlightLabel(c, item), item.Time);
+                    c.AddedMarkers.Add(new DirectorReplayMarker { Label = HighlightLabel(c, item), TimeSeconds = item.Time });
                 }
                 c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-highlights-added") + " " + Math.Min(60, events.Count));
                 return null;

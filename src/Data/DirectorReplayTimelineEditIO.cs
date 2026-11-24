@@ -5,8 +5,8 @@ namespace VSDirector.Data;
 
 public sealed class DirectorReplayTimelineEditDocument
 {
-    // 8: see DirectorReplayDocument schema 23 (same new track types and fields).
-    public const int CurrentSchemaVersion = 8;
+    // 10: head-motion tracks and captured samples (replay schema 25).
+    public const int CurrentSchemaVersion = 10;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 

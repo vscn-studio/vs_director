@@ -6,6 +6,15 @@ namespace VSDirector.Gui;
 // Projection and axis basis are supplied by its own fitted viewport.
 internal sealed class DirectorEditorHandles
 {
+    // Like Mine-imator's view_control_move/rotate, scale the tool with viewing
+    // distance, independently of the selected model. Projection-derived units
+    // also compensate for FOV, viewport height and UI scale.
+    internal static float Radius(float worldUnitsPerPixel, bool rotate)
+        => worldUnitsPerPixel * (rotate ? 60 : 100) * DirectorImGuiTheme.Scale;
+
+    internal static float ProjectionScale(double depth, float radius)
+        => (float)Math.Min(1, depth * .25 / radius);
+
     private const int ScreenRotationAxis=6;
     private readonly List<(Vector2 A,Vector2 B,int Axis,Guid CameraId)> cameraToolLines=new();
     private readonly List<(Vector2 A,Vector2 B,Vector2 C,int Axis)> cameraToolTriangles=new();
@@ -63,8 +72,8 @@ internal sealed class DirectorEditorHandles
                 float projected=new Vector2((float)(view[0]*d.X+view[4]*d.Y+view[8]*d.Z),
                     (float)(view[1]*d.X+view[5]*d.Y+view[9]*d.Z)).Length();
                 float length=projectOffset is null?radius/Math.Max(.15f,projected):radius;
-                CameraHandleLine(draw,pivot,pivot,Add(pivot,d*(length-(scale?0:CameraMoveConeLength(pivot,length)))),Color(i),i,1.5f);
-                if(scale) DrawCameraPivotBox(draw,pivot,length,i,Color(i)); else DrawCameraMoveCone(draw,pivot,length,i,Color(i));
+                CameraHandleLine(draw,pivot,pivot,Add(pivot,d*(length-(scale?units*2*DirectorImGuiTheme.Scale:CameraMoveConeLength(pivot,length)))),Color(i),i,1.5f);
+                if(scale) DrawCameraScaleBox(draw,pivot,length,i,Color(i)); else DrawCameraMoveCone(draw,pivot,length,i,Color(i));
                 if(ProjectCameraHandlePoint(pivot,Add(pivot,d*length),out var tip))draw.AddText(tip+new Vector2(6,-4)*DirectorImGuiTheme.Scale,Color(i),"XYZ"[i].ToString());
             }
             if(!scale) for(int i=0;i<3;i++) DrawCameraMovePlane(draw,pivot,radius,i,Color(i),eye);
@@ -210,20 +219,35 @@ internal sealed class DirectorEditorHandles
             color, handle, highlighted ? 0xb0000000u : 0x55000000u);
     }
 
-    private void DrawCameraPivotBox(ImDrawListPtr draw, Vec3d pivot, float length, int axis, uint color)
+    private void DrawCameraScaleBox(ImDrawListPtr draw, Vec3d pivot, float length, int axis, uint color)
     {
-        Vector3 tip = CameraAxis(axis) * length;
-        float half = Math.Min(length * .10f, CameraWorldUnitsPerPixel(pivot) * 6 * DirectorImGuiTheme.Scale);
+        Vector3 direction = CameraAxis(axis), u = CameraAxis((axis + 1) % 3), v = CameraAxis((axis + 2) % 3);
+        Vector3 tip = direction * length;
+        float half = units * 8 * DirectorImGuiTheme.Scale;
+        float depth = units * 2 * DirectorImGuiTheme.Scale;
         Vec3d[] corners = Enumerable.Range(0, 8).Select(i => Add(pivot,
-            tip + new Vector3((i & 1) == 0 ? -half : half, (i & 2) == 0 ? -half : half, (i & 4) == 0 ? -half : half))).ToArray();
-        int[][] faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
-        var m = viewMatrix;
-        double Depth(int[] face) => face.Average(i => m[2] * corners[i].X + m[6] * corners[i].Y + m[10] * corners[i].Z + m[14]);
-        foreach (var face in faces.OrderBy(Depth))
-            DrawCameraHandleQuad(draw, pivot, face.Select(i => corners[i]).ToArray(), color, axis, 0xe0000000);
+            tip + u * ((i & 1) == 0 ? -half : half) + v * ((i & 2) == 0 ? -half : half)
+                + direction * ((i & 4) == 0 ? -depth : depth))).ToArray();
+        // Outward winding: only the visible faces render or participate in picking.
+        // Opaque, unoutlined faces avoid seeing rear edges through the flat cap.
+        int[][] faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+        var flags = draw.Flags;
+        draw.Flags &= ~ImDrawListFlags.AntiAliasedFill;
+        try
+        {
+            foreach (var face in faces)
+            {
+                if (!ProjectCameraHandlePoint(pivot, corners[face[0]], out var a)
+                    || !ProjectCameraHandlePoint(pivot, corners[face[1]], out var b)
+                    || !ProjectCameraHandlePoint(pivot, corners[face[2]], out var c)) continue;
+                if ((b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X) >= -.01f) continue;
+                DrawCameraHandleQuad(draw, pivot, face.Select(i => corners[i]).ToArray(), color, axis, 0xff000000, outline: false);
+            }
+        }
+        finally { draw.Flags = flags; }
     }
 
-    private void DrawCameraHandleQuad(ImDrawListPtr draw, Vec3d pivot, Vec3d[] corners, uint color, int handle, uint alpha)
+    private void DrawCameraHandleQuad(ImDrawListPtr draw, Vec3d pivot, Vec3d[] corners, uint color, int handle, uint alpha, bool outline = true)
     {
         var screen = new Vector2[4];
         for (int i = 0; i < 4; i++) if (!ProjectCameraHandlePoint(pivot, corners[i], out screen[i])) return;
@@ -232,7 +256,7 @@ internal sealed class DirectorEditorHandles
         if (Math.Abs(area) < .01f) return;
         if (area < 0) Array.Reverse(screen);
         draw.AddQuadFilled(screen[0], screen[1], screen[2], screen[3], (color & 0x00ffffff) | alpha);
-        draw.AddQuad(screen[0], screen[1], screen[2], screen[3], color, 1.5f * DirectorImGuiTheme.Scale);
+        if (outline) draw.AddQuad(screen[0], screen[1], screen[2], screen[3], color, 1.5f * DirectorImGuiTheme.Scale);
         cameraToolTriangles.Add(new(screen[0], screen[1], screen[2], handle));
         cameraToolTriangles.Add(new(screen[0], screen[2], screen[3], handle));
         for (int i = 0; i < 4; i++) cameraToolLines.Add(new(screen[i], screen[(i + 1) % 4], handle, Guid.Empty));
@@ -243,7 +267,7 @@ internal sealed class DirectorEditorHandles
         const int sides = 64;
         Vector3 direction = CameraAxis(axis), u = CameraAxis((axis + 1) % 3), v = CameraAxis((axis + 2) % 3);
         Vec3d tip = Add(pivot, direction * length), bottom = Add(pivot, direction * (length - CameraMoveConeLength(pivot, length)));
-        float radius = Math.Min(length * .075f, CameraWorldUnitsPerPixel(pivot) * 4.5f * DirectorImGuiTheme.Scale);
+        float radius = Math.Min(length * .15f, CameraWorldUnitsPerPixel(pivot) * 9 * DirectorImGuiTheme.Scale);
         var faces = new List<(Vec3d A, Vec3d B, Vec3d C)>(sides * 2);
         for (int i = 0; i < sides; i++)
         {
@@ -276,7 +300,7 @@ internal sealed class DirectorEditorHandles
     }
 
     private float CameraMoveConeLength(Vec3d pivot, float length)
-        => Math.Min(length * .18f, CameraWorldUnitsPerPixel(pivot) * 10.8f * DirectorImGuiTheme.Scale);
+        => Math.Min(length * .4f, CameraWorldUnitsPerPixel(pivot) * 24 * DirectorImGuiTheme.Scale);
 
     private int CameraHandleAxisAt(Vector2 point, float threshold)
     {

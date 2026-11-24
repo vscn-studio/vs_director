@@ -514,13 +514,13 @@ internal sealed partial class DirectorWorkspaceHud
         Add("tod-nightfall", PresetWorldGroup, c => TimeOfDayPreset(c, (0, 17500, IEase), (4, 19500, IEase), (8, 22000, IHold)));
         Add("sky-green-screen", PresetWorldGroup, c =>
             {
-                c.Timeline.Visuals.Sky.Mode = DirectorReplaySkyMode.GreenScreen;
+                VisualPreset(c, DirectorReplayElementTrackType.Sky, 10d, v => v.Sky.Mode = DirectorReplaySkyMode.GreenScreen);
                 return PosePreset(c, "sky-green-screen", 10d, (0d, c.Pose, CameraPathInterpolation.Step));
             });
         Add("weather-storm-mood", PresetWorldGroup, c =>
             {
-                c.Timeline.Visuals.Environment.Weather = DirectorReplayWeatherMode.Storm;
-                c.Timeline.Visuals.Environment.Precipitation = 1f;
+                VisualPreset(c, DirectorReplayElementTrackType.Weather, 12d, v =>
+                { v.Environment.Weather = DirectorReplayWeatherMode.Storm; v.Environment.Precipitation = 1f; });
                 TimeOfDayPreset(c, (0, 20500, IHold));
                 return ShakePreset(c, 2.5f, 0.25f, 3.1f, 0.35f, 0f, new(0, 0, IEase), new(3, 1), new(9, 1, IEase), new(12, 0));
             });
@@ -676,7 +676,7 @@ internal sealed partial class DirectorWorkspaceHud
             });
         Add("style-symmetric", PresetStyleGroup, c =>
             {
-                c.Timeline.Visuals.Composition.CenterGuide = true;
+                VisualPreset(c, DirectorReplayElementTrackType.Composition, 8.5d, v => v.Composition.CenterGuide = true);
                 CameraPreset square = c.Pose.DeepClone();
                 square.Yaw = (float)(Math.Round(c.Pose.Yaw / 90d) * 90d);
                 square.Pitch = 0f;
@@ -690,7 +690,7 @@ internal sealed partial class DirectorWorkspaceHud
             });
         Add("style-noir", PresetStyleGroup, c =>
             {
-                c.Timeline.Visuals.Environment.Weather = DirectorReplayWeatherMode.Rain;
+                VisualPreset(c, DirectorReplayElementTrackType.Weather, 12.5d, v => v.Environment.Weather = DirectorReplayWeatherMode.Rain);
                 TimeOfDayPreset(c, (0, 22000, IHold));
                 Guid? id = MovePreset(c, "style-noir", 0.5d, new MoveStep(0, Roll: 10f), new MoveStep(12, Roll: 10f, Forward: 1.5));
                 GradePreset(c, true, new GradeStep(0, Sepia: 1f, Contrast: 0.35f, Vignette: 0.45f, Interpolation: IHold),

@@ -156,7 +156,7 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.PushID(section+emitter+field);
         bool active=contentView.Section==section && (emitter==Guid.Empty||particleEmitter==emitter);
         if(ImGui.Selectable(ContentFit(DirectorImGuiIcons.Get(icon)+"  "+text,ImGui.GetContentRegionAvail().X-4)+"###entry",active,ImGuiSelectableFlags.None,new(Math.Max(1,ImGui.GetContentRegionAvail().X),0)))NavigateContent(section,emitter,field);
-        if(ImGui.IsItemHovered())ImGui.SetTooltip(text);
+        if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(text);
         ImGui.PopID();
     }
     private static string ContentFit(string text,float width)

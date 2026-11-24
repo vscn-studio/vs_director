@@ -84,7 +84,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
     // the two areas the player can actually observe: the active camera and
     // the replay anchor at time zero.  Keeping this small also keeps the
     // integrated-server request and client readiness checks bounded.
-    private const int PlaybackPreloadWindowRadiusChunks = 0;
+    private const int PlaybackPreloadWindowRadiusChunks = 1;
     // Keep integrated-server ticks responsive while a replay baseline is
     // applied.  Large batches can trip the host watchdog even though the
     // work is technically spread across frames.
@@ -603,6 +603,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             ?? new DirectorReplayViewportTimeline();
 
     public bool IsExporting => exporter.IsExporting || obsExport?.IsActive == true || IsIndependentVoiceExportActive;
+    internal bool IsObsExporting => obsExport?.IsActive == true;
 
     public string ExportStatus => obsExport?.Status ?? (HasIndependentVoiceExportStatus
         ? IndependentVoiceExportStatus
@@ -844,7 +845,11 @@ internal sealed partial class DirectorReplayManager : IDisposable
             }
         }
 
-        return window;
+        // User-selected columns lead the queue, including those away from the current camera.
+        var excluded = document.ExcludedPreloadColumns.ToHashSet();
+        return DirectorReplayPreloadPlanner.NormalizeOverrideColumns(document.IncludedPreloadColumns)
+            .Concat(window).Where(column => !excluded.Contains(column) && column.X >= 0 && column.Z >= 0)
+            .Distinct().Take(DirectorReplayPreloadPlanner.MaxExpandedColumns).ToArray();
     }
 
     internal void RequestPreloadEditor(Guid replayId)
@@ -902,22 +907,14 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
 
         string preferredPlayerUid = capi.World.Player?.PlayerUID ?? string.Empty;
-        bool quickMode = pendingPlaybackStart?.Document.Id == replayId
-            ? pendingPlaybackStart.QuickMode
-            : playback?.Document.Id == replayId && playback.QuickMode;
-        DirectorReplayPreloadPlan plan = pendingPlaybackStart?.Document.Id == replayId
-            ? pendingPlaybackStart.PreloadPlan
-            : playback?.Document.Id == replayId
-                ? playback.PreloadPlan
-                : loadedPreloadEditor?.Document.Id == replayId
-                    ? loadedPreloadEditor.PreloadPlan
-                    : DirectorReplayPreloadPlanner.Build(
-                        document,
-                        preferredPlayerUid,
-                        DirectorReplayPlaybackPolicy.ShouldRebuildWorld(
-                            document,
-                            quickMode,
-                            config.ReplayApplyWorldSnapshot));
+        if (loadedPreloadEditor?.Document != document)
+        {
+            string sourcePath = pendingPlaybackStart?.Document == document ? pendingPlaybackStart.SourcePath
+                : playback?.Document == document ? playback.SourcePath : string.Empty;
+            loadedPreloadEditor = new LoadedPreloadEditor(document, sourcePath,
+                DirectorReplayPreloadPlanner.Build(document, preferredPlayerUid, includeWorldSnapshotColumns: true));
+        }
+        DirectorReplayPreloadPlan plan = loadedPreloadEditor.PreloadPlan;
         int centerX;
         int centerZ;
         int dimension;
@@ -2879,7 +2876,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
     public bool ReplaceViewportTimeline(
         DirectorReplayViewportTimeline timeline,
         out string error,
-        bool notify = true)
+        bool notify = true,
+        IReadOnlyList<DirectorReplayMarker>? addedMarkers = null)
     {
         ArgumentNullException.ThrowIfNull(timeline);
         error = string.Empty;
@@ -2892,6 +2890,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         DirectorReplayViewportTimeline previous = document.ViewportTimeline?.DeepClone()
             ?? new DirectorReplayViewportTimeline();
+        var previousMarkers = document.Markers;
         List<DirectorReplaySpeedKeyframe> previousLegacySpeedKeyframes = document.SpeedKeyframes
             .Select(keyframe => keyframe.DeepClone())
             .ToList();
@@ -2903,6 +2902,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
             && !normalized.Tracks.Any(track =>
                 track.TrackType == DirectorReplayElementTrackType.Speed);
         document.ViewportTimeline = normalized;
+        if (addedMarkers is { Count: > 0 })
+            document.Markers = DirectorReplayTimeline.NormalizeMarkers(document.Markers.Concat(addedMarkers), document.DurationSeconds);
         if (removedLastSpeedTrack)
         {
             // Legacy speed keys are migration input only. Leaving them behind
@@ -2912,6 +2913,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         if (!PersistTimelineEdit(document, out error))
         {
             document.ViewportTimeline = previous;
+            document.Markers = previousMarkers;
             document.SpeedKeyframes = previousLegacySpeedKeyframes;
             return false;
         }
@@ -2928,6 +2930,23 @@ internal sealed partial class DirectorReplayManager : IDisposable
         return true;
     }
 
+    internal bool ReplaceTimelineEdit(DirectorReplayTimelineEditDocument edits, out string error)
+    {
+        error = "replay-not-active";
+        var document = EditableTimelineDocument();
+        if (document is null || document.Id != edits.ReplayId || IsExporting) return false;
+        var previous = DirectorReplayTimelineEditIO.Create(document);
+        DirectorReplayTimelineEditIO.Apply(document, edits);
+        if (!PersistTimelineEdit(document, out error))
+        {
+            DirectorReplayTimelineEditIO.Apply(document, previous);
+            return false;
+        }
+        if (ReferenceEquals(document, playback?.Document))
+            RefreshPlaybackForVisualChanges(playback!, previous.ViewportTimeline.Visuals, document.ViewportTimeline.Visuals);
+        return true;
+    }
+
     private void RefreshPlaybackForVisualChanges(
         Playback active,
         DirectorReplayVisualSettings previous,
@@ -2938,6 +2957,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             RebuildPlaybackWorld(active);
         }
 
+        active.VisualClockDirty = true;
         // Actor binding behavior is fixed; visual changes only affect rendering.
     }
 
@@ -7566,9 +7586,14 @@ internal sealed partial class DirectorReplayManager : IDisposable
                     }
                 }
             }
-            if (resetTimedEvents || Math.Abs(active.TimeSeconds - previousTime) > TimeEpsilon
-                || VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals is not null) ApplyClock(active);
-            visualEnvironment.Apply(VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals ?? active.Document.ViewportTimeline.Visuals);
+            if (resetTimedEvents || active.VisualClockDirty || Math.Abs(active.TimeSeconds - previousTime) > TimeEpsilon
+                || VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals is not null
+                || active.Document.ViewportTimeline.Tracks.Any(t => t.TrackType == DirectorReplayElementTrackType.Weather))
+            {
+                ApplyClock(active, timelineTimeSeconds);
+                active.VisualClockDirty = false;
+            }
+            visualEnvironment.Apply(VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals ?? DirectorReplayVisualElements.Evaluate(active.Document.ViewportTimeline, timelineTimeSeconds));
             DirectorReplayVisualRuntime.ReplaySpeed = PlaybackSpeed;
             ActionFrameDecorator?.Invoke(active.TimeSeconds);
             CameraPreset? camera = controller.IsActive ? controller.CurrentPose : null;
@@ -8589,7 +8614,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         return null;
     }
 
-    private void ApplyClock(Playback active)
+    private void ApplyClock(Playback active, double timelineTimeSeconds)
     {
         if (!DirectorReplayMath.TrySampleClock(
             active.Document.ClockSamples,
@@ -8606,7 +8631,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
                 active.TimeSeconds,
                 out DirectorReplayElementKeyframe timeOfDay);
         var creationVisuals = VSDirector.Runtime.DirectorCreationRuntime.Current?.ActiveVisuals;
-        DirectorReplayEnvironmentVisuals environment = (creationVisuals ?? active.Document.ViewportTimeline.Visuals).Environment;
+        DirectorReplayEnvironmentVisuals environment = (creationVisuals ?? DirectorReplayVisualElements.Evaluate(active.Document.ViewportTimeline, timelineTimeSeconds)).Environment;
         if (creationVisuals is not null) sampledTime = false;
         if (sampledTime || environment.OverrideTime)
         {
@@ -8671,7 +8696,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         DirectorReplayViewportTimeline timeline)
     {
         HashSet<Guid> enabledTrackIds = timeline.Tracks
-            .Where(track => track.Enabled)
+            .Where(track => timeline.IsTrackEnabled(track))
             .Select(track => track.Id)
             .ToHashSet();
         return timeline.ElementKeyframes.Where(keyframe =>
@@ -9913,9 +9938,13 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         List<string> keysToStop = binding.AnimationKeysToStop;
         keysToStop.Clear();
-        foreach (string code in binding.ExplicitReplayAnimations)
+        // Full-state restore, seek and visibility changes can clear our tracking
+        // set while leaving manager layers alive. Reconcile the actual manager,
+        // including deserialized one-shot/aim layers, against this sample.
+        foreach (string code in animationManager.ActiveAnimationsByAnimCode.Keys)
         {
-            if (desiredExplicitKeys.Contains(code))
+            if (desiredExplicitKeys.Contains(code)
+                || animationManager.ActiveAnimationsByAnimCode[code].TriggeredBy is not null)
             {
                 continue;
             }
@@ -9927,6 +9956,19 @@ internal sealed partial class DirectorReplayManager : IDisposable
             StopAnimationImmediately(animationManager, code);
             binding.ExplicitReplayAnimations.Remove(code);
         }
+
+        // Fading layers need not be in the active dictionary. Replay time may
+        // be paused, so an absent explicit action must not wait for ease-out.
+        if (animationManager.Animator?.Animations is { } runningAnimations)
+            foreach (RunningAnimation running in runningAnimations)
+            {
+                if ((!running.Active && !running.Running) || running.meta?.TriggeredBy is not null) continue;
+                bool recorded = sample.AnimationStates.Any(state => !IsControlDrivenAnimation(player, state)
+                    && (string.Equals(AnimationStateKey(state), running.Animation?.Code, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(AnimationStateKey(state), running.meta?.Animation, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(state.Code, running.meta?.Code, StringComparison.OrdinalIgnoreCase)));
+                if (!recorded) running.Stop();
+            }
 
         foreach (DirectorReplayAnimationSample state in sample.AnimationStates)
         {
@@ -11329,6 +11371,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         public double AppliedTimeSeconds { get; set; } = -1d;
 
+        public bool VisualClockDirty { get; set; }
         public double PreparedTimeSeconds { get; set; } = -1d;
 
         public double PreparedCameraTimeSeconds { get; set; } = -1d;

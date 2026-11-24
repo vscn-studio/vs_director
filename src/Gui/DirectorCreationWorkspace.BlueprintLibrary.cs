@@ -67,9 +67,9 @@ internal sealed partial class DirectorCreationWorkspace
                     }
                 }
                 else ImGui.GetWindowDrawList().AddText(min,0xffaaaaaa,build.Error.Length>0||build.Ready?B("failed"):B("loading"));
-                if(hover&&(build.Error.Length>0||build.Issues.Count>0))ImGui.SetTooltip(string.Join("\n",build.Issues.Prepend(build.Error)));
+                if(hover&&(build.Error.Length>0||build.Issues.Count>0))DirectorImGuiTooltip.Show(string.Join("\n",build.Issues.Prepend(build.Error)));
             }
-            catch(Exception e){if(hover)ImGui.SetTooltip(e.Message);}
+            catch(Exception e){if(hover)DirectorImGuiTooltip.Show(e.Message);}
             PickerCardLabel(ImGui.GetWindowDrawList(),min,max,imageMax.Y,entry.Name,blueprintSelected==entry.Source,hover);
         }
         EndPickerGrid(grid);ImGui.EndChild();
@@ -147,8 +147,18 @@ internal sealed partial class DirectorCreationWorkspace
             ImGui.SetNextItemWidth(-1);ImGui.InputText(B("name"),ref blueprintName,128);
             void Corner(string label,ref CreationVector value)
             {
-                var v=value.Float();ImGui.TextUnformatted(label);ImGui.SetNextItemWidth(-1);
-                if(ImGui.DragFloat3("##"+label,ref v,1)){value=new(Math.Floor(v.X),Math.Floor(v.Y),Math.Floor(v.Z));blueprintHasRegion=true;}
+                ImGui.PushID(label); ImGui.TextUnformatted(label);
+                double[] components = [value.X, value.Y, value.Z];
+                float width = (ImGui.GetContentRegionAvail().X - 2 * ImGui.GetStyle().ItemSpacing.X) / 3;
+                bool changed = false;
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    if (axis > 0) ImGui.SameLine();
+                    ImGui.SetNextItemWidth(width);
+                    changed |= DirectorImGuiNumeric.Double("##axis-" + axis, ref components[axis], 1, format: "%.0f");
+                }
+                if (changed) { value = new(Math.Round(components[0]), Math.Round(components[1]), Math.Round(components[2])); blueprintHasRegion = true; }
+                ImGui.PopID();
             }
             Corner(B("first"),ref blueprintFirst);Corner(B("second"),ref blueprintSecond);
             var extent=Vector3.Abs((blueprintSecond-blueprintFirst).Float())+Vector3.One;

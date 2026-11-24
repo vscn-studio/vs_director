@@ -6,8 +6,10 @@ namespace VSDirector.Gui;
 
 internal sealed partial class DirectorWorkspaceHud
 {
+    private const double TimelineFooterHeight = 36;
     private DirectorTimelineWindow? imGuiTimeline;
     private bool imGuiTimelineDirty;
+    private double timelineLabelsBottom;
 
     private void MoveImGuiTimelinePointer(MouseEvent args)
     {
@@ -35,7 +37,7 @@ internal sealed partial class DirectorWorkspaceHud
     {
         imGuiTimelineDirty = false;
         var panel = layout.Panel("timeline");
-        double height = Math.Max(1, panel.Height - 14);
+        double height = Math.Max(1, panel.Height - 4);
         var bounds = ElementBounds.Fixed(0, 0, panel.Width, height);
         PanelRoot(panel).WithParent(ElementBounds.Empty).WithChildren(bounds).CalcWorldBounds();
         bool replay = section == DirectorWorkspaceSection.Replay;
@@ -47,8 +49,8 @@ internal sealed partial class DirectorWorkspaceHud
         var preview = layout.Panel("preview");
         imGuiTimeline.SetResizeCorner(preview.X + preview.Width - panel.X);
         double label = ReplayTimelineLabelColumnWidth(panel.Width);
-        if (replay) BuildImGuiReplayTimeline(panel.Width, height, label);
-        else if (section == DirectorWorkspaceSection.Paths) BuildImGuiPathTimeline(panel.Width, height, label);
+        if (replay) BuildImGuiReplayTimeline(panel.Width, height - TimelineFooterHeight, label);
+        else if (section == DirectorWorkspaceSection.Paths) BuildImGuiPathTimeline(panel.Width, height - TimelineFooterHeight, label);
         imGuiTimeline.End();
         imGuiTimeline.SetInputEnabled(!layout.NavigationMode);
         UpdateImGuiTimelinePlayhead();
@@ -123,7 +125,7 @@ internal sealed partial class DirectorWorkspaceHud
         double label = ReplayTimelineLabelColumnWidth(panel.Width);
         double X(double seconds) => label + (seconds * ReplayTimelineTicksPerSecond - (replay ? replayTimelineScrollTicks : pathTimelineScrollTicks))
             * (replay ? ReplayTimelinePixelsPerTick : PathTimelinePixelsPerTick);
-        imGuiTimeline.Playhead(X(time), label, panel.Width, panel.Height - 14);
+        imGuiTimeline.Playhead(X(time), label, panel.Width, panel.Height - 4);
         double target = replay ? replayKeyframeDragTime : pathTimelineDragTime;
         double original = double.NaN;
         if (replay && double.IsFinite(target))
@@ -153,7 +155,7 @@ internal sealed partial class DirectorWorkspaceHud
             else if (pathTimelineDragKind == PathTimelineDragKind.Element)
                 original = before.ElementKeyframes.FirstOrDefault(k => k.Id == pathTimelineElementDragId)?.TimeSeconds ?? double.NaN;
         }
-        string text = ReplayTimelineTickAt(double.IsFinite(target) ? target : time) + " " + Lang.Get("vsdirector:creation-unit-frames");
+        string text = DirectorTimelineCursor.TimeLabel(double.IsFinite(target) ? target : time, (int)ReplayTimelineTicksPerSecond);
         imGuiTimeline.CursorFeedback(text, double.IsFinite(target) ? X(target) : double.NaN,
             double.IsFinite(original) ? X(original) : double.NaN);
     }
@@ -212,21 +214,27 @@ internal sealed partial class DirectorWorkspaceHud
     }
 
     private void ImGuiTimelineRow(string id, int index, double y, double width, double label, double rowHeight, string name,
-        string icon, bool selected, bool visible, Func<bool> options, Func<bool> toggle, Func<bool> add)
+        string icon, bool selected, bool visible, Func<bool> options, Func<bool> toggle, Func<bool> add, bool? expanded = null)
     {
         var view = imGuiTimeline!;
         view.Shape("row-" + id, "timeline-row" + (selected ? " selected" : index % 2 == 1 ? " alternate" : ""),
             0, y, width, rowHeight);
+        view.PushClip(0, 0, label, timelineLabelsBottom);
         // The grip remains on the input surface so the existing reorder gesture owns pointer capture.
         double center = Math.Max(20, rowHeight * .5);
         view.Shape("grip-" + id, "timeline-track-icon", 12, y + center - 13, 24, 26, icon: "grip-vertical");
-        view.Shape("icon-" + id, "timeline-track-icon", 36, y + center - 13, 24, 26, icon: icon);
+        if (expanded.HasValue)
+            view.Button("expand-" + id, 36, y + center - 14, 24, Lang.Get("vsdirector:replay-preset-group-expand"),
+                expanded.Value ? "chevron-down" : "chevron-right", () => add());
+        else view.Shape("icon-" + id, "timeline-track-icon", 36, y + center - 13, 24, 26, icon: icon);
         double addX = Math.Max(190, label - ReplayTimelineLabelColumnExpansion - 30);
         view.Shape("name-" + id, "timeline-track-name", 60, y + center - 13, Math.Max(26, addX - 120), 26, name);
         view.Button("options-" + id, addX - 56, y + center - 14, 28, Lang.Get("vsdirector:replay-element-track-options"), "menu-2", () => options());
         view.Button("visible-" + id, addX - 28, y + center - 14, 28, Lang.Get(visible ? "vsdirector:replay-viewport-hide" : "vsdirector:replay-viewport-show"),
             visible ? "eye" : "eye-off", () => toggle());
-        view.Button("add-" + id, addX, y + center - 14, 28, Lang.Get("vsdirector:replay-element-keyframe-add"), "plus", () => add());
+        view.Button("add-" + id, addX, y + center - 14, 28, Lang.Get(expanded.HasValue ? "vsdirector:replay-preset-group-expand" : "vsdirector:replay-element-keyframe-add"),
+            expanded.HasValue ? (expanded.Value ? "chevron-up" : "chevron-down") : "plus", () => add());
+        view.PopClip();
     }
 
     private void ImGuiTimelineKey(string id, double time, double rowY, double label, double width,
@@ -264,8 +272,30 @@ internal sealed partial class DirectorWorkspaceHud
         }
     }
 
+    private void DrawTimelineFooter(double width, double y, double label, bool replay)
+    {
+        var view = imGuiTimeline!;
+        view.Shape("footer", "timeline-label-bg", 0, y, label, TimelineFooterHeight);
+        view.BlockInput(0, y, label, TimelineFooterHeight + 4);
+        if (!replay)
+        {
+            view.Button("pathAddElement", 8, y + 4, 120, Lang.Get("vsdirector:replay-element-add"), "", () => OpenPathElementMenu());
+            return;
+        }
+        view.Button("replayAddElement", 8, y + 4, 120, Lang.Get("vsdirector:replay-element-add"), "", () => OpenReplayElementMenu(), owner.IsReplayPlaying);
+        var timeline = CurrentReplayViewportTimeline();
+        var options = new List<(string, string)> {
+            ("scene-command-new", Lang.Get("vsdirector:replay-scene-new")),
+            ("scene-command-rename", Lang.Get("vsdirector:replay-scene-rename")),
+            ("scene-command-delete", Lang.Get("vsdirector:replay-scene-delete")) };
+        options.AddRange(timeline.Scenes.Select(s => (s.Id.ToString("D"), s.Name)));
+        view.Select("replaySceneSelector", 136, y + 4, Math.Max(34, label - 144), timeline.ActiveSceneId.ToString("D"), options,
+            value => OnReplaySceneMenuChanged(value, true));
+    }
+
     private void BuildImGuiPathTimeline(double width, double height, double label)
     {
+        timelineLabelsBottom = height;
         int duration = PathTimelineDurationTicks();
         double pixels = PathTimelinePixelsPerTick;
         pathTimelineScrollTicks = Math.Clamp(pathTimelineScrollTicks, 0, Math.Max(0, duration - (width - label) / pixels));
@@ -274,20 +304,16 @@ internal sealed partial class DirectorWorkspaceHud
         if (pathEdit is null) return;
         DirectorPathElementTimeline.Normalize(pathEdit);
         var tracks = pathEdit.ElementTracks;
-        var rows = new DirectorTimelineRows(tracks.Select(t => TrackHeight(t.Id)).Append(40));
+        var rows = new DirectorTimelineRows(tracks.Select(t => TrackHeight(t.Id)));
         int visible = rows.Count;
         pathTimelineFirstVisibleTrack = Math.Clamp(pathTimelineFirstVisibleTrack, 0, rows.MaxFirst(height - PathTimelineHeaderHeight));
+        imGuiTimeline!.PushClip(0, PathTimelineHeaderHeight, width, Math.Max(0, height + TimelineFooterHeight - PathTimelineHeaderHeight));
         for (int row = 0; row < visible; row++)
         {
             int index = pathTimelineFirstVisibleTrack + row;
             double y = PathTimelineHeaderHeight + rows.Top(index) - rows.Top(pathTimelineFirstVisibleTrack);
-            if (y >= height) break;
-            if (index > tracks.Count) break;
-            if (index == tracks.Count)
-            {
-                imGuiTimeline!.Button("pathAddElement", 8, y + 1, 88, Lang.Get("vsdirector:replay-element-add"), "", () => OpenPathElementMenu());
-                break;
-            }
+            if (y >= height + TimelineFooterHeight) break;
+            if (index >= tracks.Count) break;
             var track = tracks[index]; string id = track.Id.ToString("N");
             ImGuiTimelineRow(id, index, y, width, label, TrackHeight(track.Id), track.Name.Length == 0 ? PathElementTrackName(track.TrackType) : track.Name,
                 TimelineTrackIcon(track.TrackType.ToString()), track.Id == selectedPathElementTrackId, PathTrackVisible(track),
@@ -306,6 +332,8 @@ internal sealed partial class DirectorWorkspaceHud
         if (pathElementTrackReordering || resizingTimelineTrack != Guid.Empty)
             ImGuiTimelineReorder(pathElementTrackReordering ? pathElementTrackReorderIndex : pathTimelineFirstVisibleTrack,
                 pathTimelineFirstVisibleTrack, visible, width);
+        imGuiTimeline!.PopClip();
+        DrawTimelineFooter(width, height, label, false);
     }
 
     /// <summary>
@@ -333,8 +361,9 @@ internal sealed partial class DirectorWorkspaceHud
 
     private void BuildImGuiReplayTimeline(double width, double height, double label)
     {
+        timelineLabelsBottom = height;
         var timeline = CurrentReplayViewportTimeline();
-        var tracks = timeline.Tracks.Where(t => t.TrackType != DirectorReplayElementTrackType.Marker).ToList();
+        var tracks = timeline.VisibleTracks(expandedReplayPresetGroups).ToList();
         int duration = ReplayTimelineDurationTicks();
         AutoFitOpenedReplay(width - label, duration);
         double pixels = ReplayTimelinePixelsPerTick;
@@ -347,36 +376,52 @@ internal sealed partial class DirectorWorkspaceHud
         var (start, end) = CurrentReplayExportRange();
         double left = Math.Clamp(X(start), label, width), right = Math.Clamp(X(end), label, width);
         if (right > left) imGuiTimeline!.Shape("export-range", "timeline-export", left, 0, right - left, ReplayTimelineRulerHeight - 1);
-        var rows = new DirectorTimelineRows(tracks.Select(t => TrackHeight(t.Id)).Append(ReplayTimelineTrackHeight));
+        var rows = new DirectorTimelineRows(tracks.Select(t => TrackHeight(t.Id)));
         int visible = rows.Count;
         replayTimelineFirstVisibleTrack = Math.Clamp(replayTimelineFirstVisibleTrack, 0, rows.MaxFirst(height - ReplayTimelineHeaderHeight));
         RequestWaveforms(timeline, tracks.Skip(replayTimelineFirstVisibleTrack)
                 .TakeWhile(t => rows.Top(tracks.IndexOf(t)) - rows.Top(replayTimelineFirstVisibleTrack) < height - ReplayTimelineHeaderHeight),
             replayTimelineScrollTicks / ReplayTimelineTicksPerSecond,
             (replayTimelineScrollTicks + (width - label) / pixels) / ReplayTimelineTicksPerSecond, width - label);
+        imGuiTimeline!.PushClip(0, ReplayTimelineHeaderHeight, width, Math.Max(0, height + TimelineFooterHeight - ReplayTimelineHeaderHeight));
         for (int row = 0; row < visible; row++)
         {
             int index = replayTimelineFirstVisibleTrack + row;
             double y = ReplayTimelineHeaderHeight + rows.Top(index) - rows.Top(replayTimelineFirstVisibleTrack);
             double rowHeight = rows.Height(index);
-            if (y >= height) break;
-            if (index > tracks.Count) break;
-            if (index == tracks.Count)
-            {
-                imGuiTimeline!.Button("replayAddElement", 8, y + 1, 88, Lang.Get("vsdirector:replay-element-add"), "", () => OpenReplayElementMenu(), owner.IsReplayPlaying);
-                var options = new List<(string, string)> {
-                    ("scene-command-new", Lang.Get("vsdirector:replay-scene-new")),
-                    ("scene-command-rename", Lang.Get("vsdirector:replay-scene-rename")),
-                    ("scene-command-delete", Lang.Get("vsdirector:replay-scene-delete")) };
-                options.AddRange(timeline.Scenes.Select(s => (s.Id.ToString("D"), s.Name)));
-                imGuiTimeline.Select("replaySceneSelector", 102, y + 1, Math.Max(34, label - 110), timeline.ActiveSceneId.ToString("D"), options,
-                    value => OnReplaySceneMenuChanged(value, true));
-                break;
-            }
+            if (y >= height + TimelineFooterHeight) break;
+            if (index >= tracks.Count) break;
             var track = tracks[index]; string id = track.Id.ToString("N");
-            ImGuiTimelineRow(id, index, y, width, label, rowHeight, track.Name.Length == 0 ? ReplayTimelineElementTrackName(ReplayTimelineElementKindFor(track.TrackType)) : track.Name,
-                TimelineTrackIcon(track.TrackType.ToString()), IsReplayTimelineElementTrackSelected(track), track.Enabled,
-                () => OpenReplayTrackEditor(track.Id), () => ToggleReplayElementTrack(track.Id), () => AddReplayKeyframeForTrack(track.Id));
+            bool headGroup = track.TrackType == DirectorReplayElementTrackType.PresetGroup
+                && timeline.Tracks.Any(t => t.ParentGroupId == track.Id && t.TrackType == DirectorReplayElementTrackType.HeadMotion);
+            string trackName = track.Name.Length > 0 ? track.Name : ReplayTimelineElementTrackName(
+                headGroup ? ReplayTimelineElementKind.HeadMotion : ReplayTimelineElementKindFor(track.TrackType));
+            ImGuiTimelineRow(id, index, y, width, label, rowHeight, (track.ParentGroupId == Guid.Empty ? "" : "    ") + trackName,
+                TimelineTrackIcon(track.TrackType.ToString()), IsReplayTimelineElementTrackSelected(track), timeline.IsTrackEnabled(track),
+                () => OpenReplayTrackEditor(track.Id), () => ToggleReplayElementTrack(track.Id), () => AddReplayKeyframeForTrack(track.Id),
+                track.TrackType == DirectorReplayElementTrackType.PresetGroup ? expandedReplayPresetGroups.Contains(track.Id) : null);
+            if (track.TrackType == DirectorReplayElementTrackType.PresetGroup)
+            {
+                var children = timeline.TrackFamily(track.Id);
+                var frames = timeline.ElementKeyframes.Where(f => children.Contains(f.TrackId)).ToList();
+                var clips = timeline.Clips.Where(c => children.Contains(c.TrackId)).ToList();
+                var starts = frames.Select(f => f.TimeSeconds).Concat(clips.Select(c => c.TimelineStartSeconds)).ToList();
+                var ends = frames.Select(f => f.TimeSeconds + (f.TrackType == DirectorReplayElementTrackType.Title ? f.TitleDurationSeconds : f.HeadMotion?.Duration ?? 0))
+                    .Concat(clips.Select(c => c.TimelineStartSeconds + (c.SourceType == DirectorReplayViewportSourceType.StaticCamera ? 0 : c.DurationSeconds))).ToList();
+                if (starts.Count > 0)
+                {
+                    left = Math.Max(label, X(starts.Min()));
+                    right = Math.Min(width, X(Math.Max(starts.Min() + 1 / ReplayTimelineTicksPerSecond, ends.Max())));
+                    if (right > left)
+                    {
+                        imGuiTimeline!.Shape("group-span-" + id, "timeline-interval", left, y + rowHeight / 2 - 10, right - left, 20);
+                        if (right - left > 80)
+                            imGuiTimeline.Shape("group-count-" + id, "timeline-interval-label", left + 6, y + rowHeight / 2 - 10,
+                                right - left - 12, 20, Lang.Get("vsdirector:replay-preset-group-count", children.Count - 1));
+                    }
+                }
+                continue;
+            }
             if (track.TrackType == DirectorReplayElementTrackType.Camera)
             {
                 foreach (var clip in timeline.Clips.Where(c => c.TrackId == track.Id && c.SourceType == DirectorReplayViewportSourceType.StaticCamera))
@@ -402,6 +447,14 @@ internal sealed partial class DirectorWorkspaceHud
                 }
             foreach (var frame in timeline.ElementKeyframes.Where(f => f.TrackId == track.Id))
             {
+                if (track.TrackType == DirectorReplayElementTrackType.HeadMotion && frame.HeadMotion is { Duration: > 0 } motion)
+                {
+                    double motionLeft = Math.Max(label, X(frame.TimeSeconds));
+                    double motionRight = Math.Min(width, X(frame.TimeSeconds + motion.Duration));
+                    if (motionRight > motionLeft)
+                        imGuiTimeline!.Shape("head-motion-" + frame.Id.ToString("N"), "timeline-interval", motionLeft,
+                            y + rowHeight / 2 - 8, motionRight - motionLeft, 16);
+                }
                 if (track.TrackType == DirectorReplayElementTrackType.Timelapse)
                 {
                     double edgeX = X(Time(frame));
@@ -420,13 +473,16 @@ internal sealed partial class DirectorWorkspaceHud
         if (replayElementTrackReordering || resizingTimelineTrack != Guid.Empty)
             ImGuiTimelineReorder(replayElementTrackReordering ? replayElementTrackReorderIndex : replayTimelineFirstVisibleTrack,
                 replayTimelineFirstVisibleTrack, visible, width);
+        imGuiTimeline!.PopClip();
+        DrawTimelineFooter(width, height, label, true);
     }
 
     private static string TimelineTrackIcon(string type) => type switch
     {
         "Camera" or "CameraPath" => "camera", "Marker" => "bookmark", "Speed" => "gauge", "CameraOrbit" => "rotate-360",
-        "TrackEntity" or "LookAt" => "focus-2", "FollowEntity" => "walk", "CameraShake" => "camera-rotate", "Fov" => "eye",
+        "TrackEntity" or "LookAt" => "focus-2", "FollowEntity" => "walk", "CameraShake" => "camera-rotate", "HeadMotion" => "eye", "Fov" => "eye",
         "Timelapse" => "hourglass", "TimeOfDay" => "clock", "Freeze" => "snowflake", "BlockOverride" => "cube",
+        "Weather" => "cloud", "Sky" => "cloud", "Composition" => "layout-grid", "PresetGroup" => "folder",
         "VoiceAudio" or "Audio" => "volume", "Roll" => "rotate", "ColorGrade" => "palette", "Title" => "typography", _ => "menu-2"
     };
 

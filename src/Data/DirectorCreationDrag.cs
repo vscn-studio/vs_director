@@ -51,6 +51,12 @@ public sealed class DirectorCreationDrag
         direction = new Vector3(b.X, b.Y, b.Z) / b.W - from;
         if (direction.LengthSquared() < 1e-12f) return false;
         direction = Vector3.Normalize(direction);
+        // Overlays remain visible between the eye and the scene's near plane.
+        // Start perspective picking at the eye so those handles can be dragged
+        // too; an orthographic ray still starts on its parallel near plane.
+        var eye = Vector4.Transform(new Vector4(0, 0, 1, 0), inverse);
+        if (Math.Abs(eye.W) > 1e-8f)
+            from = new Vector3(eye.X, eye.Y, eye.Z) / eye.W;
         return true;
     }
     private static bool Intersect(Vector3 from, Vector3 ray, Vector3 pivot, Vector3 normal, out Vector3 hit)

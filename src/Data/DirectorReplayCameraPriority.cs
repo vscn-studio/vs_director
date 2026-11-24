@@ -22,7 +22,7 @@ public static class DirectorReplayCameraPriority
         for (int index = timeline.Tracks.Count - 1; index >= 0; index--)
         {
             DirectorReplayElementTrack track = timeline.Tracks[index];
-            if (track.Enabled && IsCameraTrackType(track.TrackType))
+            if (timeline.IsTrackEnabled(track) && IsCameraTrackType(track.TrackType))
             {
                 yield return track;
             }
@@ -34,6 +34,7 @@ public static class DirectorReplayCameraPriority
     {
         ArgumentNullException.ThrowIfNull(timeline);
         ArgumentNullException.ThrowIfNull(track);
+        if (!timeline.IsTrackEnabled(track)) return false;
         switch (track.TrackType)
         {
             case DirectorReplayElementTrackType.Camera:

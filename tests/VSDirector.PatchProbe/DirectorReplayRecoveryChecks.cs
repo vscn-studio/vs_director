@@ -37,8 +37,10 @@ internal static partial class DirectorImGuiProbe
             {
                 RuntimeEnv.GUIScale = scale;
                 io.DisplaySize = new Vector2(1920, 1080);
-                Set("keyframeAnchorX", 940f / scale);
+                float anchorX = scale == 1.5f ? 1850 : scale == 2 ? 260 : 940;
+                Set("keyframeAnchorX", anchorX / scale);
                 Set("keyframeAnchorY", 800f / scale);
+                Set("keyframeControlAnchor", (anchorX / scale, 800f / scale, 20f));
                 kind.SetValue(hud, Enum.Parse(kind.FieldType, "CameraKeyframe"));
                 Call(hud, "ComposeKeyframeImGui", true);
                 object window = AccessTools.Field(hudType, "keyframeImGuiWindow").GetValue(hud)!;
@@ -55,10 +57,14 @@ internal static partial class DirectorImGuiProbe
                 }
                 io.MousePos = new Vector2(-100);
                 for (int frame = 0; frame < 40; frame++) Frame();
-                if (collapsed || size.Y < Math.Min(600 * scale, io.DisplaySize.Y - 48 * scale) || size.X < 400 * scale
+                if (collapsed || size.Y < Math.Min(300 * scale, io.DisplaySize.Y - 48 * scale) || size.X < 320 * scale
+                    || size.Y > 560 * scale + 1
                     || position.Y < 0 || position.Y + size.Y > io.DisplaySize.Y + 1
                     || !(bool)AccessTools.Property(window.GetType(), "IsOpened").GetValue(window)!)
                     throw new Exception($"Replay keyframe window collapsed, shrank or escaped the screen at {scale}: {position}/{size}.");
+                float expectedLeft = scale == 1.5f ? anchorX - size.X - 10 * scale : anchorX + 30 * scale;
+                if (Math.Abs(position.X - expectedLeft) > 2)
+                    throw new Exception("Keyframe editor did not open beside its source control or flip left at the screen edge");
                 Vector2 before = size;
                 // Shrink, leaving room even when the initial form fills the viewport.
                 io.MousePos = position + size - new Vector2(4); Frame();
@@ -87,8 +93,33 @@ internal static partial class DirectorImGuiProbe
                     throw new Exception("Double-clicking the keyframe title collapsed its property contents.");
                 capture($"replay-keyframe-{scale * 100:0}");
                 Call(window, "Close");
+                var track = new DirectorReplayElementTrack { TrackType = DirectorReplayElementTrackType.Fov, Name = "FOV" };
+                Set("replayViewportDraftTimeline", new DirectorReplayViewportTimeline { Clips = [clip], Tracks = [track] });
+                Set("replayFloatingTrackId", track.Id);
+                Set("replayFloatingTrackName", track.Name);
+                kind.SetValue(hud, Enum.Parse(kind.FieldType, "Track"));
+                Call(hud, "ComposeKeyframeImGui", true);
+                window = AccessTools.Field(hudType, "keyframeImGuiWindow").GetValue(hud)!;
+                io.MousePos = new Vector2(-100);
+                for (int frame = 0; frame < 12; frame++) Frame();
+                if (size.Y > 190 * scale || size.X > 382 * scale)
+                    throw new Exception($"Short element settings retained excessive blank space at {scale}: {size}");
+                capture($"replay-element-settings-{scale * 100:0}");
+                Call(window, "Close");
+                var headTrack = new DirectorReplayElementTrack { TrackType = DirectorReplayElementTrackType.HeadMotion };
+                var headFrame = new DirectorReplayElementKeyframe { TrackId = headTrack.Id, TrackType = headTrack.TrackType };
+                Set("replayViewportDraftTimeline", new DirectorReplayViewportTimeline { Tracks = [headTrack], ElementKeyframes = [headFrame] });
+                Set("selectedReplayElementKeyframeId", headFrame.Id);
+                kind.SetValue(hud, Enum.Parse(kind.FieldType, "ElementKeyframe"));
+                Call(hud, "ComposeKeyframeImGui", true);
+                window = AccessTools.Field(hudType, "keyframeImGuiWindow").GetValue(hud)!;
+                for (int frame = 0; frame < 12; frame++) Frame();
+                if (size.Y < 300 * scale || position.Y + size.Y > io.DisplaySize.Y + 1)
+                    throw new Exception("Head-motion editor loses controls or escapes screen bounds");
+                Call(window, "Close");
+                Set("replayViewportDraftTimeline", new DirectorReplayViewportTimeline { Clips = [clip] });
             }
-            Console.WriteLine("PASS real replay keyframe composer stays open for 40 frames, fits the screen, resizes and preserves user bounds on refresh at 100/150/200%");
+            Console.WriteLine("PASS compact element/keyframe composers: short form fits its content, long form scrolls, screen bounds and manual resize/position retained at 100/150/200%");
         }
         finally
         {

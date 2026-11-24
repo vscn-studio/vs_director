@@ -51,6 +51,7 @@ internal sealed class DirectorCameraController : IDisposable
     private bool? externalSavedAllowCameraControl;
     private bool? externalSavedAllowCharacterControl;
     private CameraPreset? preparedCameraPose;
+    internal System.Func<CameraPreset, CameraPreset>? LivePoseTransform { get; set; }
     private bool replayElementClearViewEnabled;
     private Entity? replayElementClearViewTarget;
     private bool disposed;
@@ -359,6 +360,16 @@ internal sealed class DirectorCameraController : IDisposable
         freeCameraActive = false;
         replayFollowExportState = null;
         SetReplayElementClearView(false);
+        return true;
+    }
+
+    internal bool TryRestoreReplayCamera(CameraPreset pose)
+    {
+        // This is the already captured observer view, including its original
+        // roll/FOV. Do not upright it as when entering free look from a shot.
+        if (!TrySetReplayPose(pose, out _)) return false;
+        guiPointerCameraInput = false;
+        freeCameraActive = true;
         return true;
     }
 
@@ -1085,6 +1096,7 @@ internal sealed class DirectorCameraController : IDisposable
             preparedCameraPose = null;
             return;
         }
+        target = LivePoseTransform?.Invoke(target) ?? target;
         target = ResolveCollisionSafePose(target);
         preparedCameraPose = target;
 

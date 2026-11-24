@@ -24,6 +24,8 @@ internal static class ReplayRemoteChunkPriorityPatch
 
     internal static MethodBase? TargetMethod { get; private set; }
 
+    internal static MethodBase? ReplacementTargetMethod { get; private set; }
+
     internal static MethodBase? MapChunkTargetMethod { get; private set; }
 
     internal static bool TryPatch(Harmony harmony, ILogger logger)
@@ -37,6 +39,9 @@ internal static class ReplayRemoteChunkPriorityPatch
             MethodInfo? postfix = AccessTools.Method(
                 typeof(ReplayRemoteChunkPriorityPatch),
                 nameof(Postfix));
+            MethodInfo? replacement = AccessTools.Method(typeof(ClientWorldMap), "OverloadChunkMT",
+                new[] { typeof(Packet_ServerChunk), typeof(ClientChunk) });
+            MethodInfo? replacementPostfix = AccessTools.Method(typeof(ReplayRemoteChunkPriorityPatch), nameof(ReplacementPostfix));
             MethodInfo? mapChunkTarget = AccessTools.Method(
                 typeof(SystemNetworkProcess),
                 "ProcessInBackground",
@@ -46,6 +51,7 @@ internal static class ReplayRemoteChunkPriorityPatch
                 nameof(MapChunkPostfix));
             if (target is null
                 || postfix is null
+                || replacement is null || replacementPostfix is null
                 || mapChunkTarget is null
                 || mapChunkPostfix is null
                 || ClientSystemGameField is null
@@ -58,10 +64,12 @@ internal static class ReplayRemoteChunkPriorityPatch
             harmony.Patch(
                 target,
                 postfix: new HarmonyMethod(postfix) { priority = Priority.Last });
+            harmony.Patch(replacement, postfix: new HarmonyMethod(replacementPostfix) { priority = Priority.Last });
             harmony.Patch(
                 mapChunkTarget,
                 postfix: new HarmonyMethod(mapChunkPostfix) { priority = Priority.Last });
             TargetMethod = target;
+            ReplacementTargetMethod = replacement;
             MapChunkTargetMethod = mapChunkTarget;
             return true;
         }
@@ -72,12 +80,24 @@ internal static class ReplayRemoteChunkPriorityPatch
         }
     }
 
+    private static void ReplacementPostfix(ClientWorldMap __instance, Packet_ServerChunk p, ClientChunk newchunk)
+    {
+        // OverloadChunkMT can defer replacement until tessellation finishes.
+        // Rebuild only once the received chunk actually owns these coordinates.
+        if (ReferenceEquals(__instance.GetChunk(p.X, p.Y, p.Z), newchunk)) Postfix(__instance, p);
+    }
+
     private static void Postfix(ClientWorldMap __instance, Packet_ServerChunk p)
     {
-        if (DirectorReplayRuntime.Manager?.IsServerRecordingWorldPlaybackActive == true && GameField?.GetValue(__instance) is ClientMain game)
+        if (DirectorReplayRuntime.Manager is { IsWorldPlaybackActive: true } manager && GameField?.GetValue(__instance) is ClientMain game)
         {
             int x = p.X, y = p.Y, z = p.Z;
-            game.EnqueueMainThreadTask(() => DirectorReplayRuntime.Manager?.ObserveServerRecordingChunkLoad(x, y, z), "vsdirector-session-loaded");
+            Guid replayId = manager.ActiveReplayId;
+            game.EnqueueMainThreadTask(() =>
+            {
+                if (ReferenceEquals(DirectorReplayRuntime.Manager, manager) && manager.ActiveReplayId == replayId)
+                    manager.ObserveServerRecordingChunkLoad(x, y, z);
+            }, "vsdirector-session-loaded");
         }
         if (!ShouldPrioritize(p.X, p.Y, p.Z))
         {

@@ -9,6 +9,7 @@ internal sealed partial class DirectorWorkspaceHud
     private DirectorImGuiWindow? keyframeImGuiWindow;
     private readonly Dictionary<string, string> keyframeImGuiValues = new();
     private float keyframeAnchorX, keyframeAnchorY;
+    private (float X, float Y, float Width)? keyframeControlAnchor;
     private bool keyframeAnchorPending;
 
     private void CaptureKeyframeAnchor()
@@ -16,6 +17,7 @@ internal sealed partial class DirectorWorkspaceHud
         float scale = (float)Math.Max(.001, GuiElement.scaled(1));
         keyframeAnchorX = capi.Input.MouseX / scale;
         keyframeAnchorY = capi.Input.MouseY / scale;
+        keyframeControlAnchor = imGuiTimeline?.EditorAnchorAt(keyframeAnchorX, keyframeAnchorY);
         keyframeAnchorPending = true;
     }
 
@@ -50,12 +52,16 @@ internal sealed partial class DirectorWorkspaceHud
         }
         bool entityPopup = replay && replayFloatingEditorKind == ReplayFloatingEditorKind.EntityPopup;
         bool addMenu = replay ? replayFloatingEditorKind is ReplayFloatingEditorKind.AddElement or ReplayFloatingEditorKind.PlayerPicker : pathFloatingEditorKind == PathFloatingEditorKind.AddElement;
+        bool browser = replay && replayFloatingEditorKind == ReplayFloatingEditorKind.AddElement;
         var form = new DirectorImGuiForm
         {
             // A scrolling property body needs a stable height. Auto-fitting a
             // child that fills the available space feeds its size back into itself.
-            AutoHeight = entityPopup || addMenu,
-            MinimumWidth = entityPopup || addMenu ? 220 : 360,
+            AutoHeight = entityPopup || addMenu && !browser,
+            FillContent = browser,
+            CompactProperties = !entityPopup && !addMenu,
+            MinimumBodyHeight = browser ? 320 : 120,
+            MinimumWidth = browser ? 420 : entityPopup || addMenu ? 220 : 320,
             ClassName = entityPopup || addMenu ? "keyframe-popover entity-popover" : "keyframe-popover"
         };
         if (replay)
@@ -75,10 +81,16 @@ internal sealed partial class DirectorWorkspaceHud
             else ImGuiPathElementKeyframe(form);
         }
         keyframeImGuiWindow.Render(replay ? ReplayFloatingEditorTitle() : PathFloatingEditorTitle(), form,
-            entityPopup ? 400 : addMenu ? (replay ? 680 : 280) : 440, entityPopup ? 460 : addMenu ? (replay ? 640 : 330) : Math.Clamp(180 + form.FieldCount * 56, 300, 680));
+            browser ? 740 : entityPopup ? 400 : addMenu ? (replay ? 680 : 280) : 380,
+            browser ? 540 : entityPopup ? 460 : addMenu ? (replay ? 640 : 330) : Math.Clamp(92 + form.FieldCount * 34, 120, 560));
         if (opening || keyframeAnchorPending)
         {
-            keyframeImGuiWindow.SetAnchor(keyframeAnchorX, keyframeAnchorY);
+            if (!entityPopup && !addMenu)
+            {
+                var anchor = keyframeControlAnchor ?? (keyframeAnchorX, keyframeAnchorY, 0f);
+                keyframeImGuiWindow.SetAnchorRight(anchor.Item1, anchor.Item2, anchor.Item3);
+            }
+            else keyframeImGuiWindow.SetAnchor(keyframeAnchorX, keyframeAnchorY);
             keyframeAnchorPending = false;
         }
         keyframeImGuiWindow.Open();
@@ -259,6 +271,16 @@ internal sealed partial class DirectorWorkspaceHud
     private void ImGuiReplayElementKeyframe(DirectorImGuiForm form)
     {
         if (SelectedReplayElementKeyframe() is not { } frame) return;
+        if (frame.TrackType == DirectorReplayElementTrackType.HeadMotion)
+        {
+            ImGuiReplayHeadMotion(form, frame);
+            return;
+        }
+        if (DirectorReplayVisualElements.IsVisual(frame.TrackType) || frame.TrackType == DirectorReplayElementTrackType.Marker)
+        {
+            ImGuiReplayVisualElement(form, frame);
+            return;
+        }
         SyncReplayElementFields(frame);
         void Text(string field, string label) => form.Text(label, ReplayElementField(field), v => replayElementFieldValues[field] = v);
         void Number(string field, string label)

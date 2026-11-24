@@ -339,7 +339,7 @@ internal static class ReplayPresetEngineChecks
     {
         DirectorReplayDocument replay = PresetReplay(out Guid grade, out Guid title, out Guid camera);
         CheckPresetTimeline(replay.ViewportTimeline, grade, title, camera);
-        Check.Equal(23, replay.SchemaVersion);
+        Check.Equal(DirectorReplayDocument.CurrentSchemaVersion, replay.SchemaVersion);
 
         string root = Path.Combine(Path.GetTempPath(), "vsdirector-preset-save-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -365,7 +365,7 @@ internal static class ReplayPresetEngineChecks
             // Standalone timeline edit file.
             string sidecarPath = replayPath + ".timeline.json";
             DirectorReplayTimelineEditIO.Save(sidecarPath, DirectorReplayTimelineEditIO.Create(replay));
-            Check.True(File.ReadAllText(sidecarPath).Contains("\"schemaVersion\": 8", StringComparison.Ordinal));
+            Check.True(File.ReadAllText(sidecarPath).Contains($"\"schemaVersion\": {DirectorReplayTimelineEditDocument.CurrentSchemaVersion}", StringComparison.Ordinal));
             DirectorReplayTimelineEditDocument edits = Check.NotNull(DirectorReplayTimelineEditIO.Load(sidecarPath));
             DirectorReplayDocument target = DirectorReplayMath.Normalize(new DirectorReplayDocument
             {
@@ -444,7 +444,7 @@ internal static class ReplayPresetEngineChecks
             DurationSeconds = 20d,
             ViewportTimeline = LegacyTimeline()
         });
-        Check.Equal(23, legacy.SchemaVersion);
+        Check.Equal(DirectorReplayDocument.CurrentSchemaVersion, legacy.SchemaVersion);
         CheckLegacyPlayback(legacy.ViewportTimeline);
 
         // Current files keep follow/shake roll (it is now applied).
@@ -470,7 +470,7 @@ internal static class ReplayPresetEngineChecks
             };
             DirectorReplayTimelineEditIO.Save(sidecarPath, legacyEdits);
             DirectorReplayTimelineEditDocument loaded = Check.NotNull(DirectorReplayTimelineEditIO.Load(sidecarPath));
-            Check.Equal(8, loaded.SchemaVersion);
+            Check.Equal(DirectorReplayTimelineEditDocument.CurrentSchemaVersion, loaded.SchemaVersion);
             DirectorReplayTimelineEditIO.Apply(legacy, loaded);
             CheckLegacyPlayback(legacy.ViewportTimeline);
 

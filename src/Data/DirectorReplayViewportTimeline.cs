@@ -27,7 +27,12 @@ public enum DirectorReplayElementTrackType
     VoiceAudio = 12,
     FollowEntity = 13,
     ColorGrade = 14,
-    Title = 15
+    Title = 15,
+    PresetGroup = 16,
+    Weather = 17,
+    Sky = 18,
+    Composition = 19,
+    HeadMotion = 20
 }
 
 /// <summary>How a TrackEntity keyframe places the camera.</summary>
@@ -95,6 +100,8 @@ public sealed class DirectorReplayElementTrack
 
     public bool Enabled { get; set; } = true;
 
+    public Guid ParentGroupId { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     /// <summary>Stable speaker identity for an automatically-created voice row.</summary>
@@ -118,6 +125,7 @@ public sealed class DirectorReplayElementTrack
 /// </summary>
 public sealed class DirectorReplayElementKeyframe
 {
+    public DirectorHeadMotionClip? HeadMotion { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public DirectorReplayElementTrackType TrackType { get; set; }
@@ -334,7 +342,15 @@ public sealed class DirectorReplayElementKeyframe
     /// </summary>
     public bool EndsElement { get; set; }
 
-    public DirectorReplayElementKeyframe DeepClone() => (DirectorReplayElementKeyframe)MemberwiseClone();
+    public DirectorReplayVisualSettings? VisualSettings { get; set; }
+
+    public DirectorReplayElementKeyframe DeepClone()
+    {
+        var clone = (DirectorReplayElementKeyframe)MemberwiseClone();
+        clone.VisualSettings = VisualSettings?.DeepClone();
+        clone.HeadMotion = HeadMotion?.DeepClone();
+        return clone;
+    }
 }
 
 /// <summary>
@@ -482,7 +498,7 @@ public sealed class DirectorReplayElementScene
     }
 }
 
-public sealed class DirectorReplayViewportTimeline
+public sealed partial class DirectorReplayViewportTimeline
 {
     public List<DirectorReplayViewportClip> Clips { get; set; } = new();
 
@@ -713,6 +729,8 @@ public sealed class DirectorReplayViewportTimeline
             result.Tracks.Add(track);
         }
 
+        result.NormalizeGroups();
+
         DirectorReplayElementTrack EnsureTrack(
             DirectorReplayElementTrackType type,
             bool? enabled = null)
@@ -839,7 +857,7 @@ public sealed class DirectorReplayViewportTimeline
             if (item is null
                 || !Enum.IsDefined(item.TrackType)
                 || item.TrackType is DirectorReplayElementTrackType.Camera
-                    or DirectorReplayElementTrackType.Marker
+                    or DirectorReplayElementTrackType.PresetGroup
                     or DirectorReplayElementTrackType.Audio)
             {
                 continue;
@@ -972,8 +990,15 @@ public sealed class DirectorReplayViewportTimeline
             return false;
         }
         DirectorReplayElementTrack track = timeline.Tracks[sourceIndex];
-        timeline.Tracks.RemoveAt(sourceIndex);
-        timeline.Tracks.Insert(targetIndex, track);
+        var target = timeline.Tracks[targetIndex];
+        if (track.ParentGroupId != target.ParentGroupId) return false;
+        var family = timeline.TrackFamily(trackId);
+        var moved = timeline.Tracks.Where(item => family.Contains(item.Id)).ToList();
+        timeline.Tracks.RemoveAll(item => family.Contains(item.Id));
+        int insertion = timeline.Tracks.FindIndex(item => item.Id == target.Id);
+        if (sourceIndex < targetIndex)
+            insertion += timeline.TrackFamily(target.Id).Count;
+        timeline.Tracks.InsertRange(Math.Clamp(insertion, 0, timeline.Tracks.Count), moved);
         timeline.SyncActiveSceneFromTimeline();
         return true;
     }
@@ -1000,6 +1025,11 @@ public sealed class DirectorReplayViewportTimeline
         double duration)
     {
         DirectorReplayElementKeyframe result = source.DeepClone();
+        if (DirectorReplayVisualElements.IsVisual(result.TrackType))
+        {
+            result.VisualSettings = DirectorReplayVisualSettings.Normalize(result.VisualSettings);
+            result.InterpolationToNext = DirectorReplayElementInterpolation.Hold;
+        }
         result.TimeSeconds = NormalizeTime(result.TimeSeconds, duration);
         result.InterpolationToNext = Enum.IsDefined(result.InterpolationToNext)
             ? result.InterpolationToNext
@@ -1010,6 +1040,7 @@ public sealed class DirectorReplayViewportTimeline
         result.Distance = Math.Clamp(NormalizeFinite(result.Distance, 8d), 0.01d, 4096d);
         result.Yaw = NormalizeFinite(result.Yaw);
         result.Pitch = NormalizeFinite(result.Pitch);
+        result.HeadMotion?.Normalize();
         result.Roll = NormalizeFinite(result.Roll);
         result.Fov = Math.Clamp(
             NormalizeFinite(result.Fov, 70f),
@@ -1143,13 +1174,12 @@ public sealed class DirectorReplayViewportTimeline
             return false;
         }
 
-        timeline.Tracks.RemoveAll(item => item.Id == trackId);
+        HashSet<Guid> removedTracks = timeline.TrackFamily(trackId);
+        timeline.Tracks.RemoveAll(item => removedTracks.Contains(item.Id));
         HashSet<Guid> removedClipIds = timeline.Clips
-            .Where(clip => clip.TrackId == trackId)
-            .Select(clip => clip.Id)
-            .ToHashSet();
-        timeline.Clips.RemoveAll(clip => clip.TrackId == trackId);
-        timeline.ElementKeyframes.RemoveAll(keyframe => keyframe.TrackId == trackId);
+            .Where(clip => removedTracks.Contains(clip.TrackId)).Select(clip => clip.Id).ToHashSet();
+        timeline.Clips.RemoveAll(clip => removedTracks.Contains(clip.TrackId));
+        timeline.ElementKeyframes.RemoveAll(keyframe => removedTracks.Contains(keyframe.TrackId));
         if (removedClipIds.Contains(timeline.SelectedClipId))
         {
             timeline.SelectedClipId = Guid.Empty;

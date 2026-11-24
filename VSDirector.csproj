@@ -8,8 +8,8 @@
     <AssemblyName>VSDirector</AssemblyName>
     <RootNamespace>VSDirector</RootNamespace>
     <Version>1.0.4-pre.6</Version>
-    <Authors>HansJack (VSCN-Studio);HanosThePlacid</Authors>
-    <Copyright>Copyright (c) 2026 HansJack (VSCN-Studio), HanosThePlacid</Copyright>
+    <Authors>HansJack;HanosThePlacid</Authors>
+    <Copyright>Copyright (c) 2026 HansJack, HanosThePlacid</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <!-- Prefer the declared SDK over stale DLLs in test/build output folders. -->

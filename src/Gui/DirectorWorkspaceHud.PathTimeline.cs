@@ -30,6 +30,7 @@ internal sealed partial class DirectorWorkspaceHud
     private Guid pathTimelineElementDragId;
     private double pathTimelineDragTime = double.NaN;
     private bool pathTimelineDragMoved;
+    private double pathTimelineDragMouseX, pathTimelineDragOriginalTime;
     private CameraPath? pathTimelineDragBefore;
     private bool pathElementTrackReordering;
     private Guid pathElementTrackReorderId;
@@ -493,11 +494,11 @@ internal sealed partial class DirectorWorkspaceHud
         {
             return;
         }
-        var rows = new DirectorTimelineRows(pathEdit.ElementTracks.Select(t => TrackHeight(t.Id)).Append(40));
+        var rows = new DirectorTimelineRows(pathEdit.ElementTracks.Select(t => TrackHeight(t.Id)));
         pathTimelineFirstVisibleTrack = Math.Clamp(
             pathTimelineFirstVisibleTrack + delta,
             0,
-            rows.MaxFirst(pathTimelineBounds.OuterHeight / GuiElement.scaled(1) - PathTimelineHeaderHeight));
+            rows.MaxFirst(pathTimelineBounds.OuterHeight / GuiElement.scaled(1) - PathTimelineHeaderHeight - TimelineFooterHeight));
     }
 
     private DirectorPathElementTrack? PathTimelineTrackAt(double mouseY)
@@ -569,7 +570,7 @@ internal sealed partial class DirectorWorkspaceHud
                 SelectOnlyPathKeyframe(nearest);
                 selectedPathElementKeyframeId = Guid.Empty;
                 BeginPathTimelineKeyframeDrag(PathTimelineDragKind.Camera, nearest, Guid.Empty,
-                    pathEdit.Keyframes[nearest].TimeSeconds);
+                    pathEdit.Keyframes[nearest].TimeSeconds, args.X);
                 return true;
             }
         }
@@ -586,7 +587,7 @@ internal sealed partial class DirectorWorkspaceHud
                 selectedPathKeyframes.Clear();
                 selectedPathKeyframeIndex = -1;
                 BeginPathTimelineKeyframeDrag(PathTimelineDragKind.Element, -1, nearest.Id,
-                    nearest.TimeSeconds);
+                    nearest.TimeSeconds, args.X);
                 return true;
             }
         }
@@ -600,8 +601,10 @@ internal sealed partial class DirectorWorkspaceHud
         PathTimelineDragKind kind,
         int cameraIndex,
         Guid elementId,
-        double time)
+        double time, double mouseX)
     {
+        pathTimelineDragMouseX = mouseX;
+        pathTimelineDragOriginalTime = time;
         pathTimelineDragKind = kind;
         pathTimelineCameraDragIndex = cameraIndex;
         pathTimelineElementDragId = elementId;
@@ -644,7 +647,11 @@ internal sealed partial class DirectorWorkspaceHud
             }
             return;
         }
-        double next = PathTimelineTimeAt(args.X);
+        if (!DirectorTimelineCoordinateMath.TryDragTime(pathTimelineDragOriginalTime, pathTimelineDragMouseX, args.X,
+            GuiElement.scaled(PathTimelinePixelsPerTick) * PathTimelineTicksPerSecond, GuiElement.scaled(1), pathTimelineDragMoved, out double next))
+        { args.Handled = true; return; }
+        pathTimelineDragMoved = true;
+        next = Math.Clamp(next, 0, PathTimelineDurationTicks() / PathTimelineTicksPerSecond);
         pathTimelineDragMoved |= DirectorPathElementTimeline.TickAt(next)
             != DirectorPathElementTimeline.TickAt(pathTimelineDragTime);
         pathTimelineDragTime = next;

@@ -76,7 +76,10 @@ internal static class DirectorImGuiTheme
         ImGui.PushStyleColor(ImGuiCol.TextSelectedBg, 0x887F4600);
         ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, 0x88000000);
         ImGui.PushStyleColor(ImGuiCol.NavHighlight, Accent);
-        return new Scope(20, 36);
+        ImGui.PushStyleColor(ImGuiCol.ResizeGrip, 0xAA998888);
+        ImGui.PushStyleColor(ImGuiCol.ResizeGripHovered, Accent);
+        ImGui.PushStyleColor(ImGuiCol.ResizeGripActive, Accent);
+        return new Scope(20, 39);
     }
 
     internal static Scope Button(string tone = "normal", bool quiet = false)
@@ -107,7 +110,7 @@ internal static class DirectorImGuiTheme
         int stable = title.IndexOf("###", StringComparison.Ordinal);
         string id = stable < 0 ? "###" + title : title[stable..];
         bool open = ImGui.CollapsingHeader(display + id, flags);
-        if (display != label && ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+        if (display != label && ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(label);
         return open;
     }
 

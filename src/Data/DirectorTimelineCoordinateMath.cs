@@ -8,4 +8,13 @@ public static class DirectorTimelineCoordinateMath
         => double.IsFinite(pixelsPerTick) && pixelsPerTick > MinimumPixelsPerTick
             ? pixelsPerTick
             : MinimumPixelsPerTick;
+
+    public static bool TryDragTime(double originalTime, double pressX, double mouseX,
+        double pixelsPerSecond, double scale, bool dragging, out double time)
+    {
+        time = originalTime;
+        if (!dragging && Math.Abs(mouseX - pressX) < 6 * Math.Max(.001, scale)) return false;
+        time += (mouseX - pressX) / PositivePixelsPerTick(pixelsPerSecond);
+        return true;
+    }
 }

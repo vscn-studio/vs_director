@@ -6,16 +6,17 @@ namespace VSDirector.Networking;
 internal sealed class DirectorChunkPreloadClient : IDisposable
 {
     private const long HeartbeatIntervalMs = 1000;
-    // This request is advisory.  Sending an entire replay corridor can mean
-    // thousands of columns and turns a singleplayer host into a terrain-load
-    // queue.  The replay manager supplies a current observation window; this
-    // final cap also protects path and editor callers.
+    // Route and manually selected columns are streamed in bounded batches;
+    // a new batch starts only after the server acknowledges the previous one.
     private const int MaxRequestColumns = 16;
 
     private readonly ICoreClientAPI capi;
     private readonly IClientNetworkChannel channel;
     private string activeReplayId = string.Empty;
     private int activePlanHash;
+    private int batchId;
+    private readonly HashSet<DirectorReplayPreloadColumn> completed = new();
+    private IReadOnlyList<DirectorReplayPreloadColumn> batch = Array.Empty<DirectorReplayPreloadColumn>();
     private long lastSentMs;
     private int lastReportedSent = -1;
 
@@ -35,6 +36,8 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
         }
 
         string replayCode = replayId.ToString("D");
+        if (replayCode != activeReplayId) { completed.Clear(); batch = Array.Empty<DirectorReplayPreloadColumn>(); }
+        completed.IntersectWith(plan.ExpandedColumnSet);
         IReadOnlyList<DirectorReplayPreloadColumn> columns = RequestColumns(plan);
         int planHash = PlanHash(columns);
         long now = capi.ElapsedMilliseconds;
@@ -53,6 +56,8 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
         };
         if (changed)
         {
+            batch = columns;
+            request.BatchId = ++batchId;
             request.Columns = columns.Select(column => new DirectorChunkPreloadColumn
             {
                 X = column.X,
@@ -68,10 +73,11 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
             DirectorChunkPreloadRuntime.Set(columns);
         }
 
-        channel.SendPacket(request);
+        request.BatchId = batchId;
         activeReplayId = replayCode;
         activePlanHash = planHash;
         lastSentMs = now;
+        channel.SendPacket(request);
     }
 
     public void Stop()
@@ -85,6 +91,7 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
             channel.SendPacket(new DirectorChunkPreloadRequest { Active = false });
         activeReplayId = string.Empty;
         activePlanHash = 0;
+        completed.Clear(); batch = Array.Empty<DirectorReplayPreloadColumn>();
         lastSentMs = capi.ElapsedMilliseconds;
         lastReportedSent = -1;
         DirectorChunkPreloadRuntime.Clear();
@@ -110,6 +117,9 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
                 status.MessageCode);
             return;
         }
+        if (status.ReplayId != activeReplayId || status.BatchId != batchId) return;
+        if (status.TotalColumns == batch.Count && status.SentColumns >= batch.Count)
+            completed.UnionWith(batch);
         if (status.SentColumns == lastReportedSent)
         {
             return;
@@ -122,15 +132,12 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
             status.TotalColumns);
     }
 
-    private static IReadOnlyList<DirectorReplayPreloadColumn> RequestColumns(
-        DirectorReplayPreloadPlan plan)
+    private IReadOnlyList<DirectorReplayPreloadColumn> RequestColumns(DirectorReplayPreloadPlan plan)
     {
-        if (plan.ExpandedColumns.Count <= MaxRequestColumns)
-        {
-            return plan.ExpandedColumns;
-        }
-
-        return plan.ExpandedColumns.Take(MaxRequestColumns).ToArray();
+        // Keep a batch until its acknowledgement; then advance beyond the first 16 columns.
+        if (batch.Count > 0 && batch.All(plan.ExpandedColumnSet.Contains) && batch.Any(c => !completed.Contains(c))) return batch;
+        var pending = plan.ExpandedColumns.Where(c => !completed.Contains(c)).Take(MaxRequestColumns).ToArray();
+        return pending.Length > 0 ? pending : plan.ExpandedColumns.Take(MaxRequestColumns).ToArray();
     }
 
     private static int PlanHash(IReadOnlyList<DirectorReplayPreloadColumn> columns)

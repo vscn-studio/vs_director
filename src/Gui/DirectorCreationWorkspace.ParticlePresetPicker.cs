@@ -46,7 +46,7 @@ internal sealed partial class DirectorCreationWorkspace
             if(preview is not null)
             {
                 preview.LastFrame=ImGui.GetFrameCount();preview.Draw(ImGui.GetWindowDrawList(),min,previewMax);
-                if(hovered&&preview.Error.Length>0)ImGui.SetTooltip(preview.Error);
+                if(hovered&&preview.Error.Length>0)DirectorImGuiTooltip.Show(preview.Error);
             }
             PickerCardLabel(ImGui.GetWindowDrawList(),min,max,previewMax.Y,entry.Name,particlePresetSelected==entry.Id,hovered);
         }

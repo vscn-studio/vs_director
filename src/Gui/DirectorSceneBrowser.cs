@@ -222,10 +222,10 @@ internal sealed class DirectorSceneBrowser : IDisposable
             }
             if (ImGui.IsItemHovered())
             {
-                ImGui.BeginTooltip();
+                DirectorImGuiTooltip.Begin();
                 ImGui.TextUnformatted(resource.Name);
                 if (!string.IsNullOrWhiteSpace(resource.Detail)) ImGui.TextDisabled(resource.Detail);
-                ImGui.EndTooltip();
+                DirectorImGuiTooltip.End();
             }
             ImGui.SameLine();
             if (ImGui.SmallButton($"{category.ActivateLabel}##activate"))

@@ -7,7 +7,8 @@ public sealed class DirectorReplayDocument
     // 23: ColorGrade and Title element tracks, and new element keyframe and camera
     // clip fields (EndsElement, EndsShot, tracking modes, time effects, follow blend).
     // An older reader drops tracks it does not know, so it must reject these files.
-    public const int CurrentSchemaVersion = 23;
+    // 25: independent head-motion clips, including recorded camera-local samples.
+    public const int CurrentSchemaVersion = 25;
 
     public const int CurrentParticleCaptureVersion = 1;
 

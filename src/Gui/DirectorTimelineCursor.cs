@@ -8,6 +8,16 @@ internal static class DirectorTimelineCursor
     internal const uint Destination = 0xff55d9ff;
     internal const uint Original = 0x88000000;
 
+    internal static string TimeLabel(double seconds, int framesPerSecond)
+    {
+        long frames = (long)Math.Round(Math.Max(0, seconds) * framesPerSecond, MidpointRounding.AwayFromZero);
+        long totalSeconds = frames / framesPerSecond;
+        string clock = totalSeconds >= 3600
+            ? $"{totalSeconds / 3600:00}:{totalSeconds / 60 % 60:00}:{totalSeconds % 60:00}"
+            : $"{totalSeconds / 60:00}:{totalSeconds % 60:00}";
+        return frames + Vintagestory.API.Config.Lang.Get("vsdirector:creation-unit-frames") + " " + clock + "/" + frames % framesPerSecond;
+    }
+
     internal static void DragLines(ImDrawListPtr draw, Vector2 min, Vector2 max, float target, float original, float scale)
     {
         if (max.X <= min.X || max.Y <= min.Y) return;

@@ -22,7 +22,7 @@ internal sealed partial class DirectorCreationWorkspace
                     if(icon=="refresh")Runtime.InvalidateParticleEnvironment();
                     else particleShowGuides=!particleShowGuides;
                 }
-            if(ImGui.IsItemHovered())ImGui.SetTooltip(icon=="refresh"?L("creation-particle-refresh-environment"):P("guides"));
+            if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(icon=="refresh"?L("creation-particle-refresh-environment"):P("guides"));
         }
         if(Runtime.ParticleError.Length>0)ImGui.TextWrapped(Runtime.ParticleError);
         else if(Runtime.ParticleRebuildCancelled)ImGui.TextWrapped(L("creation-particle-cancelled"));
@@ -34,7 +34,7 @@ internal sealed partial class DirectorCreationWorkspace
         using var style=DirectorImGuiTheme.Toolbar();
         ImGui.SetCursorPos(new(ImGui.GetWindowWidth()-ImGui.GetStyle().WindowPadding.X-width,Math.Max(0,(ImGui.GetWindowHeight()-ImGui.GetFrameHeight())*.5f)));
         ImGui.ProgressBar((float)Runtime.ParticleProgress,new(width,ImGui.GetFrameHeight()));
-        if(ImGui.IsItemHovered())ImGui.SetTooltip(L("creation-particle-cancel"));
+        if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(L("creation-particle-cancel"));
         if(ImGui.BeginPopupContextItem("particle-rebuild-menu"))
         {
             if(ImGui.MenuItem(L("creation-particle-cancel")))

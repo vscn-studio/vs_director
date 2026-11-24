@@ -166,7 +166,7 @@ internal sealed partial class DirectorCreationWorkspace
         while (display.Length > 1 && ImGui.CalcTextSize(display).X > limit) display = display[..^1];
         if (display != title) display += "…";
         if (ImGui.MenuItem(display + "###" + title, "", selected, enabled)) Continue(action);
-        if (display != title && ImGui.IsItemHovered()) ImGui.SetTooltip(title);
+        if (display != title && ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(title);
     }
     private void DrawMenu(string menu)
     {

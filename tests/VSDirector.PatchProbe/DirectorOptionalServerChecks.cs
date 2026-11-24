@@ -109,6 +109,29 @@ internal static class DirectorOptionalServerChecks
         Call(anchor, "Update", pose, true, null, null, null, 1, false);
         Call(preload, "Update", Guid.NewGuid(), plan);
         Check(sent[^1] is DirectorChunkPreloadRequest && sent[^2] is DirectorAnchorRequest, "Connected server features did not send requests");
+        var selectedColumns = Enumerable.Range(0, 40).Select(i => new DirectorReplayPreloadColumn(i, 10, 0)).ToArray();
+        var largePlan = new DirectorReplayPreloadPlan([], [], selectedColumns, 0, false);
+        Guid preloadId = Guid.NewGuid();
+        var received = new HashSet<int>();
+        int staleBatch = 0;
+        for (int batchIndex = 0; batchIndex < 3; batchIndex++)
+        {
+            clock += 1100;
+            Call(preload, "Update", preloadId, largePlan);
+            var request = (DirectorChunkPreloadRequest)sent[^1];
+            if (request.Columns.Count is < 1 or > 16) throw new Exception("Preload batch exceeds limit or failed to advance");
+            foreach (var column in request.Columns) received.Add(column.X);
+            if (batchIndex > 0)
+            {
+                Call(preload, "OnStatus", new DirectorChunkPreloadStatus { Allowed = true, ReplayId = preloadId.ToString("D"), BatchId = staleBatch, TotalColumns = request.Columns.Count, SentColumns = request.Columns.Count });
+                clock += 1100; Call(preload, "Update", preloadId, largePlan);
+                if (((DirectorChunkPreloadRequest)sent[^1]).Columns.Count != 0) throw new Exception("Stale preload acknowledgement advanced the queue");
+            }
+            Call(preload, "OnStatus", new DirectorChunkPreloadStatus { Allowed = true, ReplayId = preloadId.ToString("D"), BatchId = request.BatchId, TotalColumns = request.Columns.Count, SentColumns = request.Columns.Count });
+            staleBatch = request.BatchId;
+        }
+        Check(received.Count == 40, "Preload permanently ignores selections beyond the first 16 columns");
+        Console.WriteLine("PASS preload processes all 40 selected columns in bounded batches and ignores stale acknowledgements");
         state = EnumChannelState.NotConnected;
         before = sent.Count;
         Call(anchor, "StopAnchor");

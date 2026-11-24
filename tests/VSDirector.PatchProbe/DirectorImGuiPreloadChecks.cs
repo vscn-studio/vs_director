@@ -21,8 +21,9 @@ internal static partial class DirectorImGuiProbe
         Func<object?> getState = () => current;
         Delegate state = Expression.Lambda(typeof(Func<>).MakeGenericType(stateType),
             Expression.Convert(Expression.Invoke(Expression.Constant(getState)), stateType)).Compile();
+        var paints = new List<(int X1, int Z1, int X2, int Z2, bool Erase)>();
         object window = Activator.CreateInstance(windowType, BindingFlags.Instance | BindingFlags.NonPublic,
-            null, [api, state, (Action<int, int, int, int, bool>)((_, _, _, _, _) => { }),
+            null, [api, state, (Action<int, int, int, int, bool>)((x1, z1, x2, z2, erase) => paints.Add((x1, z1, x2, z2, erase))),
                 (Action<int, int>)((_, _) => { }), (Action<double>)(_ => { }), true, 3661d, 65d], null)!;
         void Call(string method, params object[] args) => AccessTools.Method(windowType, method).Invoke(window, args);
         var io = ImGui.GetIO();
@@ -56,6 +57,18 @@ internal static partial class DirectorImGuiProbe
                 current = data;
                 Frame(false); Frame();
                 capture($"preload-map-{scale * 100:0}");
+                if (scale == 1)
+                {
+                    io.MousePos = new(200, 220); Frame(); io.MouseDown[0] = true; Frame();
+                    io.MousePos += new Vector2(85, 65); Frame(); io.MouseDown[0] = false; Frame();
+                    if (paints.Count != 1 || paints[0].X2 <= paints[0].X1 || paints[0].Z2 <= paints[0].Z1 || paints[0].Erase)
+                        throw new Exception("Preload selection did not commit on native mouse release without a game tick");
+                    Call("SetTool", true);
+                    for (int i = 0; i < 24; i++) Frame();
+                    io.MouseDown[0] = true; Frame(); io.MouseDown[0] = false; Frame();
+                    if (paints.Count != 2 || !paints[1].Erase) throw new Exception("Preload erase did not commit");
+                    io.MousePos = new(-100);
+                }
                 Call("Close");
                 ImGui.NewFrame(); Call("Draw", 1f / 60); ImGui.Render();
                 Call("Open"); Frame(false); Frame();

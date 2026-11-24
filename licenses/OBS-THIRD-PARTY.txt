@@ -1,6 +1,6 @@
 VS Director OBS companion - distribution terms
 
-Original plugin code: Copyright (c) 2026 HansJack (VSCN-Studio), MIT.
+Original plugin code: Copyright (c) 2026 HansJack, MIT.
 The original files remain available under MIT; this does not override the
 terms applicable to a binary linked with libobs. Distribute that combined
 plugin under GPL-2.0-or-later and provide its corresponding source and build

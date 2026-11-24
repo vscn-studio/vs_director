@@ -126,7 +126,7 @@ internal sealed partial class DirectorWorkspaceHud
                 if (ImGui.Selectable(ImGuiLabel("camera-observation-reset"))) cameraObservation.Reset();
                 ImGui.EndCombo();
             }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(ImGuiLabel("camera-observation-controls"));
+            if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(ImGuiLabel("camera-observation-controls"));
         }
         ImGui.SetCursorScreenPos(min);
         ImGui.InvisibleButton("camera-observation-viewport", size, ImGuiButtonFlags.MouseButtonLeft);
@@ -205,7 +205,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         if (hit >= 0)
         {
-            ImGui.SetTooltip(ImGuiLabel(ObservationSideKey(hit) + "-tooltip"));
+            DirectorImGuiTooltip.Show(ImGuiLabel(ObservationSideKey(hit) + "-tooltip"));
             if (ImGui.IsMouseClicked(ImGuiMouseButton.Left)) cameraObservation.Snap(hit);
         }
         return hovered && Vector2.DistanceSquared(mouse, center) <= extent * extent;

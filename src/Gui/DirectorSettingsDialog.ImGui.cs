@@ -19,7 +19,7 @@ internal sealed partial class DirectorSettingsDialog
         if (docked) return DrawStatus();
         if (Opened)
         {
-            DirectorImGuiLayout.WindowSize(new Vector2(780, 590), new Vector2(360, 260));
+            DirectorImGuiLayout.WindowSize(new Vector2(760, 560), new Vector2(360, 320));
         }
         return base.Draw(deltaSeconds);
     }
@@ -28,7 +28,7 @@ internal sealed partial class DirectorSettingsDialog
     {
         if (!Opened) return;
         using var font = DirectorImGuiRuntime.UseFont(dialog: false);
-        DirectorImGuiLayout.WindowSize(new Vector2(780, 590), new Vector2(360, 260));
+        DirectorImGuiLayout.WindowSize(new Vector2(760, 560), new Vector2(360, 320));
         bool opened = Opened;
         bool visible = ImGui.Begin($"{Lang.Get("vsdirector:settings-title")}###vsdirector-settings", ref opened,
             ImGuiWindowFlags.NoBringToFrontOnFocus
@@ -44,8 +44,8 @@ internal sealed partial class DirectorSettingsDialog
 
     protected override bool OnDraw()
     {
+        using var spacing = DirectorImGuiBrowser.Use();
         NormalizePage();
-        ImGui.TextWrapped(Lang.Get("vsdirector:settings-scope"));
         DrawHeader();
         ImGui.Separator();
         float footerHeight = DirectorImGuiLayout.ButtonRowsHeight(
@@ -66,8 +66,11 @@ internal sealed partial class DirectorSettingsDialog
 
     private void DrawHeader()
     {
-        ImGui.SetNextItemWidth(-1);
+        ImGui.SetNextItemWidth(-ImGui.GetFrameHeight() - ImGui.GetStyle().ItemSpacing.X);
         if (ImGui.InputTextWithHint("##settings-search", Lang.Get("vsdirector:settings-search"), ref categorySearch, 128)) resetFieldsScroll = true;
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(Lang.Get("vsdirector:settings-scope"));
     }
 
     private static string CategoryLabel(SettingsPage target)
@@ -86,8 +89,7 @@ internal sealed partial class DirectorSettingsDialog
     private void DrawCategoryNavigation()
     {
         var pages = Enum.GetValues<SettingsPage>().Where(IsPageAvailable).ToArray();
-        float scale = DirectorImGuiTheme.Scale;
-        if (ImGui.GetContentRegionAvail().X < 520 * scale)
+        if (DirectorImGuiBrowser.Narrow)
         {
             ImGui.SetNextItemWidth(-1);
             if (ImGui.BeginCombo("##settings-category", CategoryLabel(page)))
@@ -98,12 +100,22 @@ internal sealed partial class DirectorSettingsDialog
             }
             return;
         }
-        ImGui.BeginChild("settings-categories", new Vector2(170 * scale, 0), true);
+        float width = DirectorImGuiBrowser.SidebarWidth;
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, DirectorImGuiTheme.Panel);
+        ImGui.BeginChild("settings-categories", new Vector2(width, 0), false);
+        ImGui.PopStyleColor();
         foreach (var target in pages)
-            if (ImGui.Selectable(CategoryLabel(target), page == target)) SelectCategory(target);
+            if (DirectorImGuiBrowser.NavigationItem(target.ToString(), CategoryLabel(target), CategoryIcon(target), page == target)) SelectCategory(target);
         ImGui.EndChild();
         ImGui.SameLine();
     }
+
+    private static string CategoryIcon(SettingsPage target) => target switch
+    {
+        SettingsPage.Replay => "movie", SettingsPage.Offscreen or SettingsPage.Recording => "camera",
+        SettingsPage.Interface => "layout-grid", SettingsPage.Accessibility => "eye",
+        SettingsPage.Permissions => "users", _ => "adjustments"
+    };
 
     private void DrawCategories()
     {
@@ -133,7 +145,7 @@ internal sealed partial class DirectorSettingsDialog
             if (searching && fields.Length == 0) continue;
             visible++;
             ImGui.PushID((int)target);
-            ImGui.SeparatorText(label);
+            ImGui.TextUnformatted(label);
             foreach (var group in fields.GroupBy(f => SettingGroup(f.Property)))
             {
                 ImGui.SeparatorText(Lang.Get("vsdirector:settings-section-" + group.Key));
@@ -147,6 +159,7 @@ internal sealed partial class DirectorSettingsDialog
                 if (ImGui.Button(Lang.Get("vsdirector:settings-download-ffmpeg"))) OpenFfmpegDownload();
             }
             if (target == SettingsPage.Accessibility && draft.EnableModelOutlines && !searching) DrawOutlineEntities();
+            if (target == SettingsPage.Interface && ImGui.Button(Lang.Get("vsdirector:head-settings"))) owner.OpenHeadTrackingSettings();
             ImGui.Spacing();
             ImGui.PopID();
         }
@@ -166,13 +179,13 @@ internal sealed partial class DirectorSettingsDialog
         void Set(object next) => property.SetValue(draft, next);
 
         ImGui.PushID(name);
-        bool numeric = type == typeof(int) || type == typeof(long) || type == typeof(short)
-            || type == typeof(float) || type == typeof(double);
-        bool numericTable = numeric && ImGui.BeginTable("setting", 2,
+        bool inlineValue = type != typeof(string) && ImGui.GetContentRegionAvail().X >= 300 * DirectorImGuiTheme.Scale;
+        float labelWidth = ImGui.GetContentRegionAvail().X * .44f;
+        bool valueTable = inlineValue && ImGui.BeginTable("setting", 2,
             ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.NoPadOuterX);
-        if (numericTable)
+        if (valueTable)
         {
-            ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthStretch, 1.2f);
+            ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthFixed, labelWidth);
             ImGui.TableSetupColumn("value", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableNextColumn();
             ImGui.AlignTextToFramePadding();
@@ -208,8 +221,11 @@ internal sealed partial class DirectorSettingsDialog
         {
             bool enabled = (bool)value!;
             bool changed = ImGui.Checkbox("##value", ref enabled);
-            ImGui.SameLine(); ImGui.TextWrapped(label);
-            if (ImGui.IsItemClicked()) { enabled = !enabled; changed = true; }
+            if (!valueTable)
+            {
+                ImGui.SameLine(); ImGui.TextWrapped(label);
+                if (ImGui.IsItemClicked()) { enabled = !enabled; changed = true; }
+            }
             if (changed) Set(enabled);
         }
         else if (type.IsEnum)
@@ -257,7 +273,7 @@ internal sealed partial class DirectorSettingsDialog
                 catch (OverflowException) { status = Lang.Get("vsdirector:invalid-number"); }
             }
         }
-        if (numericTable) ImGui.EndTable();
+        if (valueTable) ImGui.EndTable();
         ImGui.PopID();
     }
 
@@ -398,15 +414,23 @@ internal sealed partial class DirectorSettingsDialog
 
     private void DrawFooter()
     {
+        string[] actions = ["config-reload", "settings-defaults", "cancel", "settings-apply", "settings-ok"];
+        float ButtonWidth(string key) => ImGui.CalcTextSize(Lang.Get("vsdirector:" + key)).X + ImGui.GetStyle().FramePadding.X * 2;
+        float gap = ImGui.GetStyle().ItemSpacing.X;
+        float available = ImGui.GetContentRegionAvail().X - 16 * DirectorImGuiTheme.Scale;
+        bool oneRow = actions.Sum(ButtonWidth) + gap * 4 <= available;
+        float rightStart = ImGui.GetCursorPosX() + available - actions.Skip(2).Sum(ButtonWidth) - gap * 2;
         if (ImGui.Button(Lang.Get("vsdirector:config-reload"))) Reload();
         FooterSameLine("vsdirector:settings-defaults");
         if (ImGui.Button(Lang.Get("vsdirector:settings-defaults"))) ResetDefaults();
-        FooterSameLine("vsdirector:cancel");
+        if (oneRow) { ImGui.SameLine(); ImGui.SetCursorPosX(rightStart); }
+        else FooterSameLine("vsdirector:cancel");
         if (ImGui.Button(Lang.Get("vsdirector:cancel"))) { draft = Clone(owner.Config); TryClose(); return; }
         FooterSameLine("vsdirector:settings-apply");
         if (ImGui.Button(Lang.Get("vsdirector:settings-apply"))) Save();
         FooterSameLine("vsdirector:settings-ok");
-        if (ImGui.Button(Lang.Get("vsdirector:settings-ok")) && Save()) TryClose();
+        using (DirectorImGuiTheme.Button("primary"))
+            if (ImGui.Button(Lang.Get("vsdirector:settings-ok")) && Save()) TryClose();
     }
 
     private static void FooterSameLine(string key)

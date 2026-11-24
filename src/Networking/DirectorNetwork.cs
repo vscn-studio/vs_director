@@ -218,6 +218,9 @@ public sealed class DirectorChunkPreloadRequest
 
     [ProtoMember(4)]
     public List<DirectorChunkPreloadColumn> Columns = new();
+
+    [ProtoMember(5)]
+    public int BatchId;
 }
 
 [ProtoContract]
@@ -237,6 +240,10 @@ public sealed class DirectorChunkPreloadStatus
 
     [ProtoMember(5)]
     public int SentColumns;
+
+    [ProtoMember(6)]
+    public int BatchId;
+
 }
 
 public enum DirectorRecordingSessionAction

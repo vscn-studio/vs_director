@@ -15,7 +15,7 @@ internal sealed partial class DirectorCreationWorkspace
         float natural = ImGui.CalcTextSize(label, true).X + 2 * ImGui.GetStyle().FramePadding.X;
         float width = Math.Max(1, Math.Min(natural, ImGui.GetContentRegionAvail().X));
         bool clicked = ImGui.Button(label, new(width, 0));
-        if (width < natural && ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+        if (width < natural && ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(label);
         return clicked;
     }
     private static bool Header(string label)
@@ -59,7 +59,7 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.SetNextItemWidth(Math.Max(1,ImGui.GetContentRegionAvail().X-keyWidth));
         bool changed = DirectorImGuiNumeric.Double("##value", ref value, step, min, max);
         Widget(label, changed, () => set(value));
-        if(key is not null){ImGui.SameLine();if(KeyButton())Run(key);if(ImGui.IsItemHovered())ImGui.SetTooltip(L("creation-add-keyframe-at-current-time"));}
+        if(key is not null){ImGui.SameLine();if(KeyButton())Run(key);if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(L("creation-add-keyframe-at-current-time"));}
         ImGui.PopID();
     }
     private void Toggle(string label, bool value, Action<bool> set)
@@ -88,7 +88,7 @@ internal sealed partial class DirectorCreationWorkspace
             return;
         }
         ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted(label);
-        if (key is not null && !Session.PoseEditing) { ImGui.SameLine(); if (KeyButton()) Run(key); if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-add-keyframe-at-current-time")); }
+        if (key is not null && !Session.PoseEditing) { ImGui.SameLine(); if (KeyButton()) Run(key); if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-add-keyframe-at-current-time")); }
         float spacing = Math.Max(4, ImGui.GetStyle().ItemSpacing.X);
         float width = Math.Max(18, (ImGui.GetContentRegionAvail().X - 2 * spacing) / 3);
         double[] v = [value.X, value.Y, value.Z]; string[] axes = ["X", "Y", "Z"];
@@ -125,7 +125,7 @@ internal sealed partial class DirectorCreationWorkspace
                 display = prefix.Length > 1 ? prefix[..^1] + "…" : "";
             }
             ImGui.TextUnformatted(display);
-            if (display != label && ImGui.IsItemHovered()) ImGui.SetTooltip(label);
+            if (display != label && ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(label);
             double[] v = [value.X, value.Y, value.Z];
             uint[] colors = [0xff5c5ce8, 0xff77cb65, 0xffe8a35c];
             for (int i = 0; i < 3; i++)
@@ -139,7 +139,7 @@ internal sealed partial class DirectorCreationWorkspace
             {
                 ImGui.TableNextColumn();
                 if (KeyButton()) Run(key!);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-add-keyframe-at-current-time"));
+                if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-add-keyframe-at-current-time"));
             }
             ImGui.EndTable();
         }
@@ -313,7 +313,7 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.TextUnformatted(L("creation-color")); ImGui.SetNextItemWidth(Math.Max(1,ImGui.GetContentRegionAvail().X-ImGui.GetFrameHeight()-ImGui.GetStyle().ItemSpacing.X));
         bool changed = ImGui.ColorEdit3("##object-color", ref color); Widget(L("creation-color"), changed, () => Session.SetProperty(obj.Id, Guid.Empty, CreationChannel.Color, CreationVector.From(color), () => obj.Color = CreationVector.From(color)));
         ImGui.SameLine();if (KeyButton("color-key")) Session.Edit(L("creation-color-keyframe"), _ => Session.WriteKey(obj.Id, Guid.Empty, CreationChannel.Color, CreationVector.From(color)));
-        if(ImGui.IsItemHovered())ImGui.SetTooltip(L("creation-color-keyframe"));
+        if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(L("creation-color-keyframe"));
         Number(L("creation-opacity"), obj.Opacity, v => obj.Opacity = v, 0, 1, .01f); Number(L("creation-glow"), obj.Glow, v => obj.Glow = v, 0, 1, .01f);
         }
         if (ObjectSectionVisible("binding") && Header(L("creation-group-target-binding")))

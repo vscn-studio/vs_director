@@ -170,7 +170,8 @@ internal static partial class DirectorImGuiProbe
         var io = ImGui.GetIO();
         double value = 0, min = 0, max = 0;
         string format = "%.3f";
-        Vector2 center = default;
+        Vector2 center = default, lower = default, upper = default;
+        bool committed = false;
         void Frame(Vector2 pointer, bool down)
         {
             io.MousePos = pointer;
@@ -183,6 +184,8 @@ internal static partial class DirectorImGuiProbe
             object?[] args = ["##number", value, 1f, min, max, format];
             method.Invoke(null, args);
             value = (double)args[1]!;
+            committed = (bool)AccessTools.Property(method.DeclaringType!, "FinishedEditing").GetValue(null)!;
+            lower = ImGui.GetItemRectMin(); upper = ImGui.GetItemRectMax();
             center = (ImGui.GetItemRectMin() + ImGui.GetItemRectMax()) / 2;
             ImGui.End();
             ImGui.Render();
@@ -208,7 +211,30 @@ internal static partial class DirectorImGuiProbe
             return value;
         }
         Frame(new(-100), false); Frame(new(-100), false);
+        void Step(int direction, ImGuiKey modifier = ImGuiKey.None)
+        {
+            for (int i = 0; i < 24; i++) Frame(new(-100), false);
+            if (modifier != ImGuiKey.None) io.AddKeyEvent(modifier, true);
+            Vector2 point = new(direction < 0 ? lower.X + 3 : upper.X - 3, center.Y);
+            Frame(point, false); Frame(point, true); Frame(point, false);
+            if (modifier != ImGuiKey.None) io.AddKeyEvent(modifier, false);
+        }
+        Step(-1);
+        if (value != -1 || !committed) throw new Exception("Numeric decrement did not commit");
+        Step(1, ImGuiKey.LeftCtrl);
+        if (Math.Abs(value + .9) > .00001 || !committed) throw new Exception("Numeric Ctrl increment failed");
+        Step(1, ImGuiKey.LeftShift);
+        if (Math.Abs(value - 9.1) > .00001 || !committed) throw new Exception("Numeric Shift increment failed");
+        min = -2; max = 2; value = 1.9; Step(1);
+        if (value != 2 || !committed) throw new Exception("Numeric step ignored maximum");
+        value = -1.9; Step(-1);
+        if (value != -2 || !committed) throw new Exception("Numeric step ignored minimum");
+        Frame(new(-100), false);
+        if (committed) throw new Exception("Numeric step commit leaked into the next frame");
+        min = max = value = 0;
+        for (int i = 0; i < 24; i++) Frame(new(-100), false);
         double ordinary = Drag(20);
+        if (ordinary > 3) throw new Exception("Numeric drag remains too sensitive for 20 logical pixels");
         if (ordinary <= 0 || Drag(-20) >= ordinary) throw new Exception("Numeric drag direction is reversed or unresponsive.");
         value = 0;
         double fine = Drag(20, ImGuiKey.LeftCtrl);
@@ -226,6 +252,15 @@ internal static partial class DirectorImGuiProbe
         double precise = Drag(20, ImGuiKey.LeftCtrl);
         if (Math.Abs(precise - 30000000.125 - fine) > .001)
             throw new Exception("Numeric drag lost precision at large world coordinates.");
+        value = 0; Drag(1);
+        if (value != 0) throw new Exception("One-pixel numeric wobble changed the value");
+        foreach (float dpi in new[] { 1.5f, 2f })
+        {
+            RuntimeEnv.GUIScale = dpi; value = 0;
+            double scaled = Drag(20 * dpi);
+            if (Math.Abs(scaled - ordinary) > .01) throw new Exception("Numeric drag speed depends on UI scaling");
+        }
+        RuntimeEnv.GUIScale = 1;
         min = -2; max = 2; value = 0;
         if (Drag(100) != 2 || Drag(-100) != -2) throw new Exception("Numeric drag ignored bounds.");
         min = max = 0;
@@ -234,7 +269,7 @@ internal static partial class DirectorImGuiProbe
         Frame(center, false); Frame(center, true); Frame(center, false);
         io.AddKeyEvent(ImGuiKey.LeftCtrl, false);
         io.AddInputCharactersUTF8("123.375");
-        Frame(center, false);
+        Frame(new(upper.X - 2, center.Y), false);
         io.AddKeyEvent(ImGuiKey.Enter, true);
         Frame(center, false);
         io.AddKeyEvent(ImGuiKey.Enter, false);

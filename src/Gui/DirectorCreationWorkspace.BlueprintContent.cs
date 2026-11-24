@@ -152,7 +152,7 @@ internal sealed partial class DirectorCreationWorkspace
         {
             ImGui.TextWrapped(B(key));ImGui.SetNextItemWidth(-1);
             if(DirectorImGuiNumeric.Double("##projection-"+key,ref value,speed,min,max))set(value);
-            if(ImGui.IsItemDeactivatedAfterEdit()){SaveProjectionView();if(key=="start")projectionRevision=-1;}
+            if(DirectorImGuiNumeric.FinishedEditing){SaveProjectionView();if(key=="start")projectionRevision=-1;}
         }
     }
 }

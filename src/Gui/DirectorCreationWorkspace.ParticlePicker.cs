@@ -156,7 +156,7 @@ internal sealed partial class DirectorCreationWorkspace
             label = label[..lo] + "…";
         }
         ImGui.TextUnformatted(label);
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(text);
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(text);
     }
 
     private void DrawParticleCard(DirectorParticleResource[] resources, Stopwatch work)
@@ -195,13 +195,13 @@ internal sealed partial class DirectorCreationWorkspace
         PickerCardLabel(draw, min, max, previewMax.Y, resource.Variant, particleResourceId == resource.Id, hovered);
         if (hovered)
         {
-            ImGui.BeginTooltip();
+            DirectorImGuiTooltip.Begin();
             ImGui.TextUnformatted(resource.Variant);
             ImGui.TextUnformatted(resource.Source);
             ImGui.TextUnformatted(resources.Length + " " + L("creation-particle-emitter-count"));
             if (preview?.Error.Length > 0) ImGui.TextWrapped(preview.Error);
             if (preview?.SampleEmission == true) ImGui.TextWrapped(L("creation-particle-preview-sample-hint"));
-            ImGui.EndTooltip();
+            DirectorImGuiTooltip.End();
         }
     }
 

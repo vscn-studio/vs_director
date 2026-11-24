@@ -28,6 +28,7 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
     private Vector2 positionPivot;
     private float? anchoredMaximumHeight;
     private int anchorLayoutFrames;
+    private int fitContentFrames;
     private Vector2? nextSize;
     private Vector2 preferredSize;
     private Vector2 lastPosition;
@@ -104,6 +105,7 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
                 Math.Clamp(preferredWidth, 220, Math.Max(220, api.Render.FrameWidth / scale - 24)),
                 Math.Clamp(preferredHeight, 160, Math.Max(160, api.Render.FrameHeight / scale - 48)));
             applyBounds = true;
+            if (form.CompactProperties) fitContentFrames = 3;
         }
     }
 
@@ -168,6 +170,24 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
         anchorLayoutFrames = 3;
         applyBounds = true;
     }
+    internal void SetAnchorRight(float x, float y, float anchorWidth)
+    {
+        float scale = DirectorImGuiTheme.Scale;
+        Vector2 size = hasBounds ? lastSize : nextSize ?? new Vector2(440, 520) * scale;
+        float screenWidth = api.Render.FrameWidth / scale, screenHeight = api.Render.FrameHeight / scale;
+        float width = Math.Max(1, Math.Min(size.X / scale, screenWidth - 16));
+        float height = Math.Max(1, Math.Min(size.Y / scale, screenHeight - 44));
+        float left = x + anchorWidth + 10;
+        if (left + width > screenWidth - 8) left = x - width - 10;
+        positionPivot = Vector2.Zero;
+        nextPosition = new Vector2(Math.Clamp(left, 8, Math.Max(8, screenWidth - width - 8)),
+            Math.Clamp(y, 36, Math.Max(36, screenHeight - height - 8))) * scale;
+        nextSize = new Vector2(width, height) * scale;
+        anchoredMaximumHeight = null;
+        anchorLayoutFrames = 3;
+        applyBounds = true;
+    }
+
     internal void SetEnabled(string id, bool enabled)
     {
         form?.SetEnabled(id, enabled);
@@ -179,7 +199,7 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
         if (Document is not null) Document.GetElementById(id)!.Text = text;
     }
     public void QueueCommit(Action commit) { pendingCommit = commit; }
-    private void FlushCommit() { var commit = pendingCommit; pendingCommit = null; commit?.Invoke(); }
+    internal void FlushCommit() { var commit = pendingCommit; pendingCommit = null; commit?.Invoke(); }
     public void Status(string text)
     {
         status = text;
@@ -207,7 +227,7 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
             Flags | (form?.AutoHeight == true ? ImGuiWindowFlags.AlwaysAutoResize : ImGuiWindowFlags.None)
                 | ImGuiWindowFlags.NoCollapse
                 | (form?.MenuBar == true ? ImGuiWindowFlags.MenuBar : ImGuiWindowFlags.None)
-                | (form?.HasFooter == true ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None));
+                | (form?.HasFooter == true || form?.FillContent == true ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None));
         try
         {
             ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
@@ -233,6 +253,17 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
 
                 if (!inputEnabled) ImGui.BeginDisabled();
                 form.Draw();
+                if (form.CompactProperties && fitContentFrames > 0)
+                {
+                    fitContentFrames--;
+                    float scale = DirectorImGuiTheme.Scale;
+                    float height = Math.Clamp(form.MeasuredHeight + ImGui.GetStyle().WindowPadding.Y * 2
+                        + ImGui.GetFrameHeight(), 120 * scale, Math.Max(120 * scale, Math.Min(560 * scale, api.Render.FrameHeight - 44 * scale)));
+                    nextSize = new Vector2(ImGui.GetWindowSize().X, height);
+                    nextPosition = new Vector2(ImGui.GetWindowPos().X,
+                        Math.Clamp(ImGui.GetWindowPos().Y, 36 * scale, Math.Max(36 * scale, api.Render.FrameHeight - height - 8 * scale)));
+                    applyBounds = true;
+                }
                 if (!inputEnabled) ImGui.EndDisabled();
                 if (status.Length > 0 && !form.HasText("menu-status")) { ImGui.Spacing(); ImGui.TextWrapped(status); }
             }
@@ -389,6 +420,8 @@ internal sealed class DirectorImGuiForm
     internal readonly StringBuilder Body = new(), Tabs = new(), Footer = new(), Overlay = new();
     private readonly List<Action> controls = new();
     private readonly List<Action> footerControls = new();
+    private readonly List<string> footerLabels = new();
+    private float footerButtonWidth = -1;
     private readonly List<(string Label, bool Selected, Action Click, string Icon)> tabs = new();
     private readonly Dictionary<string, Action<bool>> enabledSetters = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Action<string>> textSetters = new(StringComparer.Ordinal);
@@ -396,6 +429,10 @@ internal sealed class DirectorImGuiForm
     private Func<bool> controlVisibility = static () => true;
     internal bool Docked { get; set; }
     internal bool AutoHeight { get; set; }
+    internal bool FillContent { get; set; }
+    internal bool CompactProperties { get; set; }
+    internal float MeasuredHeight { get; private set; }
+    internal float MinimumBodyHeight { get; set; } = 120;
     internal float MinimumWidth { get; set; } = 220;
     internal bool MenuBar { get; set; }
     internal string? Stylesheet { get; set; }
@@ -407,7 +444,7 @@ internal sealed class DirectorImGuiForm
     internal Action? BeforeAction { get; set; }
     internal int FieldCount { get; private set; }
     internal bool HasFooter => footerControls.Count > 0;
-    internal float MinimumHeight => Math.Max(120, 100 + footerControls.Count * 34);
+    internal float MinimumHeight => CompactProperties ? 120 : Math.Max(MinimumBodyHeight, 100 + footerControls.Count * 34);
     internal void AttachDocument(DirectorImGuiDocument document) => this.document = document;
     internal void BindElement(Action<DirectorImGuiDocument> bind) { }
     internal void SetEnabled(string id, bool enabled)
@@ -421,6 +458,7 @@ internal sealed class DirectorImGuiForm
     internal bool HasText(string id) => textSetters.ContainsKey(id);
     public void Draw()
     {
+        using var compact = CompactProperties ? CompactSpacing() : new DirectorImGuiTheme.Scope(0, 0);
         using var layout = ClassName == "workspace-menu" ? DirectorImGuiTheme.Toolbar() : new DirectorImGuiTheme.Scope(0, 0);
         if (ClassName == "workspace-menu")
         {
@@ -441,19 +479,29 @@ internal sealed class DirectorImGuiForm
                 var max = ImGui.GetItemRectMax();
                 ImGui.GetWindowDrawList().AddLine(new Vector2(min.X, max.Y), max, DirectorImGuiTheme.Accent, 2 * DirectorImGuiTheme.Scale);
             }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(tabs[i].Label);
+            if (ImGui.IsItemHovered() && ImGui.CalcTextSize(label, true).X > tabWidth - 2 * ImGui.GetStyle().FramePadding.X)
+                DirectorImGuiTooltip.Show(tabs[i].Label);
             if (clicked) { BeforeAction?.Invoke(); tabs[i].Click(); }
         }
         if (tabs.Count > 0) ImGui.Separator();
         bool visible = true;
+        int footerColumns = 1;
+        if (CompactProperties && HasFooter)
+        {
+            float widest = footerLabels.Max(label => ImGui.CalcTextSize(label).X) + ImGui.GetStyle().FramePadding.X * 2;
+            footerColumns = Math.Clamp((int)((ImGui.GetContentRegionAvail().X + ImGui.GetStyle().ItemSpacing.X)
+                / (widest + ImGui.GetStyle().ItemSpacing.X)), 1, footerControls.Count);
+        }
+        float footerHeight = 0;
         if (HasFooter)
         {
-            float footerHeight = footerControls.Count * ImGui.GetFrameHeightWithSpacing()
+            footerHeight = ((footerControls.Count + footerColumns - 1) / footerColumns) * ImGui.GetFrameHeightWithSpacing()
                 + ImGui.GetStyle().ItemSpacing.Y * 2;
             visible = ImGui.BeginChild("form-content", new Vector2(0, Math.Max(1, ImGui.GetContentRegionAvail().Y - footerHeight)), false);
         }
         try
         {
+            float contentTop = ImGui.GetCursorPosY();
             if (visible)
                 for (int i = 0; i < controls.Count; i++)
                 {
@@ -461,16 +509,20 @@ internal sealed class DirectorImGuiForm
                     try { controls[i](); }
                     finally { ImGui.PopID(); }
                 }
+            MeasuredHeight = ImGui.GetCursorPosY() - contentTop + footerHeight;
         }
         finally { if (HasFooter) ImGui.EndChild(); }
         if (HasFooter)
         {
             ImGui.Separator();
             ImGui.PushID("footer-actions");
+            footerButtonWidth = CompactProperties
+                ? Math.Max(1, (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X * (footerColumns - 1)) / footerColumns) : -1;
             try
             {
                 for (int i = 0; i < footerControls.Count; i++)
                 {
+                    if (i % footerColumns != 0) ImGui.SameLine();
                     ImGui.PushID(i);
                     try { footerControls[i](); }
                     finally { ImGui.PopID(); }
@@ -478,6 +530,13 @@ internal sealed class DirectorImGuiForm
             }
             finally { ImGui.PopID(); }
         }
+    }
+    private static DirectorImGuiTheme.Scope CompactSpacing()
+    {
+        float scale = DirectorImGuiTheme.Scale;
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(6, 3) * scale);
+        ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(0, 1) * scale);
+        return new DirectorImGuiTheme.Scope(2, 0);
     }
     internal void AddControl(Action draw)
     {
@@ -560,16 +619,16 @@ internal sealed class DirectorImGuiForm
     {
         if (choice.Description.Length == 0)
         {
-            ImGui.SetTooltip(choice.Label);
+            DirectorImGuiTooltip.Show(choice.Label);
             return;
         }
-        ImGui.BeginTooltip();
+        DirectorImGuiTooltip.Begin();
         ImGui.PushTextWrapPos(ImGui.GetFontSize() * 26f);
         ImGui.TextUnformatted(choice.Label);
         ImGui.Separator();
         ImGui.TextUnformatted(choice.Description);
         ImGui.PopTextWrapPos();
-        ImGui.EndTooltip();
+        DirectorImGuiTooltip.End();
     }
 
     public void Section(string title, bool visible) { if (visible) Group(title); }
@@ -717,11 +776,12 @@ internal sealed class DirectorImGuiForm
     }
     public string FooterButton(string label, Action click, string tone = "normal", string icon = "", bool enabled = true)
     {
+        footerLabels.Add(Caption(label, icon));
         footerControls.Add(() =>
         {
             using var style = DirectorImGuiTheme.Button(tone);
             ImGui.BeginDisabled(!enabled);
-            bool pressed = ImGui.Button(Caption(label, icon) + "###footer", new Vector2(-1, 0));
+            bool pressed = ImGui.Button(Caption(label, icon) + "###footer", new Vector2(footerButtonWidth, 0));
             ImGui.EndDisabled();
             if (pressed) { BeforeAction?.Invoke(); click(); }
         });
@@ -730,13 +790,14 @@ internal sealed class DirectorImGuiForm
 
     private void AddField(string label, Action draw)
     {
+        FieldCount++;
         AddControl(() =>
         {
             if (!ImGui.BeginTable("field", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.NoPadOuterX)) return;
             try
             {
                 ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthFixed,
-                    Math.Clamp(ImGui.GetContentRegionAvail().X * .4f, 60 * DirectorImGuiTheme.Scale, 126 * DirectorImGuiTheme.Scale));
+                    Math.Clamp(ImGui.GetContentRegionAvail().X * .4f, 60 * DirectorImGuiTheme.Scale, (CompactProperties ? 150 : 126) * DirectorImGuiTheme.Scale));
                 ImGui.TableSetupColumn("value", ImGuiTableColumnFlags.WidthStretch);
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
@@ -777,7 +838,7 @@ internal sealed class DirectorImGuiForm
                     if (ImGui.MenuItem(activateLabel)) { BeforeAction?.Invoke(); activate(); }
                     ImGui.EndPopup();
                 }
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(name + (detail.Length > 0 ? "\n" + detail : ""));
+                if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(name + (detail.Length > 0 ? "\n" + detail : ""));
                 if (detail.Length > 0)
                 {
                     ImGui.PushStyleColor(ImGuiCol.Text, DirectorImGuiTheme.Muted);
@@ -789,14 +850,13 @@ internal sealed class DirectorImGuiForm
                 if (DirectorImGuiIcons.Button(Icon("play") + "###activate", new Vector2(ImGui.GetFrameHeight())))
                 { BeforeAction?.Invoke(); activate(); }
                 UpdateItemBounds("resource-activate-" + id);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(activateLabel);
+                if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(activateLabel);
             }
             finally { ImGui.EndTable(); ImGui.PopID(); }
         });
     }
     public void Text(string label, string value, Action<string> changed, bool password = false)
     {
-        FieldCount++;
         // Keep the editing buffer in the control closure. ImGui mutates the
         // buffer in place and a local declared inside the draw callback would
         // reset it on every frame, dropping partially typed text.
@@ -809,7 +869,6 @@ internal sealed class DirectorImGuiForm
         => NumberStep(label, value, 1, changed);
     public void NumberStep(string label, double value, float step, Action<double> changed)
     {
-        FieldCount++;
         double number = value;
         AddField(label, () => { if (DirectorImGuiNumeric.Double("##value", ref number, step)) changed(number); });
     }
@@ -818,7 +877,6 @@ internal sealed class DirectorImGuiForm
             && double.IsFinite(number) ? number : 0, step, v => changed(DirectorNumberFormatting.Format(v)));
     public void Slider(string label, double value, double min, double max, double step, Action<double> changed)
     {
-        FieldCount++;
         double number = value;
         AddField(label, () => { if (DirectorImGuiNumeric.Double("##value", ref number, (float)step, min, max,
             $"%.{Math.Clamp((int)Math.Round(Math.Max(0, -Math.Log10(Math.Max(step, 0.000001)))), 0, 6)}f")) changed(number); });
@@ -827,7 +885,6 @@ internal sealed class DirectorImGuiForm
     public void Time(string label, TimeSpan value, Action<TimeSpan> changed, bool includeSeconds = false) => Text(label, value.ToString(), text => { if (TimeSpan.TryParse(text, out var parsed)) changed(parsed); });
     public void Check(string label, bool value, Action<bool> changed, bool enabled = true)
     {
-        FieldCount++;
         bool state = value;
         AddField(label, () =>
         {

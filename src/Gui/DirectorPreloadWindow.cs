@@ -19,7 +19,6 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
     private readonly Action<int, int, int, int, bool> paint;
     private readonly Action<int, int> pan;
     private readonly Action<double> seek;
-    private readonly long tick;
     private readonly bool replay;
     private readonly double duration;
     private int radius = 6, columns, rows, pointer = -1;
@@ -47,7 +46,7 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
         this.duration = Math.Max(0, duration);
         this.time = Math.Clamp(time, 0, this.duration);
         emptyMessage = L("preload-loading");
-        tick = api.Event.RegisterGameTickListener(Tick, 50);
+
     }
 
     internal new void Open()
@@ -61,7 +60,7 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
     internal void Tick(float dt)
     {
         if (disposed || !Opened) return;
-        if (pointer >= 0 && !MouseButtonDown(pointer)) FinishPointer();
+
         if (playing && state() is not null)
         {
             time = Math.Min(duration, time + Math.Max(0, dt));
@@ -86,61 +85,64 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
 
     protected override bool OnDraw()
     {
+        using var spacing = DirectorImGuiBrowser.Use();
+        Tick(Math.Min(.1f, ImGui.GetIO().DeltaTime));
         DrawToolbar();
         ImGui.Separator();
         DrawMap();
         ImGui.Separator();
+        if (replay) DrawTimeControls();
         DrawLegend();
         return true;
     }
 
     protected override void PrepareWindow()
-        => DirectorImGuiLayout.WindowSize(new Vector2(820, 680), new Vector2(500, 400));
+        => DirectorImGuiLayout.WindowSize(new Vector2(760, 580), new Vector2(440, 340));
 
     private void DrawToolbar()
     {
-        if (ToolButton("preload-add", DirectorImGuiIcons.Get("plus"), L("preload-tool-add"))) SetTool(false);
+        using (DirectorImGuiTheme.Button(!erase ? "primary" : "normal", quiet: true))
+            if (ImGui.Button(L("preload-add-short") + "##add")) SetTool(false);
         ImGui.SameLine();
-        if (ToolButton("preload-erase", DirectorImGuiIcons.Get("minus"), L("preload-tool-remove"))) SetTool(true);
+        using (DirectorImGuiTheme.Button(erase ? "primary" : "normal", quiet: true))
+            if (ImGui.Button(L("preload-remove-short") + "##erase")) SetTool(true);
         ImGui.SameLine();
-        if (ToolButton("preload-out", DirectorImGuiIcons.Get("zoom-out"), L("workspace-zoom-out"))) Zoom(1);
+        if (ToolButton("preload-out", "zoom-out", L("workspace-zoom-out"))) Zoom(1);
         ImGui.SameLine();
-        if (ToolButton("preload-in", DirectorImGuiIcons.Get("zoom-in"), L("workspace-zoom-in"))) Zoom(-1);
+        if (ToolButton("preload-in", "zoom-in", L("workspace-zoom-in"))) Zoom(-1);
         ImGui.SameLine();
-        if (ToolButton("preload-fit", DirectorImGuiIcons.Get("arrows-maximize"), L("workspace-zoom-fit")))
+        if (ToolButton("preload-fit", "arrows-maximize", L("workspace-zoom-fit")))
         {
-            CancelPointer();
-            radius = 6;
-            pan(0, 0);
+            CancelPointer(); radius = 6; pan(0, 0);
         }
-        if (!replay) return;
-        ImGui.SeparatorText(L("preload-time"));
-        if (ToolButton("preload-start", DirectorImGuiIcons.Get("player-track-prev"), L("preload-start"))) Seek(0);
+        ImGui.SameLine(); ImGui.AlignTextToFramePadding(); ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("preload-map-help"));
+        if (state() is { } data)
+            ImGui.TextDisabled(Lang.Get("vsdirector:preload-map-count", data.Final.Count, data.CenterX, data.CenterZ));
+        else ImGui.TextDisabled(emptyMessage);
+    }
+
+    private void DrawTimeControls()
+    {
+        if (ToolButton("preload-start", "track-prev", L("preload-start"))) Seek(0);
         ImGui.SameLine();
-        if (ToolButton("preload-previous", DirectorImGuiIcons.Get("chevron-left"), L("preload-previous"))) Seek(time - 1);
-        ImGui.SameLine();
-        if (ToolButton("preload-play", DirectorImGuiIcons.Get(playing ? "pause" : "play"), L(playing ? "preload-pause" : "preload-play")))
+        if (ToolButton("preload-play", playing ? "pause" : "play", L(playing ? "preload-pause" : "preload-play")))
         {
             if (!playing && time >= duration) Seek(0);
             SetPlaying(!playing);
         }
         ImGui.SameLine();
-        if (ToolButton("preload-next", DirectorImGuiIcons.Get("chevron-right"), L("preload-next"))) Seek(time + 1);
-        ImGui.SameLine();
-        if (ToolButton("preload-end", DirectorImGuiIcons.Get("player-track-next"), L("preload-end"))) Seek(duration);
-        ImGui.SameLine();
+        ImGui.SetNextItemWidth(Math.Max(1, ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize(Clock(time) + " / " + Clock(duration)).X - ImGui.GetStyle().ItemSpacing.X));
+        float position = (float)time;
+        if (ImGui.SliderFloat("##preload-time", ref position, 0, (float)duration, "")) Seek(position);
+        ImGui.SameLine(); ImGui.AlignTextToFramePadding();
         ImGui.TextDisabled(Clock(time) + " / " + Clock(duration));
     }
 
-    private static bool ToolButton(string id, string label, string tip)
+    private static bool ToolButton(string id, string icon, string tip)
     {
-        bool clicked = ImGui.Button(label + "##" + id);
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.BeginTooltip();
-            ImGui.TextUnformatted(tip);
-            ImGui.EndTooltip();
-        }
+        bool clicked = DirectorImGuiBrowser.IconButton(id, icon);
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(tip);
         return clicked;
     }
 
@@ -148,8 +150,9 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
     {
         Vector2 available = ImGui.GetContentRegionAvail();
         available.Y = Math.Max(1, available.Y
-            - ImGui.GetTextLineHeightWithSpacing() * 2 - ImGui.GetStyle().ItemSpacing.Y * 3);
-        if (!ImGui.BeginChild("preload-map-area", new Vector2(0, available.Y), true))
+            - ImGui.GetTextLineHeightWithSpacing() * 2 - ImGui.GetStyle().ItemSpacing.Y * 4
+            - (replay ? ImGui.GetFrameHeightWithSpacing() : 0));
+        if (!ImGui.BeginChild("preload-map-area", new Vector2(0, available.Y), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             ImGui.EndChild();
             return;
@@ -213,7 +216,7 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
             else if (ImGui.IsMouseClicked(ImGuiMouseButton.Right)) BeginPointer(1, ImGui.GetMousePos(), origin, cellSize, data);
             else if (ImGui.IsMouseClicked(ImGuiMouseButton.Middle)) BeginPointer(2, ImGui.GetMousePos(), origin, cellSize, data);
         }
-        if (pointer >= 0 && dragState is not null && MouseButtonDown(pointer))
+        if (pointer >= 0 && dragState is not null && ImGui.IsMouseDown((ImGuiMouseButton)pointer))
         {
             Vector2 mouse = ImGui.GetMousePos();
             if (pointer == 0)
@@ -222,6 +225,7 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
                 pan(panX + (int)Math.Round((pointerStart.X - mouse.X) / Math.Max(1, cellSize)),
                     panZ + (int)Math.Round((pointerStart.Y - mouse.Y) / Math.Max(1, cellSize)));
         }
+        if (pointer >= 0 && !ImGui.IsMouseDown((ImGuiMouseButton)pointer)) FinishPointer();
         ImGui.EndChild();
     }
 
@@ -261,12 +265,6 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
         dragState = null;
     }
 
-    private bool MouseButtonDown(int value)
-        => api.Input.MouseButton.Left && value == 0
-            || api.Input.MouseButton.Right && value == 1
-            || api.Input.MouseButton.Middle && value == 2
-            || ImGui.IsMouseDown((ImGuiMouseButton)value);
-
     private void SetTool(bool value)
     {
         CancelPointer();
@@ -299,7 +297,6 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
         LegendItem(L("preload-legend-auto"), new Vector4(50 / 255f, 139 / 255f, 101 / 255f, 1));
         ImGui.SameLine();
         LegendItem(L("preload-legend-manual"), new Vector4(101 / 255f, 205 / 255f, 145 / 255f, 1));
-        ImGui.SameLine();
         LegendItem(L("preload-legend-excluded"), new Vector4(201 / 255f, 81 / 255f, 96 / 255f, 1));
         ImGui.SameLine();
         LegendItem(L("preload-legend-other"), new Vector4(53 / 255f, 56 / 255f, 62 / 255f, 1));
@@ -316,8 +313,8 @@ internal sealed class DirectorPreloadWindow : DirectorImGuiDialog
     {
         if (disposing)
         {
+            if (Opened) Close();
             disposed = true;
-            api.Event.UnregisterGameTickListener(tick);
         }
         base.Dispose(disposing);
     }

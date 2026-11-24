@@ -145,6 +145,7 @@ internal sealed partial class DirectorWorkspaceHud
 
     private void DrawPresetBrowser(IReadOnlyList<PresetBrowserEntry> entries)
     {
+        using var spacing = DirectorImGuiBrowser.Use();
         float scale = DirectorImGuiTheme.Scale;
         ImGuiIOPtr io = ImGui.GetIO();
         bool appearing = ImGui.IsWindowAppearing();
@@ -159,11 +160,15 @@ internal sealed partial class DirectorWorkspaceHud
             presetBrowserHighlight = 0;
             presetBrowserScroll = true;
         }
-        ImGui.SetNextItemWidth(-1);
+        ImGui.SetNextItemWidth(-ImGui.CalcTextSize("(?)").X - ImGui.GetStyle().ItemSpacing.X);
         string query = presetBrowserQuery;
         bool enter = ImGui.InputTextWithHint("##preset-search", Lang.Get("vsdirector:replay-browser-search"), ref query, 128,
             ImGuiInputTextFlags.EnterReturnsTrue);
         bool searchActive = ImGui.IsItemActive();
+        ImGui.SameLine();
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(Lang.Get("vsdirector:replay-browser-keys"));
         if (query != presetBrowserQuery)
         {
             presetBrowserQuery = query;
@@ -219,34 +224,49 @@ internal sealed partial class DirectorWorkspaceHud
             return;
         }
 
-        float descriptionHeight = 92f * scale;
-        float paneHeight = Math.Max(160f * scale, 420f * scale);
-
-        // Categories.
-        ImGui.BeginChild("preset-categories", new Vector2(170f * scale, paneHeight), true);
-        foreach (string category in categories)
+        bool narrow = DirectorImGuiBrowser.Narrow;
+        if (narrow)
         {
-            int count = BrowseCategoryEntries(entries, category).Count;
-            bool selected = !searching && category == presetBrowserCategory;
-            string label = DirectorImGuiForm.Icon(BrowseCategoryIcon(category)) + "  " + BrowseCategoryName(category)
-                + (count > 0 && category is not BrowseAll ? "  (" + count + ")" : string.Empty)
-                + "###category-" + category;
-            if (category == BrowseAll || category == PresetGroupOrder[0])
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.BeginCombo("##preset-category", BrowseCategoryName(presetBrowserCategory)))
             {
-                ImGui.Separator();
-            }
-            if (ImGui.Selectable(label, selected))
-            {
-                presetBrowserQuery = string.Empty;
-                SetPresetBrowserCategory(category);
+                foreach (string category in categories)
+                    if (ImGui.Selectable(BrowseCategoryName(category), category == presetBrowserCategory))
+                    { presetBrowserQuery = string.Empty; SetPresetBrowserCategory(category); }
+                ImGui.EndCombo();
             }
         }
-        ImGui.EndChild();
-        ImGui.SameLine();
+        ImGui.Separator();
+        float paneHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - 2 * scale);
+        if (!narrow)
+        {
+            float sidebarWidth = DirectorImGuiBrowser.SidebarWidth;
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, DirectorImGuiTheme.Panel);
+            ImGui.BeginChild("preset-categories", new Vector2(sidebarWidth, paneHeight), false);
+            ImGui.PopStyleColor();
+            foreach (string category in categories)
+            {
+                int count = BrowseCategoryEntries(entries, category).Count;
+                if (category == PresetGroupOrder[0]) ImGui.Separator();
+                if (DirectorImGuiBrowser.NavigationItem("category-" + category, BrowseCategoryName(category),
+                    BrowseCategoryIcon(category), !searching && category == presetBrowserCategory,
+                    count > 0 ? count.ToString() : ""))
+                { presetBrowserQuery = string.Empty; SetPresetBrowserCategory(category); }
+            }
+            ImGui.EndChild();
+            ImGui.SameLine();
+        }
+        ImGui.BeginChild("preset-results", new Vector2(0, paneHeight), false,
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+        ImGui.TextUnformatted((searching ? Lang.Get("vsdirector:replay-browser-search-results") : BrowseCategoryName(presetBrowserCategory))
+            + "  ·  " + shown.Count);
+        ImGui.Separator();
+        float descriptionHeight = Math.Clamp(ImGui.GetContentRegionAvail().Y * .25f, 66 * scale, 104 * scale);
+        float listHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - descriptionHeight - ImGui.GetStyle().ItemSpacing.Y * 2 - 1);
 
         // Entries.
         PresetBrowserEntry? hovered = null;
-        ImGui.BeginChild("preset-entries", new Vector2(0, paneHeight), true);
+        ImGui.BeginChild("preset-entries", new Vector2(0, listHeight), false);
         if (shown.Count == 0)
         {
             ImGui.TextWrapped(Lang.Get(searching ? "vsdirector:scene-empty"
@@ -265,26 +285,23 @@ internal sealed partial class DirectorWorkspaceHud
             bool favorite = presetUsage.IsFavorite(entry.Id);
             ImGui.PushStyleColor(ImGuiCol.Button, 0u);
             ImGui.PushStyleColor(ImGuiCol.Text, favorite ? 0xFF33C8FFu : ImGui.GetColorU32(ImGuiCol.TextDisabled));
-            if (ImGui.SmallButton(DirectorImGuiForm.Icon(favorite ? "star-filled" : "star") + "##fav"))
+            if (DirectorImGuiBrowser.IconButton("fav", favorite ? "star-filled" : "star"))
             {
                 presetUsage.ToggleFavorite(entry.Id);
             }
             ImGui.PopStyleColor(2);
-            if (ImGui.IsItemHovered())
-            {
-                ImGui.SetTooltip(Lang.Get(favorite ? "vsdirector:replay-browser-unfavorite" : "vsdirector:replay-browser-favorite"));
-            }
             ImGui.SameLine();
             string tag = presetBrowserCategory == BrowseMostUsed && !searching
                 ? "×" + presetUsage.Count(entry.Id)
                 : showGroup ? entry.GroupLabel : string.Empty;
+            if (tag.Length > 0) tag = DirectorImGuiBrowser.Fit(tag, ImGui.GetContentRegionAvail().X * .28f);
             float tagWidth = tag.Length > 0 ? ImGui.CalcTextSize(tag).X + 8f * scale : 0f;
             float rowWidth = Math.Max(1f, ImGui.GetContentRegionAvail().X - tagWidth);
             bool highlighted = index == presetBrowserHighlight;
-            if (ImGui.Selectable(DirectorImGuiForm.Icon(entry.Icon) + "  " + entry.Label + "##row", highlighted,
-                    ImGuiSelectableFlags.None, new Vector2(rowWidth, 0)))
+            if (DirectorImGuiBrowser.NavigationItem("row", entry.Label, entry.Icon, highlighted, width: rowWidth))
             {
                 ImGui.PopID();
+                ImGui.EndChild();
                 ImGui.EndChild();
                 entry.Apply();
                 return;
@@ -305,6 +322,7 @@ internal sealed partial class DirectorWorkspaceHud
             if (tag.Length > 0)
             {
                 ImGui.SameLine();
+                ImGui.AlignTextToFramePadding();
                 ImGui.TextDisabled(tag);
             }
             ImGui.PopID();
@@ -313,10 +331,11 @@ internal sealed partial class DirectorWorkspaceHud
 
         // Description of the hovered (or highlighted) entry.
         PresetBrowserEntry? described = hovered ?? (shown.Count > 0 ? shown[presetBrowserHighlight] : null);
-        ImGui.BeginChild("preset-description", new Vector2(0, descriptionHeight), true);
+        ImGui.Separator();
+        ImGui.BeginChild("preset-description", new Vector2(0, descriptionHeight), false);
         if (described is not null)
         {
-            ImGui.TextUnformatted(DirectorImGuiForm.Icon(described.Icon) + "  " + described.Label);
+            ImGui.TextUnformatted(DirectorImGuiBrowser.Fit(DirectorImGuiForm.Icon(described.Icon) + "  " + described.Label, ImGui.GetContentRegionAvail().X));
             ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetColorU32(ImGuiCol.TextDisabled));
             ImGui.TextWrapped(described.Description);
             if (described.NeedsPlayer)
@@ -326,6 +345,6 @@ internal sealed partial class DirectorWorkspaceHud
             ImGui.PopStyleColor();
         }
         ImGui.EndChild();
-        ImGui.TextDisabled(Lang.Get("vsdirector:replay-browser-keys"));
+        ImGui.EndChild();
     }
 }

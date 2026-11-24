@@ -53,7 +53,7 @@ cmake --install obs-plugin/build --config Release --prefix /install/prefix
 ```
 
 Original plugin source is licensed under the [MIT License](../LICENSE) by
-HansJack (VSCN-Studio). See [third-party notices](../licenses/OBS-THIRD-PARTY.txt)
+HansJack. See [third-party notices](../licenses/OBS-THIRD-PARTY.txt)
 for the OBS/libobs dependency. Binaries linked with libobs are distributed
 under GPL-2.0-or-later. CI packages include the plugin source, build scripts,
 interface headers, generated configuration and pinned OBS/submodule source

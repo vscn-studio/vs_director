@@ -22,6 +22,12 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     private sealed record SelectCommand(string Id, string Value, IReadOnlyList<(string Value, string Label)> Options,
         Action<string> Changed, double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
 
+    private sealed record ClipCommand(bool Push, double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
+    private sealed record BlockCommand(double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
+    internal void PushClip(double x, double y, double w, double h) => commands.Add(new ClipCommand(true, x, y, w, h));
+    internal void PopClip() => commands.Add(new ClipCommand(false, 0, 0, 0, 0));
+    internal void BlockInput(double x, double y, double w, double h) => commands.Add(new BlockCommand(x, y, w, h));
+
     private readonly Action<MouseEvent> down;
     private readonly Action<MouseEvent> move;
     private readonly Action<MouseEvent> up;
@@ -37,6 +43,7 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     private bool dragging;
     private EnumMouseButton dragButton;
     private double panelX, panelY, panelWidth, panelHeight;
+    private Vector2? surfaceOrigin;
     private double playheadX, playheadLeft, playheadRight, playheadHeight;
     private bool playheadVisible;
     private string cursorLabel = "";
@@ -90,6 +97,27 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     }
 
     internal void End() { }
+
+    // Return the actual control bounds in logical screen coordinates, including
+    // a moved/undocked timeline's native origin rather than its saved panel position.
+    internal (float X, float Y, float Width)? EditorAnchorAt(float x, float y)
+    {
+        Vector2 origin = surfaceOrigin / Scale ?? new Vector2((float)panelX, (float)panelY);
+        foreach (var command in commands.AsEnumerable().Reverse())
+        {
+            bool keyframe = command is ShapeCommand shape
+                && (shape.Classes.Contains("timeline-key", StringComparison.Ordinal)
+                    || shape.Classes == "timeline-interval-edge");
+            if (!keyframe && command is not ButtonCommand) continue;
+            float tolerance = keyframe ? 6 : 0;
+            var bounds = new Rect(origin.X + (float)command.X, origin.Y + (float)command.Y,
+                (float)command.Width, (float)command.Height);
+            if (new Rect(bounds.X - tolerance, bounds.Y - tolerance,
+                bounds.Width + tolerance * 2, bounds.Height + tolerance * 2).Contains(new Vector2(x, y)))
+                return (bounds.X, bounds.Y, bounds.Width);
+        }
+        return null;
+    }
 
     internal void SetResizeCorner(double x) { }
 
@@ -157,6 +185,7 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     private void DrawSurface()
     {
         Vector2 origin = ImGui.GetCursorScreenPos();
+        surfaceOrigin = origin;
         Vector2 canvas = new Vector2((float)panelWidth, (float)panelHeight) * Scale;
         var draw = ImGui.GetWindowDrawList();
         draw.AddRectFilled(origin, origin + canvas, DirectorImGuiTheme.Background);
@@ -166,6 +195,14 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         {
             switch (command)
             {
+                case ClipCommand clip:
+                    if (clip.Push) ImGui.PushClipRect(origin + new Vector2((float)clip.X, (float)clip.Y) * Scale,
+                        origin + new Vector2((float)(clip.X + clip.Width), (float)(clip.Y + clip.Height)) * Scale, true);
+                    else ImGui.PopClipRect();
+                    break;
+                case BlockCommand block:
+                    interactive.Add(new Rect((float)block.X, (float)block.Y, (float)block.Width, (float)block.Height));
+                    break;
                 case ShapeCommand shape:
                     DrawShape(draw, origin, shape);
                     break;
@@ -239,6 +276,13 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
             CancelPointer();
             escape();
         }
+        if (ImGui.IsWindowFocused() && !ImGui.GetIO().WantTextInput && ImGui.GetIO().KeyCtrl)
+        {
+            if (ImGui.IsKeyPressed(ImGuiKey.Z, false))
+                key(new KeyEvent { KeyCode = (int)GlKeys.Z, CtrlPressed = true, ShiftPressed = ImGui.GetIO().KeyShift });
+            else if (ImGui.IsKeyPressed(ImGuiKey.Y, false))
+                key(new KeyEvent { KeyCode = (int)GlKeys.Y, CtrlPressed = true });
+        }
     }
 
     private void DrawShape(ImDrawListPtr draw, Vector2 origin, ShapeCommand shape)
@@ -285,9 +329,9 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
                 ? DirectorImGuiTheme.Muted : DirectorImGuiTheme.Text, text);
             draw.PopClipRect();
             string tooltip = shape.Title.Length > 0 ? shape.Title : shape.Text;
-            if (tooltip.Length > 0 && !shape.Classes.Contains("timeline-ruler-label", StringComparison.Ordinal)
+            if (tooltip.Length > 0 && (shape.Title.Length > 0 || size.X > max.X - min.X - 8 * Scale) && !shape.Classes.Contains("timeline-ruler-label", StringComparison.Ordinal)
                 && ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, max))
-                ImGui.SetTooltip(tooltip);
+                DirectorImGuiTooltip.Show(tooltip);
         }
     }
 
@@ -316,12 +360,13 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
             : ImGui.Button($"{label}##timeline-{button.Id}", size);
         if (!button.Enabled) ImGui.EndDisabled();
         if (clicked && button.Enabled) button.Click();
-        interactive.Add(new Rect((float)button.X, (float)button.Y, (float)button.Width, (float)button.Height));
-        if (ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(button.Title))
+        if (ImGui.IsItemVisible())
+            interactive.Add(new Rect((float)button.X, (float)button.Y, (float)button.Width, (float)button.Height));
+        if (icon.Length > 0 && ImGui.IsItemHovered() && !string.IsNullOrWhiteSpace(button.Title))
         {
-            ImGui.BeginTooltip();
+            DirectorImGuiTooltip.Begin();
             ImGui.TextUnformatted(button.Title);
-            ImGui.EndTooltip();
+            DirectorImGuiTooltip.End();
         }
     }
 

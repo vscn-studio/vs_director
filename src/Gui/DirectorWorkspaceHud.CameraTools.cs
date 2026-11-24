@@ -70,7 +70,7 @@ internal sealed partial class DirectorWorkspaceHud
         if (cameraDragOriginal is null) cameraToolSelection = selectedReplayViewportClipId;
         Vector2 pointer = ImGui.GetMousePos();
         cameraHoverAxis = !layout.NavigationMode && PointInsideGameViewport((int)pointer.X, (int)pointer.Y)
-            ? CameraHandleAxisAt(pointer, 7 * DirectorImGuiTheme.Scale) : -1;
+            ? CameraHandleAxisAt(pointer, 9 * DirectorImGuiTheme.Scale) : -1;
         cameraToolLines.Clear();
         cameraToolTriangles.Clear();
         cameraToolHeads.Clear();
@@ -108,7 +108,7 @@ internal sealed partial class DirectorWorkspaceHud
     private void DrawCameraModels()
     {
         var timeline = transformTimeline ?? cameraDragTimeline ?? owner.ReplayViewportTimeline;
-        var enabled = timeline.Tracks.Where(t => t.Enabled && t.TrackType == DirectorReplayElementTrackType.Camera)
+        var enabled = timeline.Tracks.Where(t => timeline.IsTrackEnabled(t) && t.TrackType == DirectorReplayElementTrackType.Camera)
             .Select(t => t.Id).ToHashSet();
         // This callback runs inside the workspace host. Its draw list overlays
         // the world without depth testing, while normal windows/popups stay above it.
@@ -174,14 +174,14 @@ internal sealed partial class DirectorWorkspaceHud
         float radius=CameraGizmoRadius(pose);
         var view=capi.Render.PerspectiveViewMat;
         double depth=-(view[2]*pivot.X+view[6]*pivot.Y+view[10]*pivot.Z+view[14]);
-        float displayScale=Math.Min(1,(float)Math.Max(.0001,depth)*.25f/radius);
+        float displayScale=DirectorEditorHandles.ProjectionScale(depth,radius);
         Vector2? ProjectHandle(Vector3 offset)
             => ProjectCameraPoint(Add(pivot,offset*displayScale),out var point)?center+(point-center)/displayScale:null;
         // Keep near-camera handles in front of the eye while retaining true
         // perspective axis directions and their established on-screen size.
         replayHandles ??= new();
         replayHandles.Draw(draw,center,CameraWorldUnitsPerPixel(pivot),radius,capi.Render.PerspectiveViewMat,
-            [Vector3.UnitX,Vector3.UnitY,Vector3.UnitZ],cameraTool==CameraTool.Rotate,cameraTool==CameraTool.Pivot,cameraDragAxisIndex,false,cameraHoverAxis, project: cameraTool == CameraTool.Rotate ? null
+            [Vector3.UnitX,Vector3.UnitY,Vector3.UnitZ],cameraTool==CameraTool.Rotate,false,cameraDragAxisIndex,false,cameraHoverAxis, project: cameraTool == CameraTool.Rotate ? null
                 : ProjectHandle);
         foreach(var line in replayHandles.Lines) cameraToolLines.Add(new(line.A,line.B,line.Axis,line.CameraId));
         foreach(var face in replayHandles.Triangles) cameraToolTriangles.Add(new(face.A,face.B,face.C,face.Axis));
@@ -204,7 +204,7 @@ internal sealed partial class DirectorWorkspaceHud
         const int sides = 64;
         Vector3 direction = CameraAxis(axis), u = CameraAxis((axis + 1) % 3), v = CameraAxis((axis + 2) % 3);
         Vec3d tip = Add(pivot, direction * length), bottom = Add(pivot, direction * (length - CameraMoveConeLength(pivot, length)));
-        float radius = Math.Min(length * .075f, CameraWorldUnitsPerPixel(pivot) * 4.5f * DirectorImGuiTheme.Scale);
+        float radius = Math.Min(length * .15f, CameraWorldUnitsPerPixel(pivot) * 9 * DirectorImGuiTheme.Scale);
         var faces = new List<(Vec3d A, Vec3d B, Vec3d C)>(sides * 2);
         for (int i = 0; i < sides; i++)
         {
@@ -237,7 +237,7 @@ internal sealed partial class DirectorWorkspaceHud
     }
 
     private float CameraMoveConeLength(Vec3d pivot, float length)
-        => Math.Min(length * .18f, CameraWorldUnitsPerPixel(pivot) * 10.8f * DirectorImGuiTheme.Scale);
+        => Math.Min(length * .4f, CameraWorldUnitsPerPixel(pivot) * 24 * DirectorImGuiTheme.Scale);
 
     private int CameraHandleAxisAt(Vector2 point, float threshold)
     {
@@ -304,7 +304,7 @@ internal sealed partial class DirectorWorkspaceHud
 
     // Editor controls stay at a comfortable screen size independently of the model.
     private float CameraHandleRadius(Vec3d point)
-        => CameraWorldUnitsPerPixel(point) * 60 * DirectorImGuiTheme.Scale;
+        => DirectorEditorHandles.Radius(CameraWorldUnitsPerPixel(point), true);
 
     private void DrawCameraRotationArc(ImDrawListPtr draw, Vec3d pivot, float radius)
     {
@@ -597,7 +597,7 @@ internal sealed partial class DirectorWorkspaceHud
         var clip = timeline.Clips.FirstOrDefault(c => c.Id == source && c.Enabled
             && c.SourceType == DirectorReplayViewportSourceType.StaticCamera);
         if (clip is null) return null;
-        if (!timeline.Tracks.Any(t => t.Id == clip.TrackId && t.Enabled)) return null;
+        if (!timeline.Tracks.Any(t => t.Id == clip.TrackId && timeline.IsTrackEnabled(t))) return null;
         if (cameraDragPose is null && transformPose is null && owner.ReplayShootingSourceId == source) return owner.ReplayShootingPose;
         var pose = transformPose is not null && transformClipId == source ? transformPose.DeepClone()
             : cameraDragPose is not null && cameraToolSelection == source ? cameraDragPose.DeepClone() : ReplayCameraElementPose(clip);

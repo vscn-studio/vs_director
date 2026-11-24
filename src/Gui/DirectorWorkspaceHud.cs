@@ -268,6 +268,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private Guid replayElementTrackReorderId;
     private int replayElementTrackReorderIndex = -1;
     private bool replayAuxiliaryKeyframeDragMoved;
+    private double replayAuxiliaryDragMouseX, replayAuxiliaryDragOriginalTime;
     private bool replayViewportDragMoved;
     private ReplayViewportDragMode replayViewportDragMode;
     private Guid replayViewportDragClipId;
@@ -300,7 +301,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private bool recordingConfirmationPending;
     private bool scrubbingReplay;
     private double replayTimelineScrollTicks;
-    private int replayTimelineTickScaleIndex;
+    private int replayTimelineTickScaleIndex = 0;
     private int replayTimelineFirstVisibleTrack;
     private bool replayTimelinePanning;
     private int replayTimelinePanStartMouseX;
@@ -451,6 +452,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         previewReplayTime = owner.ReplayTimeSeconds;
         SynchronizeReplaySelectionWithActivePlayback(force: true);
         imGuiWorkspace.Add(DrawReplayCameraTools);
+        imGuiWorkspace.PanelsDrawn += DrawReplayHistoryShortcuts;
         imGuiWorkspace.AddCreation(creationWorkspace.Draw);
         creationWorkspace.LeaveRequested = LeaveCreationWorkspace;
         ComposeAll();
@@ -1087,7 +1089,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (args.Button == EnumMouseButton.Middle
             && section == DirectorWorkspaceSection.Replay
             && ReplayTimelineInteractionContains(args.X, args.Y)
-            && !ReplayTimelineAddRowContains(args.Y))
+            && !(ReplayTimelineAddRowContains(args.Y) && args.X < ReplayTimelineContentLeft(replayTimelineBounds!)))
         {
             replayTimelinePanning = true;
             replayTimelinePanStartMouseX = args.X;
@@ -1135,7 +1137,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         }
 
         if (ReplayTimelineInteractionContains(args.X, args.Y)
-            && !ReplayTimelineAddRowContains(args.Y))
+            && !(ReplayTimelineAddRowContains(args.Y) && args.X < ReplayTimelineContentLeft(replayTimelineBounds!)))
         {
             if (TryBeginReplayExportRangeDrag(args.X, args.Y))
             {
@@ -1151,7 +1153,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             {
                 BeginReplayAuxiliaryKeyframeDrag(
                     ReplayAuxiliaryKeyframeDragKind.Element,
-                    elementKeyframeId);
+                    elementKeyframeId, args.X);
                 args.Handled = true;
                 return;
             }
@@ -1384,7 +1386,12 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 : null;
             if (draggedElement is not null)
             {
-                double nextTime = ReplayTimeAt(args.X);
+                if (!DirectorTimelineCoordinateMath.TryDragTime(replayAuxiliaryDragOriginalTime,
+                    replayAuxiliaryDragMouseX, args.X, GuiElement.scaled(ReplayTimelinePixelsPerTick) * ReplayTimelineTicksPerSecond,
+                    GuiElement.scaled(1), replayAuxiliaryKeyframeDragMoved, out double nextTime))
+                { args.Handled = true; return; }
+                replayAuxiliaryKeyframeDragMoved = true;
+                nextTime = Math.Clamp(nextTime, 0, owner.ReplayDurationSeconds);
                 if (draggedElement.TrackType == DirectorReplayElementTrackType.Timelapse
                     && DirectorReplayTimelapse.TryFindPair(
                         CurrentReplayViewportTimeline().ElementKeyframes,
@@ -2126,6 +2133,14 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         }
 
         base.OnKeyDown(args);
+        if (!args.Handled && section == DirectorWorkspaceSection.Replay && !layout.NavigationMode
+            && args.CtrlPressed && args.KeyCode is (int)GlKeys.Z or (int)GlKeys.Y)
+        {
+            // ImGui owns replay shortcuts after every workspace panel has drawn.
+            // Consuming the native event here prevents a second undo.
+            args.Handled = true;
+            return;
+        }
         if (!args.Handled
             && section == DirectorWorkspaceSection.Actions
             && actionEdit is not null
@@ -2226,6 +2241,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         CloseReplayCameraPreview();
         CloseReplayCameraObservation();
         imGuiWorkspace.Remove(DrawReplayCameraTools);
+        imGuiWorkspace.PanelsDrawn -= DrawReplayHistoryShortcuts;
         imGuiWorkspace.RemoveCreation(creationWorkspace.Draw);
         creationWorkspace.Suspend();
         DisposeTimelineMedia();
@@ -4063,7 +4079,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 ApplyPreloadGridSelection(); if (preloadGridChanged) SavePreloadGridChanges();
             }, (x, z) => { preloadPanChunkX = x; preloadPanChunkZ = z; },
                 time => preloadReplayTime = time, replay is not null, replay?.DurationSeconds ?? 0, preloadReplayTime);
-            preloadImGuiWindow.Closed += () => { preloadEditorExpanded = false; };
+            preloadImGuiWindow.Closed += () => { preloadEditorExpanded = false; owner.ClearReplayPreloadPreview(); };
         }
         preloadImGuiWindow.SetEmptyMessage(PreloadGridSummary());
         if (IsOpened() && !preloadImGuiWindow.IsOpened) preloadImGuiWindow.Open();
@@ -15243,11 +15259,11 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private DirectorReplayViewportTimeline CurrentReplayViewportTimeline()
         => replayViewportDraftTimeline?.DeepClone() ?? owner.ReplayViewportTimeline;
 
-    private bool CommitReplayViewportTimeline(DirectorReplayViewportTimeline timeline)
+    private bool CommitReplayViewportTimeline(DirectorReplayViewportTimeline timeline, IReadOnlyList<DirectorReplayMarker>? addedMarkers = null)
     {
         timeline.SelectedClipId = selectedReplayViewportClipId;
         replayViewportDraftTimeline = null;
-        if (!owner.TryReplaceReplayViewportTimeline(timeline, out _, notify: false))
+        if (!owner.TryReplaceReplayViewportTimeline(timeline, out _, notify: false, addedMarkers: addedMarkers))
         {
             return false;
         }
@@ -15283,6 +15299,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 Lang.Get("vsdirector:replay-element-track-entity")),
             new ReplayViewportSourceOption("element-follow-entity",
                 Lang.Get("vsdirector:replay-element-follow-entity")),
+            new ReplayViewportSourceOption("element-head-motion", Lang.Get("vsdirector:replay-element-head-motion")),
             new ReplayViewportSourceOption("element-camera-shake",
                 Lang.Get("vsdirector:replay-element-camera-shake")),
             new ReplayViewportSourceOption("element-fov",
@@ -15297,14 +15314,15 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 Lang.Get("vsdirector:replay-element-freeze")),
             new ReplayViewportSourceOption("element-color-grade",
                 Lang.Get("vsdirector:replay-element-color-grade")),
+            new ReplayViewportSourceOption("element-weather", Lang.Get("vsdirector:replay-element-weather")),
+            new ReplayViewportSourceOption("element-sky", Lang.Get("vsdirector:replay-element-sky")),
+            new ReplayViewportSourceOption("element-composition", Lang.Get("vsdirector:replay-element-composition")),
             new ReplayViewportSourceOption("element-title",
                 Lang.Get("vsdirector:replay-element-title"))
         };
 
     private IReadOnlyList<DirectorReplayElementTrack> ActiveReplayTimelineElementTracks()
-        => CurrentReplayViewportTimeline().Tracks
-            .Where(track => track.TrackType != DirectorReplayElementTrackType.Marker)
-            .ToArray();
+        => CurrentReplayViewportTimeline().VisibleTracks(expandedReplayPresetGroups).ToArray();
 
     private static string ReplayTimelineElementTrackName(ReplayTimelineElementKind kind)
         => Lang.Get(kind switch
@@ -15316,6 +15334,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             ReplayTimelineElementKind.TrackEntity => "vsdirector:replay-element-track-entity",
             ReplayTimelineElementKind.FollowEntity => "vsdirector:replay-element-follow-entity",
             ReplayTimelineElementKind.CameraShake => "vsdirector:replay-element-camera-shake",
+            ReplayTimelineElementKind.HeadMotion => "vsdirector:replay-element-head-motion",
             ReplayTimelineElementKind.Fov => "vsdirector:replay-element-fov",
             ReplayTimelineElementKind.Timelapse => "vsdirector:replay-element-timelapse",
             ReplayTimelineElementKind.TimeOfDay => "vsdirector:replay-element-time-of-day",
@@ -15324,6 +15343,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             ReplayTimelineElementKind.VoiceAudio => "vsdirector:replay-element-voice-audio",
             ReplayTimelineElementKind.ColorGrade => "vsdirector:replay-element-color-grade",
             ReplayTimelineElementKind.Title => "vsdirector:replay-element-title",
+            ReplayTimelineElementKind.PresetGroup => "vsdirector:replay-element-preset-group",
+            ReplayTimelineElementKind.Composition => "vsdirector:replay-element-composition",
+            ReplayTimelineElementKind.Sky => "vsdirector:replay-element-sky",
+            ReplayTimelineElementKind.Weather => "vsdirector:replay-element-weather",
             _ => "vsdirector:replay-element-add"
         });
 
@@ -15338,6 +15361,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             DirectorReplayElementTrackType.TrackEntity => ReplayTimelineElementKind.TrackEntity,
             DirectorReplayElementTrackType.FollowEntity => ReplayTimelineElementKind.FollowEntity,
             DirectorReplayElementTrackType.CameraShake => ReplayTimelineElementKind.CameraShake,
+            DirectorReplayElementTrackType.HeadMotion => ReplayTimelineElementKind.HeadMotion,
             DirectorReplayElementTrackType.Fov => ReplayTimelineElementKind.Fov,
             DirectorReplayElementTrackType.Timelapse => ReplayTimelineElementKind.Timelapse,
             DirectorReplayElementTrackType.TimeOfDay => ReplayTimelineElementKind.TimeOfDay,
@@ -15346,6 +15370,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             DirectorReplayElementTrackType.VoiceAudio => ReplayTimelineElementKind.VoiceAudio,
             DirectorReplayElementTrackType.ColorGrade => ReplayTimelineElementKind.ColorGrade,
             DirectorReplayElementTrackType.Title => ReplayTimelineElementKind.Title,
+            DirectorReplayElementTrackType.PresetGroup => ReplayTimelineElementKind.PresetGroup,
+            DirectorReplayElementTrackType.Composition => ReplayTimelineElementKind.Composition,
+            DirectorReplayElementTrackType.Sky => ReplayTimelineElementKind.Sky,
+            DirectorReplayElementTrackType.Weather => ReplayTimelineElementKind.Weather,
             _ => ReplayTimelineElementKind.Camera
         };
 
@@ -15360,6 +15388,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             ReplayTimelineElementKind.TrackEntity => DirectorReplayElementTrackType.TrackEntity,
             ReplayTimelineElementKind.FollowEntity => DirectorReplayElementTrackType.FollowEntity,
             ReplayTimelineElementKind.CameraShake => DirectorReplayElementTrackType.CameraShake,
+            ReplayTimelineElementKind.HeadMotion => DirectorReplayElementTrackType.HeadMotion,
             ReplayTimelineElementKind.Fov => DirectorReplayElementTrackType.Fov,
             ReplayTimelineElementKind.Timelapse => DirectorReplayElementTrackType.Timelapse,
             ReplayTimelineElementKind.TimeOfDay => DirectorReplayElementTrackType.TimeOfDay,
@@ -15368,6 +15397,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             ReplayTimelineElementKind.VoiceAudio => DirectorReplayElementTrackType.VoiceAudio,
             ReplayTimelineElementKind.ColorGrade => DirectorReplayElementTrackType.ColorGrade,
             ReplayTimelineElementKind.Title => DirectorReplayElementTrackType.Title,
+            ReplayTimelineElementKind.PresetGroup => DirectorReplayElementTrackType.PresetGroup,
+            ReplayTimelineElementKind.Composition => DirectorReplayElementTrackType.Composition,
+            ReplayTimelineElementKind.Sky => DirectorReplayElementTrackType.Sky,
+            ReplayTimelineElementKind.Weather => DirectorReplayElementTrackType.Weather,
             _ => DirectorReplayElementTrackType.Camera
         };
 
@@ -15405,6 +15438,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void EnsureReplayTimelineElementTrackVisible(Guid trackId)
     {
+        var parent = CurrentReplayViewportTimeline().Tracks.FirstOrDefault(t => t.Id == trackId)?.ParentGroupId ?? Guid.Empty;
+        if (parent != Guid.Empty) expandedReplayPresetGroups.Add(parent);
         IReadOnlyList<DirectorReplayElementTrack> tracks = ActiveReplayTimelineElementTracks();
         int index = tracks.ToList().FindIndex(track => track.Id == trackId);
         if (index < 0 || replayTimelineBounds is null)
@@ -15412,7 +15447,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             return;
         }
         var rows = ReplayRows();
-        double available = replayTimelineBounds.OuterHeight / GuiElement.scaled(1) - ReplayTimelineHeaderHeight;
+        double available = replayTimelineBounds.OuterHeight / GuiElement.scaled(1) - ReplayTimelineHeaderHeight - TimelineFooterHeight;
         if (index < replayTimelineFirstVisibleTrack)
         {
             replayTimelineFirstVisibleTrack = index;
@@ -15513,9 +15548,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private bool ClearReplayTrackKeyframes()
     {
         DirectorReplayViewportTimeline timeline = owner.ReplayViewportTimeline;
-        timeline.Clips.RemoveAll(clip => clip.TrackId == replayFloatingTrackId);
-        timeline.ElementKeyframes.RemoveAll(keyframe => keyframe.TrackId == replayFloatingTrackId);
-        if (selectedReplayElementTrackId == replayFloatingTrackId)
+        var family = timeline.TrackFamily(replayFloatingTrackId);
+        timeline.Clips.RemoveAll(clip => family.Contains(clip.TrackId));
+        timeline.ElementKeyframes.RemoveAll(keyframe => family.Contains(keyframe.TrackId));
+        if (family.Contains(selectedReplayElementTrackId))
         {
             selectedReplayViewportClipId = Guid.Empty;
             selectedReplayElementKeyframeId = Guid.Empty;
@@ -15665,16 +15701,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             return;
         }
-        bool alreadyOpen = replayFloatingEditorKind == ReplayFloatingEditorKind.CameraKeyframe;
-        replayFloatingEditorKind = ReplayFloatingEditorKind.CameraKeyframe;
-        if (alreadyOpen)
-        {
-            ComposeWorkflowCanvas();
-        }
-        else
-        {
-            ShowReplayFloatingEditor(ReplayFloatingEditorKind.CameraKeyframe);
-        }
+        ShowReplayFloatingEditor(ReplayFloatingEditorKind.CameraKeyframe);
     }
 
     private void OpenSelectedReplayElementKeyframeEditor()
@@ -15683,16 +15710,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             return;
         }
-        bool alreadyOpen = replayFloatingEditorKind == ReplayFloatingEditorKind.ElementKeyframe;
-        replayFloatingEditorKind = ReplayFloatingEditorKind.ElementKeyframe;
-        if (alreadyOpen)
-        {
-            ComposeWorkflowCanvas();
-        }
-        else
-        {
-            ShowReplayFloatingEditor(ReplayFloatingEditorKind.ElementKeyframe);
-        }
+        ShowReplayFloatingEditor(ReplayFloatingEditorKind.ElementKeyframe);
     }
 
     private void CloseReplayFloatingEditor()
@@ -15725,15 +15743,20 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             "element-track-entity" => DirectorReplayElementTrackType.TrackEntity,
             "element-follow-entity" => DirectorReplayElementTrackType.FollowEntity,
             "element-camera-shake" => DirectorReplayElementTrackType.CameraShake,
+            "element-head-motion" => DirectorReplayElementTrackType.HeadMotion,
             "element-fov" => DirectorReplayElementTrackType.Fov,
             "element-timelapse" => DirectorReplayElementTrackType.Timelapse,
             "element-time-of-day" => DirectorReplayElementTrackType.TimeOfDay,
             "element-freeze" => DirectorReplayElementTrackType.Freeze,
             "element-color-grade" => DirectorReplayElementTrackType.ColorGrade,
             "element-title" => DirectorReplayElementTrackType.Title,
+            "element-composition" => DirectorReplayElementTrackType.Composition,
+            "element-sky" => DirectorReplayElementTrackType.Sky,
+            "element-weather" => DirectorReplayElementTrackType.Weather,
             _ => DirectorReplayElementTrackType.Camera
         };
         DirectorReplayViewportTimeline timeline = owner.ReplayViewportTimeline;
+        if (type == DirectorReplayElementTrackType.HeadMotion) return AddReplayHeadMotionGroup(timeline);
         DirectorReplayElementTrack track = new() { TrackType = type };
         timeline.Tracks.Add(track);
         if (!CommitReplayViewportTimeline(timeline))
@@ -15748,6 +15771,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             return AddFollowEntitySegment(track);
         }
+        if (type == DirectorReplayElementTrackType.HeadMotion) return AddReplayElementKeyframeAtHead(track);
         return SelectReplayTimelineElementTrack(track.Id);
     }
 
@@ -15759,6 +15783,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             return true;
         }
+        if (track.TrackType == DirectorReplayElementTrackType.PresetGroup) return ToggleReplayPresetGroup(track.Id);
         selectedReplayElementTrackId = track.Id;
         selectedReplayTimelineElementTrack = ReplayTimelineElementKindFor(track.TrackType);
         return track.TrackType == DirectorReplayElementTrackType.Camera
@@ -15925,7 +15950,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     {
         DirectorReplayElementTrackType trackType = track.TrackType;
         if (trackType is DirectorReplayElementTrackType.Camera
-            or DirectorReplayElementTrackType.Marker)
+            or DirectorReplayElementTrackType.PresetGroup)
         {
             return true;
         }
@@ -15980,6 +16005,11 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 keyframe.Y = pose.Y + Math.Sin(pitch) * distance;
                 keyframe.Z = pose.Z - Math.Cos(yaw) * horizontal;
             }
+        }
+        if (DirectorReplayVisualElements.IsVisual(trackType))
+        {
+            keyframe.VisualSettings = DirectorReplayVisualElements.Evaluate(CurrentReplayViewportTimeline(), time);
+            keyframe.InterpolationToNext = DirectorReplayElementInterpolation.Hold;
         }
         if (trackType == DirectorReplayElementTrackType.TrackEntity)
         {
@@ -16090,7 +16120,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             return true;
         }
 
-        if (selectedReplayElementTrackId == trackId)
+        if (!timeline.Tracks.Any(track => track.Id == selectedReplayElementTrackId))
         {
             selectedReplayElementTrackId = Guid.Empty;
             selectedReplayTimelineElementTrack = null;
@@ -18923,7 +18953,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     /// <summary>
     /// Ctrl+wheel zoom. Steps through the ladder, keeps the tick under the mouse in place,
-    /// and zooming out stops once the whole recording is visible.
+    /// and allows empty space beyond the recording when zooming out.
     /// </summary>
     private void ZoomReplayTimeline(double direction, double mouseX)
     {
@@ -18937,47 +18967,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         double anchorTick = replayTimelineScrollTicks
             + (mouseX - left)
                 / DirectorTimelineCoordinateMath.PositivePixelsPerTick(GuiElement.scaled(current));
-        double fit = ReplayTimelineFitPixelsPerTick(replayTimelineBounds);
-        if (direction > 0d)
-        {
-            // In: the coarsest level that is finer than the current zoom.
-            int index = -1;
-            for (int i = ReplayTimelineMinorTickSteps.Length - 1; i >= 0; i--)
-            {
-                if (ReplayTimelineBasePixelsPerTick / ReplayTimelineMinorTickSteps[i] > current * 1.001d)
-                {
-                    index = i;
-                    break;
-                }
-            }
-            if (index < 0) return;
-            replayTimelineTickScaleIndex = index;
-            replayTimelineFitPixelsPerTick = null;
-        }
-        else
-        {
-            // Out: the finest level that is coarser than the current zoom, but never
-            // further than showing the whole recording.
-            if (current <= fit * 1.001d) return;
-            int index = -1;
-            for (int i = 0; i < ReplayTimelineMinorTickSteps.Length; i++)
-            {
-                if (ReplayTimelineBasePixelsPerTick / ReplayTimelineMinorTickSteps[i] < current * 0.999d)
-                {
-                    index = i;
-                    break;
-                }
-            }
-            if (index < 0 || ReplayTimelineBasePixelsPerTick / ReplayTimelineMinorTickSteps[index] <= fit)
-            {
-                replayTimelineFitPixelsPerTick = fit;
-            }
-            else
-            {
-                replayTimelineTickScaleIndex = index;
-                replayTimelineFitPixelsPerTick = null;
-            }
-        }
+        double minimum = Math.Min(ReplayTimelineFitPixelsPerTick(replayTimelineBounds) / 16,
+            ReplayTimelineBasePixelsPerTick / ReplayTimelineMinorTickSteps[^1]);
+        replayTimelineFitPixelsPerTick = Math.Clamp(current * (direction > 0 ? 1.5 : 1 / 1.5),
+            Math.Max(.000001, minimum), Math.Max(ReplayTimelineBasePixelsPerTick, ReplayTimelineFitPixelsPerTick(replayTimelineBounds)));
         double newPixelsPerTick = GuiElement.scaled(ReplayTimelinePixelsPerTick);
         replayTimelineScrollTicks = anchorTick
             - (mouseX - left)
@@ -19364,7 +19357,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         return mouseX >= replayTimelineBounds.renderX
             && mouseX < ReplayTimelineContentLeft(replayTimelineBounds)
             && localY >= GuiElement.scaled(ReplayTimelineHeaderHeight)
-            && localY < replayTimelineBounds.OuterHeight;
+            && localY < replayTimelineBounds.OuterHeight - GuiElement.scaled(TimelineFooterHeight);
     }
 
     private void ScrollReplayTimelineTracks(int delta)
@@ -19373,11 +19366,11 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             return;
         }
-        var rows = new DirectorTimelineRows(ActiveReplayTimelineElementTracks().Select(t => TrackHeight(t.Id)).Append(40));
+        var rows = new DirectorTimelineRows(ActiveReplayTimelineElementTracks().Select(t => TrackHeight(t.Id)));
         replayTimelineFirstVisibleTrack = Math.Clamp(
             replayTimelineFirstVisibleTrack + delta,
             0,
-            rows.MaxFirst(replayTimelineBounds.OuterHeight / GuiElement.scaled(1) - ReplayTimelineHeaderHeight));
+            rows.MaxFirst(replayTimelineBounds.OuterHeight / GuiElement.scaled(1) - ReplayTimelineHeaderHeight - TimelineFooterHeight));
     }
 
     private bool TrySelectReplayViewportTrack(double mouseX, double mouseY)
@@ -19404,16 +19397,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         }
         replayTimelineBounds.CalcWorldBounds();
         double localY = mouseY - replayTimelineBounds.renderY;
-        double trackTop = GuiElement.scaled(ReplayTimelineHeaderHeight);
-        double rowHeight = GuiElement.scaled(ReplayTimelineTrackHeight);
-        if (localY < trackTop || localY >= replayTimelineBounds.OuterHeight)
-        {
-            return false;
-        }
-        var rows = ReplayRows();
-        double addTop = rows.Top(rows.Count) - rows.Top(replayTimelineFirstVisibleTrack);
-        double y = TimelineLocalY(mouseY, true);
-        return y >= addTop && y < addTop + 40;
+        return localY >= replayTimelineBounds.OuterHeight - GuiElement.scaled(TimelineFooterHeight)
+            && localY < replayTimelineBounds.OuterHeight;
     }
 
     private bool TryBeginReplayElementTrackReorder(double mouseX, double mouseY)
@@ -19457,9 +19442,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         }
         replayTimelineBounds.CalcWorldBounds();
         int targetIndex = TimelineRowAt(mouseY, true);
-        List<DirectorReplayElementTrack> visible = replayViewportDraftTimeline.Tracks
-            .Where(track => track.TrackType != DirectorReplayElementTrackType.Marker)
-            .ToList();
+        List<DirectorReplayElementTrack> visible = replayViewportDraftTimeline.VisibleTracks(expandedReplayPresetGroups).ToList();
         if (visible.Count < 2)
         {
             return;
@@ -19470,16 +19453,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             return;
         }
-        DirectorReplayElementTrack moved = visible[sourceIndex];
-        visible.RemoveAt(sourceIndex);
-        visible.Insert(targetIndex, moved);
-        int visibleIndex = 0;
-        replayViewportDraftTimeline.Tracks = replayViewportDraftTimeline.Tracks
-            .Select(track => track.TrackType == DirectorReplayElementTrackType.Marker
-                ? track
-                : visible[visibleIndex++])
-            .ToList();
-        replayViewportDraftTimeline.SyncActiveSceneFromTimeline();
+        int storedIndex = replayViewportDraftTimeline.Tracks.FindIndex(t => t.Id == visible[targetIndex].Id);
+        if (!DirectorReplayViewportTimeline.MoveTrack(replayViewportDraftTimeline, replayElementTrackReorderId, storedIndex)) return;
         replayElementTrackReorderIndex = targetIndex;
         ComposeTimeline();
     }
@@ -19515,11 +19490,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
         double replayDuration = Math.Max(0.05d, owner.ReplayDurationSeconds);
         double pixelsPerTick = GuiElement.scaled(ReplayTimelinePixelsPerTick);
-        replayViewportDragMoved |= Math.Abs(mouseX - replayViewportDragStartMouseX)
-            >= GuiElement.scaled(2d);
-        double delta = (mouseX - replayViewportDragStartMouseX)
-            / DirectorTimelineCoordinateMath.PositivePixelsPerTick(pixelsPerTick)
-            / ReplayTimelineTicksPerSecond;
+        if (!DirectorTimelineCoordinateMath.TryDragTime(0, replayViewportDragStartMouseX, mouseX,
+            pixelsPerTick * ReplayTimelineTicksPerSecond, GuiElement.scaled(1), replayViewportDragMoved, out double delta)) return;
+        replayViewportDragMoved = true;
         switch (replayViewportDragMode)
         {
             case ReplayViewportDragMode.Move:
@@ -19563,7 +19536,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         replayViewportDraftTimeline = null;
         replayKeyframeDragTime = double.NaN;
         replayViewportDragMoved = false;
-        if (timeline is not null)
+        if (timeline is not null && !openEditor)
         {
             CommitReplayViewportTimeline(timeline);
         }
@@ -19660,7 +19633,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     private void BeginReplayAuxiliaryKeyframeDrag(
         ReplayAuxiliaryKeyframeDragKind kind,
-        Guid id)
+        Guid id, double mouseX)
     {
         double time = kind switch
         {
@@ -19677,6 +19650,8 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             return;
         }
 
+        replayAuxiliaryDragMouseX = mouseX;
+        replayAuxiliaryDragOriginalTime = time;
         replayAuxiliaryKeyframeDragKind = kind;
         replayAuxiliaryKeyframeDragMoved = false;
         DirectorReplayElementKeyframe? element = kind == ReplayAuxiliaryKeyframeDragKind.Element
@@ -19749,7 +19724,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (kind == ReplayAuxiliaryKeyframeDragKind.Marker)
         {
             DirectorReplayMarker? marker = owner.ReplayMarkers.FirstOrDefault(item => item.Id == id);
-            if (marker is not null)
+            if (moved && marker is not null)
             {
                 owner.TryUpdateReplayMarker(id, marker.Label, time, out _);
             }
@@ -19775,7 +19750,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             DirectorReplayViewportTimeline timeline = owner.ReplayViewportTimeline;
             DirectorReplayElementKeyframe? keyframe = timeline.ElementKeyframes.FirstOrDefault(
                 item => item.Id == id);
-            if (keyframe is not null && (moved || !timelapseEnd))
+            if (keyframe is not null && moved)
             {
                 keyframe.TimeSeconds = ReplayTimelineTickAt(time) / ReplayTimelineTicksPerSecond;
                 CommitReplayViewportTimeline(timeline);
@@ -22319,6 +22294,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         TrackEntity,
         FollowEntity,
         CameraShake,
+        HeadMotion,
         Fov,
         Timelapse,
         TimeOfDay,
@@ -22326,7 +22302,11 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         BlockOverride,
         VoiceAudio,
         ColorGrade,
-        Title
+        Title,
+        Weather,
+        Sky,
+        Composition,
+        PresetGroup
     }
 
     private enum InspectorSectionTarget

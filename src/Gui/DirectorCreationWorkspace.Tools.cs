@@ -101,7 +101,7 @@ internal sealed partial class DirectorCreationWorkspace
             bool enabled=ToolAvailable(entry.Item1);ImGui.BeginDisabled(!enabled);
             using(DirectorImGuiTheme.Button(ActiveTool==entry.Item1?"active":"normal"))
                 if(DirectorImGuiIcons.Button(DirectorImGuiIcons.Get(entry.Item2)+"##tool-"+entry.Item1,new(side,side)))ChooseTool(entry.Item1);
-            if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))ImGui.SetTooltip(L(enabled?entry.Item3:SelectedObject is null?"creation-no-selection":"creation-tool-unavailable"));
+            if(ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))DirectorImGuiTooltip.Show(L(enabled?entry.Item3:SelectedObject is null?"creation-no-selection":"creation-tool-unavailable"));
             ImGui.EndDisabled();
         }
         if(ActiveTool==CreationTool.Rotate)
@@ -118,14 +118,14 @@ internal sealed partial class DirectorCreationWorkspace
             transformMode=transformMode==MODE.LOCAL?MODE.WORLD:MODE.LOCAL;
             if(PartScope)partSpace=transformMode;else objectSpace=transformMode;
         }
-        if(ActiveTool is not CreationTool.Select && ImGui.IsItemHovered())ImGui.SetTooltip(L("creation-axis-space-help"));
+        if(ActiveTool is not CreationTool.Select && ImGui.IsItemHovered())DirectorImGuiTooltip.Show(L("creation-axis-space-help"));
         ImGui.EndDisabled();
         DrawParticleTools();
         void ProjectionTool(string icon,string label,Action action)
         {
             if(ImGui.GetItemRectMax().X+ImGui.GetStyle().ItemSpacing.X+side<=right)ImGui.SameLine();
             if(DirectorImGuiIcons.Button(DirectorImGuiIcons.Get(icon)+"##structure-tool-"+icon,new(side,side)))action();
-            if(ImGui.IsItemHovered())ImGui.SetTooltip(Q(label));
+            if(ImGui.IsItemHovered())DirectorImGuiTooltip.Show(Q(label));
         }
         ProjectionTool("cube","wand",()=>{blueprintCapturing=true;blueprintHasRegion=false;});
         if(SelectedObject?.Projection is not null)

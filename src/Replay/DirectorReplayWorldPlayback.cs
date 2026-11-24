@@ -20,10 +20,11 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
     private int[]? historySolid, historyFluid;
     public void ObserveServerRecordingChunkLoad(int x, int internalY, int z)
     {
-        if (!document.HasHistoricalBaselines || !started) return;
+        if (!started) return;
         int y = internalY - document.WorldSnapshot.Dimension * GlobalConstants.DimensionSizeInChunks;
         var key = new ReplayChunkKey(x, y, z);
-        if (baselineChunks.TryGetValue(key, out var chunk) && chunk.CapturedAtSeconds <= requestedTime)
+        if (baselineChunks.TryGetValue(key, out var chunk)
+            && (!document.HasHistoricalBaselines || chunk.CapturedAtSeconds <= requestedTime))
         {
             if (historyRefreshChunk == key) historyRefreshIndex = 0;
             else if (historyRefreshSet.Add(key)) historyRefreshQueue.Enqueue(key);
@@ -145,10 +146,14 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
 
     public int ModifiedBlockCount => originalBlocks.Count;
 
-    public bool IsBusy
-        => phase != ApplyPhase.None || pendingChunkRedraws.Count > 0;
+    private bool HasPendingChunkRefresh => historyRefreshChunk.HasValue || historyRefreshQueue.Count > 0;
 
-    public bool IsSynchronizing => synchronizing || historyRefreshChunk.HasValue || historyRefreshQueue.Count > 0;
+    // Incoming live chunks replace replay terrain even while paused. Their
+    // restoration must keep the manager advancing until the queue is drained.
+    public bool IsBusy
+        => phase != ApplyPhase.None || HasPendingChunkRefresh || pendingChunkRedraws.Count > 0;
+
+    public bool IsSynchronizing => synchronizing || HasPendingChunkRefresh;
 
     internal bool IsReplayBlockEntity(BlockEntity blockEntity)
         => started
@@ -156,7 +161,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             && replayBlockEntities.TryGetValue(blockEntity, out _);
 
     public bool IsReady
-        => started && phase == ApplyPhase.None && pendingChunkRedraws.Count == 0;
+        => started && !IsBusy;
 
     public string Phase => phase.ToString().ToLowerInvariant();
 
@@ -249,9 +254,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
 
     public void Advance(int operationBudget)
     {
-        if (phase == ApplyPhase.None && (historyRefreshChunk.HasValue || historyRefreshQueue.Count > 0)) AdvanceHistoryRefresh(operationBudget);
-        if (!started
-            || (phase == ApplyPhase.None && pendingChunkRedraws.Count == 0))
+        if (!started || !IsBusy)
         {
             return;
         }
@@ -261,6 +264,14 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         bool wasApplyingState = BeginApplyingState();
         try
         {
+            // Read incoming live blocks before baseline/event work can overwrite
+            // them; those values must survive in originalBlocks for replay exit.
+            if (HasPendingChunkRefresh)
+            {
+                AdvanceHistoryRefresh(remaining, stopwatch);
+                return;
+            }
+
             if (phase == ApplyPhase.Baseline)
             {
                 remaining = AdvanceBaseline(remaining, stopwatch);
@@ -950,9 +961,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         return count;
     }
 
-    private void AdvanceHistoryRefresh(int budget)
+    private void AdvanceHistoryRefresh(int budget, Stopwatch timer)
     {
-        var timer = Stopwatch.StartNew();
         bool wasApplying = BeginApplyingState();
         var bulk = capi.World.GetBlockAccessorBulkUpdate(synchronize: false, relight: true);
         bulk.ReadFromStagedByDefault = true; int staged = 0;
@@ -965,8 +975,11 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                     if (!historyRefreshQueue.TryDequeue(out var next)) break;
                     historyRefreshChunk = next; historyRefreshIndex = 0;
                     var baseline = baselineChunks[next];
-                    historySolid = DirectorReplayChunkCodec.Decode(baseline.SolidRuns, ChunkBlockCount);
-                    historyFluid = DirectorReplayChunkCodec.Decode(baseline.FluidRuns, ChunkBlockCount);
+                    // Before an ordinary delayed capture, the recorded baseline
+                    // is empty, just as it is during baseline/seek reconstruction.
+                    bool captured = baseline.CapturedAtSeconds <= requestedTime;
+                    historySolid = DirectorReplayChunkCodec.Decode(captured ? baseline.SolidRuns : null, ChunkBlockCount);
+                    historyFluid = DirectorReplayChunkCodec.Decode(captured ? baseline.FluidRuns : null, ChunkBlockCount);
                 }
                 var chunk = historyRefreshChunk.Value; int index = historyRefreshIndex++;
                 var key = new BlockKey(chunk.X * 32 + index % 32, chunk.Y * 32 + index / 1024, chunk.Z * 32 + index / 32 % 32, document.WorldSnapshot.Dimension);

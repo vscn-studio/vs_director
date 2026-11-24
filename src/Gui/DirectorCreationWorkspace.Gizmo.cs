@@ -33,14 +33,24 @@ internal sealed partial class DirectorCreationWorkspace
         var axes=new[]{Vector3.UnitX,Vector3.UnitY,Vector3.UnitZ};
         if(transformMode==MODE.LOCAL && Matrix4x4.Decompose(world,out _,out var orientation,out _))
             for(int i=0;i<3;i++)axes[i]=Vector3.Transform(axes[i],Quaternion.Normalize(orientation));
-        float pixels=60*DirectorImGuiTheme.Scale;
-        var outlineWorld=camera ? Session.Frame?.Objects.GetValueOrDefault(Session.SelectedObject)?.World ?? world : world;
-        if(camera) foreach(var edge in DirectorEditorGeometry.CameraOutline) foreach(var point in new[]{edge.A,edge.B})
-            if(Screen(Vector3.Transform(point,outlineWorld)) is { } at) pixels=Math.Max(pixels,Vector2.Distance(center,at)+18*DirectorImGuiTheme.Scale);
+        float radius=DirectorEditorHandles.Radius(units,operation==OPERATION.ROTATE);
+        var pivotClip=Vector4.Transform(new Vector4(world.Translation,1),v*p);
+        float displayScale=DirectorEditorHandles.ProjectionScale(pivotClip.W,radius);
+        Vector2? ProjectHandle(Vector3 offset)
+        {
+            // Project offsets separately to avoid losing small controls at large
+            // world coordinates. Bound their depth so no tip crosses the eye.
+            var delta=Vector4.Transform(new Vector4(offset*displayScale,0),v*p);
+            float w=pivotClip.W+delta.W;
+            if(w<=0) return null;
+            var ndcDelta=new Vector2(delta.X-pivotClip.X/pivotClip.W*delta.W,
+                delta.Y-pivotClip.Y/pivotClip.W*delta.W)/w;
+            return center+ndcDelta*new Vector2(size.X/2,-size.Y/2)/displayScale;
+        }
         bool interactive=ImGui.IsMouseHoveringRect(min,min+size)&&(!ImGui.IsWindowHovered(ImGuiHoveredFlags.AnyWindow)||ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows));
         bool pose=Session.PoseEditing&&Session.SelectedPart!=Guid.Empty;
-        handleHover=creationHandles.Draw(draw,center,units,pixels*units,view.Select(x=>(double)x).ToArray(),axes,operation==OPERATION.ROTATE,operation==OPERATION.SCALE,handleAxis,interactive,handleHover,pose?poseRotationAxis:objectRotationAxis,
-            operation==OPERATION.ROTATE ? null : offset=>Screen(world.Translation+offset));
+        handleHover=creationHandles.Draw(draw,center,units,radius,view.Select(x=>(double)x).ToArray(),axes,operation==OPERATION.ROTATE,operation==OPERATION.SCALE,handleAxis,interactive,handleHover,pose?poseRotationAxis:objectRotationAxis,
+            operation==OPERATION.ROTATE ? null : ProjectHandle);
         if(handleAxis<0 && handleHover>=0 && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
             handleAxis=handleHover;handleStart=world;handlePointer=io.MousePos;handleCenter=center;handleUnits=units;
@@ -76,7 +86,7 @@ internal sealed partial class DirectorCreationWorkspace
             float amount=Vector3.Dot(offset,handleDirection);
             if(handleOperation==OPERATION.SCALE)
             {
-                float factor=Math.Max(.01f,1+amount/(60*handleUnits*DirectorImGuiTheme.Scale));
+                float factor=Math.Max(.01f,1+amount/DirectorEditorHandles.Radius(handleUnits,false));
                 var scale=Vector3.One;scale[handleAxis]=factor;result=Matrix4x4.CreateScale(scale)*handleStart;
             }
             else

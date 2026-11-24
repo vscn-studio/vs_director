@@ -14,19 +14,7 @@ internal sealed partial class DirectorWorkspaceHud
     }
 
     private float CameraGizmoRadius(CameraPreset pose)
-    {
-        Vec3d pivot = CameraPivot(pose);
-        float units = CameraWorldUnitsPerPixel(pivot), scale = DirectorImGuiTheme.Scale;
-        float pixels = CameraHandleRadius(pivot) / units;
-        if (!ProjectCameraPoint(pivot, out var center)) return units * pixels;
-        var basis = CameraHeadBasis(pose);
-        Vec3d origin = new(pose.X, pose.Y + pose.Dimension * 32768d, pose.Z);
-        foreach (var edge in CameraOutline)
-        foreach (var point in new[] { edge.A, edge.B })
-            if (ProjectCameraPoint(Add(origin, basis.Right * point.X + basis.Up * point.Y + basis.Back * point.Z), out var screen))
-                pixels = Math.Max(pixels, Vector2.Distance(center, screen) + 18 * scale);
-        return units * pixels;
-    }
+        => DirectorEditorHandles.Radius(CameraWorldUnitsPerPixel(CameraPivot(pose)), cameraTool == CameraTool.Rotate);
 
     private bool ProjectCameraHandlePoint(Vec3d pivot, Vec3d point, out Vector2 screen)
     {
@@ -212,19 +200,6 @@ internal sealed partial class DirectorWorkspaceHud
         bool highlighted = cameraDragAxisIndex == handle || cameraDragAxisIndex < 0 && cameraHoverAxis == handle;
         DrawCameraHandleQuad(draw, pivot, [At(.30f, .30f), At(.58f, .30f), At(.58f, .58f), At(.30f, .58f)],
             color, handle, highlighted ? 0xb0000000u : 0x55000000u);
-    }
-
-    private void DrawCameraPivotBox(ImDrawListPtr draw, Vec3d pivot, float length, int axis, uint color)
-    {
-        Vector3 tip = CameraAxis(axis) * length;
-        float half = Math.Min(length * .10f, CameraWorldUnitsPerPixel(pivot) * 6 * DirectorImGuiTheme.Scale);
-        Vec3d[] corners = Enumerable.Range(0, 8).Select(i => Add(pivot,
-            tip + new Vector3((i & 1) == 0 ? -half : half, (i & 2) == 0 ? -half : half, (i & 4) == 0 ? -half : half))).ToArray();
-        int[][] faces = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
-        var m = capi.Render.PerspectiveViewMat;
-        double Depth(int[] face) => face.Average(i => m[2] * corners[i].X + m[6] * corners[i].Y + m[10] * corners[i].Z + m[14]);
-        foreach (var face in faces.OrderBy(Depth))
-            DrawCameraHandleQuad(draw, pivot, face.Select(i => corners[i]).ToArray(), color, axis, 0xe0000000);
     }
 
     private void DrawCameraHandleQuad(ImDrawListPtr draw, Vec3d pivot, Vec3d[] corners, uint color, int handle, uint alpha)

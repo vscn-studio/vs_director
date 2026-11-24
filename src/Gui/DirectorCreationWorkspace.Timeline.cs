@@ -62,7 +62,7 @@ internal sealed partial class DirectorCreationWorkspace
             ImGui.TextWrapped(Runtime.Status);
             ImGui.TextUnformatted(FormatTime(Session.Time));
             if (DirectorImGuiIcons.Button(DirectorImGuiIcons.Get("stop") + "##performance-stop", new(28 * DirectorImGuiTheme.Scale))) Run(() => Runtime.StopPerformance());
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-stop-recording"));
+            if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-stop-recording"));
             return;
         }
         if (Runtime.Exporting)
@@ -265,7 +265,7 @@ internal sealed partial class DirectorCreationWorkspace
                 {
                     if (DirectorImGuiIcons.Button(DirectorImGuiIcons.Get(track.Enabled ? "eye" : "eye-off") + "##enabled", new(28 * scale)))
                         Continue(() => Session.Edit(L("creation-enable-disable-track"), _ => track.Enabled = !track.Enabled));
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-enable-disable-track"));
+                    if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-enable-disable-track"));
                     ImGui.SameLine(0, 2 * scale);
                     if (DirectorImGuiIcons.Button(DirectorImGuiIcons.Get("plus") + "##add-key", new(28 * scale)))
                         Continue(() => Session.Edit(L("creation-add-transform-key"), _ =>
@@ -274,7 +274,7 @@ internal sealed partial class DirectorCreationWorkspace
                             var key = DirectorCreationEdits.SetKey(track, EditTime, value);
                             trackId = track.Id; keyId = key.Id; clipId = Guid.Empty; poseEditorActor=Guid.Empty;actionPoseEditorTime=null;timelineEditor = true;
                         }));
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(L("creation-add-transform-key"));
+                    if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-add-transform-key"));
                 }
                 ImGui.SetCursorScreenPos(afterRow);
                 ImGui.PopID();
@@ -398,7 +398,7 @@ internal sealed partial class DirectorCreationWorkspace
                     X(timelineDragTarget), X(timelineDragOrigin), scale);
             bool dragging = double.IsFinite(timelineDragTarget);
             DirectorTimelineCursor.Label(draw, new(x0, ImGui.GetWindowPos().Y), new(rightEdge, Math.Min(gridBottom, draw.GetClipRectMax().Y)),
-                X(dragging ? timelineDragTarget : EditTime), FormatTime(dragging ? timelineDragTarget : EditTime),
+                X(dragging ? timelineDragTarget : EditTime), DirectorTimelineCursor.TimeLabel(dragging ? timelineDragTarget : EditTime, DirectorCreationTiming.FramesPerSecond),
                 dragging ? DirectorTimelineCursor.Destination : DirectorImGuiTheme.Accent, scale);
             draw.PopClipRect();
         }
@@ -431,7 +431,7 @@ internal sealed partial class DirectorCreationWorkspace
         // The object-row button owns the active click. Reuse its hit test so
         // ImGui's active-item window guard cannot swallow the first bar click.
         bool hovered=ImGui.IsItemHovered()&&io.MousePos.X>=left&&io.MousePos.X<=right&&ImGui.IsMouseHoveringRect(min,max);
-        if(hovered)ImGui.SetTooltip(L("creation-particle-timeline-hint"));
+        if(hovered)DirectorImGuiTooltip.Show(L("creation-particle-timeline-hint"));
         if(hovered&&ImGui.IsMouseClicked(ImGuiMouseButton.Left)&&!Session.HasTransformDraft)
         {
             Select(obj);Session.BeginGesture();draggedParticle=obj.Id;
@@ -486,7 +486,7 @@ internal sealed partial class DirectorCreationWorkspace
             var command = commands[i];
             using var tone = DirectorImGuiTheme.Button(command.Active ? "active" : "normal", quiet: true);
             if (DirectorImGuiIcons.Button(DirectorImGuiIcons.Get(command.Glyph) + "##" + command.Id, new(side))) command.Run();
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip(command.Tip);
+            if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(command.Tip);
         }
     }
     private void SeekEditTime(double time)

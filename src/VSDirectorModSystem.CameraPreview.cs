@@ -7,6 +7,7 @@ public sealed partial class VSDirectorModSystem
 {
     private CameraPreset? replayShootingPose;
     private CameraPreset? replayShootingBasePose;
+    private CameraPreset? replayElementReturnPose;
     private Guid replayShootingSourceId;
     private readonly Guid replayPreviewViewId = Guid.NewGuid();
     private IDirectorOffscreenFrameSink? replayPreviewSink;
@@ -45,6 +46,7 @@ public sealed partial class VSDirectorModSystem
             pose.Pitch += (float)(Math.Sin(time * Math.PI * 2 * frequencyY + Math.PI / 2) * amplitudeY);
         }
         if (visual.OverrideRoll) pose.Roll = visual.Roll;
+        if (!IsRecordingHeadMotion && DirectorHeadMotion.TrySample(timeline, time, out var headMotion)) pose = DirectorHeadMotion.Apply(pose, headMotion);
         return pose;
     }
 

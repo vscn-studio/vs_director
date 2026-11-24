@@ -20,6 +20,43 @@ using VSDirector.Networking;
 using ProtoBuf;
 
 const string harmonyId = "vscn.vsdirector.patch-probe";
+if (args.Contains("--replay-actions"))
+{
+    DirectorReplayActionChecks.Run();
+    return 0;
+}
+if (args.Contains("--head-motion"))
+{
+    DirectorHeadTrackingChecks.Run();
+    return 0;
+}
+if (args.Contains("--replay-tree"))
+{
+    int arg = Array.IndexOf(args, "--replay-tree");
+    DirectorReplayTreeChecks.Run(args.Length > arg + 1 ? args[arg + 1] : null);
+    return 0;
+}
+if (args.Contains("--preload"))
+{
+    DirectorOptionalServerChecks.Run();
+    DirectorPreloadChecks.Run();
+    return 0;
+}
+if (args.Contains("--imgui-browsers"))
+{
+    DirectorImGuiProbe.RunBrowserChecks();
+    return 0;
+}
+if (args.Contains("--replay-editing"))
+{
+    DirectorImGuiProbe.RunReplayEditingChecks();
+    return 0;
+}
+if (args.Contains("--imgui-handles"))
+{
+    DirectorImGuiProbe.RunHandleChecks();
+    return 0;
+}
 if (args.Contains("--imgui-fonts"))
 {
     DirectorImGuiProbe.RunFontChecks();

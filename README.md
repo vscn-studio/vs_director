@@ -8,14 +8,14 @@ The mod supports local client workflows and optional server features for permiss
 
 | Component | Requirement |
 | --- | --- |
-| Vintage Story | 1.22.3 minimum; the same package also targets 1.23.0-pre.1 |
-| VSImGui | 1.2.7, installed separately |
-| FFmpeg | Required for direct MP4 recording and GIF/APNG export |
-| OBS Studio | Required for OBS recording; the companion source plugin targets OBS Studio 32.0.4 |
+| [Vintage Story](https://www.vintagestory.at/) | 1.22.3 minimum; the same package also targets 1.23.0-pre.1 |
+| [VSImGui](https://mods.vintagestory.at/imgui) | 1.2.7, installed separately |
+| [FFmpeg](https://ffmpeg.org/download.html) | Required for direct MP4 recording and GIF/APNG export |
+| [OBS Studio](https://obsproject.com/download) | Required for OBS recording; the companion source plugin targets OBS Studio 32.0.4 |
 
 The ImGui workspace uses an installed system Chinese font to supplement missing characters; no CJK font is bundled. Windows uses Microsoft YaHei or another available Chinese font, macOS uses its Chinese system fonts, and Linux uses Fontconfig to locate a font with Chinese coverage. Systems without Chinese fonts need one installed. FontSettings is optional; its selected font and size are preserved, and Director restores missing characters and editor icons after font rebuilds.
 
-Install the VS Director mod ZIP and VSImGui in the client's Mods directory. Open the Director panel with **F9**; keyboard bindings can be changed in the game's controls settings. For the companion OBS plugin, see the [installation and build instructions](obs-plugin/README.md).
+Install the VS Director mod ZIP and VSImGui in the client's Mods directory. Open the Director panel with **F9**; keyboard bindings can be changed in the game's controls settings. For the companion [OBS plugin](https://mods.vintagestory.at/vsdirectorobsplugins), see the [installation and build instructions](obs-plugin/README.md).
 
 The 1.23 adaptation covers replay serialization and block entities, camera FOV, offscreen terrain visibility, native text inputs, and workspace picking. The [compatibility checks](#build-and-validation) exercise the same DLL against both game versions. Complete recording/export workflows and multiplayer sessions still require in-game verification. Later 1.23 builds require separate validation.
 
@@ -37,7 +37,7 @@ The package is universal and declares `requiredOnServer: false`. Servers that in
 - **Recording and export:** replay video export and live offscreen recording from fixed, path, or follow cameras, using OBS or direct FFmpeg MP4 output. The companion OBS source receives offscreen video and spatial camera audio.
 - **Voice integration:** a public [DirectorVoiceApi](src/Voice/DirectorVoiceApi.cs) for spatial PCM audio capture, replay, and export.
 
-Replay presets write ordinary timeline data that remains editable after insertion. Replay title cards and fade overlays currently appear in the on-screen preview and are not included in offscreen export.
+Each new replay preset creates one collapsible timeline group. Expand it to edit individual elements, or disable/delete the group to manage the entire preset. Weather, sky and composition effects are timeline elements that leave the scene defaults intact. Ctrl+Z and Ctrl+Shift+Z undo and redo replay edits throughout the workspace; text fields retain their own text undo. Existing ungrouped edits remain editable. Replay title cards and fade overlays currently appear in the on-screen preview and are not included in offscreen export.
 
 ## Creation workspace
 
@@ -111,11 +111,25 @@ The script builds once, checks native member references, and runs PatchProbe wit
 
 To run the ImGui font regression checks independently, run PatchProbe with `--imgui-fonts` (pass the same `VintageStoryPath` and `VSImGuiPath` build properties). These checks cover Chinese glyphs, the selected default font, atlas rebuilds, and font scope restoration. In-game validation should also open the Chinese workspace without FontSettings, then repeat with FontSettings installed and change its font selection.
 
+## Head tracking and head-motion elements
+
+On Windows, select **FreeTrack 2.0 Enhanced** as OpenTrack's output. Open **Settings → Interface → Head tracking settings**, enable tracking, and apply. Tracking is disabled by default. Keypad **\*** opens settings, **5** recenters, and **0** enables or pauses tracking; bindings can be changed in the game's controls settings. Configuration is stored separately in `vsdirector-headtracking.json`.
+
+The integrated controls include yaw, pitch and roll gains, translation gains and limits for each axis, baseline offsets, smoothing, first-person model hiding, head-controlled crouching (hold or toggle, with axis and hysteresis), and threshold or continuous lean-to-zoom with mouse sensitivity, smoothing and vignette controls. Crouching and first-person model options apply to ordinary gameplay. If Zoom Button is installed, its zoom configuration is used. Neither OpenTrack nor Zoom Button is bundled.
+
+In a replay, choose **Add element → Head motion** to create a collapsible group with camera and head-motion children. Open the motion keyframe and select **Record / replace motion**. Activate a director camera and tracking first; use Keypad **5** to recenter. Recording seeks to the keyframe, pauses replay playback and captures movement in real time against a fixed camera baseline. **Stop and save** saves the motion and, if the camera child is empty, adds editable camera keys for the recorded interval. A retake preserves existing camera edits. **Cancel recording** keeps the previous take. Expand the group to edit its children, or mute/delete the entire group. A saved clip supports timeline placement, source in/out trimming, playback rate, strength, independent translation/rotation/zoom toggles, and undo/redo. Changing timing in the motion keyframe settings also resizes its matching two-key camera interval; more elaborate camera animation remains independent. A connection loss or game pause stops and saves the captured portion. Switching replay or starting export cancels an unfinished take.
+
+Recorded motion uses the camera's local axes, including Vintage Story's native 180-degree pitch convention. Disable the camera child to layer motion over another camera, orbit or follow track. Older standalone recordings are wrapped in groups without changing their samples or inventing a camera baseline; their empty camera child can be populated using the camera row's add-key action. Replay, seek, preview and export evaluate stored samples without live tracker input, including on systems without Windows or OpenTrack. Live tracking applies to normal gameplay and director cameras outside replay, and while recording a head-motion element.
+
+When the standalone VS-6DOF mod is installed, it retains ordinary first-person control and VS Director takes over director cameras to avoid double offsets. Director's settings shortcut becomes **Ctrl+Keypad \***. Standalone settings remain separate. Hardware tracking, mod combinations and gameplay should be checked in-game after installation.
+
+This integration adapts [VS-6DOF](https://github.com/bjfishman/VS-6DOF), credited to **DF**, including the [TGU-HansJack fork](https://github.com/TGU-HansJack/VS-6DOF), under [CC0 1.0](licenses/VS-6DOF-CC0.txt). Source notices and the full license are included in the mod ZIP. VS Director's original code remains MIT-licensed.
+
 ## Authors and contributors
 
 | Author | Contributions |
 | --- | --- |
-| [HansJack (VSCN-Studio)](https://github.com/TGU-HansJack) | Project author and maintainer; camera, replay, creation, and recording systems. |
+| [HansJack](https://github.com/TGU-HansJack) | Project author and maintainer; camera, replay, creation, and recording systems. |
 | [HanosThePlacid](https://github.com/HanosThePlacid) | Replay camera preset library, preset browser, supporting timeline features, and camera/timeline usability improvements ([PR #2](https://github.com/vscn-studio/vs_director/pull/2)). |
 
 See the [contributor history](https://github.com/vscn-studio/vs_director/graphs/contributors) for additional contributions. Pull requests, bug reports, and documentation improvements are welcome. Read the [contributing guide](CONTRIBUTING.md) for code style, localization, saved data compatibility, testing, and voice integration requirements.

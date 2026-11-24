@@ -180,7 +180,9 @@ internal static class DirectorImGuiRuntime
         DirectorImGuiIcons.CenterGlyphs(font);
     }
 
-    private static unsafe ImFontPtr CurrentDefaultFont()
+    // Foreground overlays also need the synchronized text font, without changing
+    // the next window's position, viewport or style through UseFont().
+    internal static unsafe ImFontPtr CurrentDefaultFont()
     {
         var io = ImGui.GetIO();
         var fonts = io.Fonts.Fonts;
