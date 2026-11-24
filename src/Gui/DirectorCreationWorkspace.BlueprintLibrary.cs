@@ -143,7 +143,7 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.SetNextWindowSize(new Vector2(350,330)*DirectorImGuiTheme.Scale,ImGuiCond.FirstUseEver);
         if(ImGui.Begin(B("capture")+"###projection-capture",ref blueprintCapturing,ImGuiWindowFlags.NoDocking))
         {
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);ImGui.TextWrapped(B("capture-hint"));
+            ImGui.TextWrapped(B("capture-hint"));
             ImGui.SetNextItemWidth(-1);ImGui.InputText(B("name"),ref blueprintName,128);
             void Corner(string label,ref CreationVector value)
             {

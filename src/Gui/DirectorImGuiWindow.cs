@@ -230,7 +230,6 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
                 | (form?.HasFooter == true || form?.FillContent == true ? ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse : ImGuiWindowFlags.None));
         try
         {
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
             if (visible && form is not null && Document is not null)
             {
                 if (anchorLayoutFrames > 0 && nextPosition is { } anchor)
@@ -306,7 +305,6 @@ internal sealed class DirectorImGuiWindow : DirectorImGuiDialog
         ImGui.PopStyleVar();
         try
         {
-            ImGui.SetWindowFontScale(scale);
             if (nativeDock && !visible) FlushCommit();
             if (!visible || form is null || Document is null) return;
             if (nativeDock)
@@ -816,7 +814,7 @@ internal sealed class DirectorImGuiForm
         AddControl(() =>
         {
             ImGui.PushID(id);
-            if (!ImGui.BeginTable("resource", 2, ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.SizingStretchProp))
+            if (!ImGui.BeginTable("resource", 2, ImGuiTableFlags.NoSavedSettings | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.NoPadOuterX))
             {
                 ImGui.PopID();
                 return;
@@ -827,25 +825,40 @@ internal sealed class DirectorImGuiForm
                 ImGui.TableSetupColumn("action", ImGuiTableColumnFlags.WidthFixed, ImGui.GetFrameHeight());
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                if (ImGui.Selectable(Caption(name, icon) + "###resource-" + id, selected, ImGuiSelectableFlags.AllowDoubleClick))
+                float pad = 5 * DirectorImGuiTheme.Scale;
+                float line = ImGui.GetTextLineHeight();
+                float height = detail.Length > 0 ? 2 * line + 3 * pad : line + 2 * pad;
+                bool clicked = ImGui.Selectable("##select", selected, ImGuiSelectableFlags.AllowDoubleClick,
+                    new Vector2(0, height));
+                UpdateItemBounds("resource-select-" + id);
+                var min = ImGui.GetItemRectMin();
+                var max = ImGui.GetItemRectMax();
+                var draw = ImGui.GetWindowDrawList();
+                if (selected) draw.AddRectFilled(min, new Vector2(min.X + 3 * DirectorImGuiTheme.Scale, max.Y), DirectorImGuiTheme.Accent);
+                float textX = min.X + line + 4 * pad;
+                float width = Math.Max(1, max.X - pad - textX);
+                string title = DirectorImGuiBrowser.Fit(name, width);
+                string summary = DirectorImGuiBrowser.Fit(detail, width);
+                DirectorImGuiBrowser.CenterIcon(icon, min + new Vector2(2 * pad, 0), new Vector2(textX - 2 * pad, max.Y),
+                    selected ? DirectorImGuiTheme.Text : DirectorImGuiTheme.Muted);
+                float y = (min.Y + max.Y - (detail.Length > 0 ? 2 * line + pad : line)) * .5f;
+                draw.PushClipRect(min, max, true);
+                draw.AddText(new Vector2(textX, y), DirectorImGuiTheme.Text, title);
+                if (detail.Length > 0) draw.AddText(new Vector2(textX, y + line + pad), DirectorImGuiTheme.Muted, summary);
+                draw.PopClipRect();
+                if ((title != name || summary != detail) && ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(name + "\n" + detail);
+                if (clicked)
                 {
                     BeforeAction?.Invoke();
                     if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)) activate(); else select();
                 }
-                UpdateItemBounds("resource-select-" + id);
                 if (ImGui.BeginPopupContextItem("resource-actions"))
                 {
                     if (ImGui.MenuItem(activateLabel)) { BeforeAction?.Invoke(); activate(); }
                     ImGui.EndPopup();
                 }
-                if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(name + (detail.Length > 0 ? "\n" + detail : ""));
-                if (detail.Length > 0)
-                {
-                    ImGui.PushStyleColor(ImGuiCol.Text, DirectorImGuiTheme.Muted);
-                    ImGui.TextWrapped(detail);
-                    ImGui.PopStyleColor();
-                }
                 ImGui.TableNextColumn();
+                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (height - ImGui.GetFrameHeight()) * .5f);
                 using var tone = DirectorImGuiTheme.Button(quiet: true);
                 if (DirectorImGuiIcons.Button(Icon("play") + "###activate", new Vector2(ImGui.GetFrameHeight())))
                 { BeforeAction?.Invoke(); activate(); }

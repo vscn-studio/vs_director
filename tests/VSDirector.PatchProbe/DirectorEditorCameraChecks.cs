@@ -47,6 +47,7 @@ internal static partial class DirectorImGuiProbe
         Set("capi", api); Set("config", config);
         Set("game", RuntimeHelpers.GetUninitializedObject(typeof(ClientMain)));
         var harmony = new Harmony("vsdirector.probe.free-camera-handoff");
+        Set("canUseFreeCamera", (Func<bool>)(() => true));
         var activate = AccessTools.Method(type, "TryActivatePose");
         handoffController = controller;
         try

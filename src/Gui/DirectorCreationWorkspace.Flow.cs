@@ -69,7 +69,6 @@ internal sealed partial class DirectorCreationWorkspace
         // same frame. Release the pending action before that early return.
         if (!open || !visible && !ImGui.IsPopupOpen("###creation-pending")) ResolvePendingTransition(null);
         if (!visible) return;
-        ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         try
         {
             if (pendingTransition is null || ImGui.IsKeyPressed(ImGuiKey.Escape))
@@ -119,7 +118,6 @@ internal sealed partial class DirectorCreationWorkspace
         try
         {
             if (!visible) return;
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
             var min = ImGui.GetWindowPos();
             ImGui.GetWindowDrawList().AddLine(min, new(min.X + ImGui.GetWindowWidth(), min.Y), DirectorImGuiTheme.Border);
             void Menu(string name) { requestedMenu = name; menuAnchor = new(ImGui.GetItemRectMin().X, height); }
@@ -132,7 +130,8 @@ internal sealed partial class DirectorCreationWorkspace
                 new("view", L("creation-view-menu"), () => Menu("窗口")),
                 new("settings", L("creation-settings-menu"), () => Menu("设置")),
                 new("save", L("creation-save-project"), () => Continue(Session.Save), Project is not null && Runtime.ProjectWorldMatches),
-                new("export", L("creation-export-menu"), () => auxiliary = "output", Project is not null && Runtime.ProjectWorldMatches)
+                new("export", L("creation-export-menu"), () => auxiliary = "output", Project is not null && Runtime.ProjectWorldMatches),
+                new("about", L("workspace-about"), owner.OpenWorkspaceAbout)
             };
             ImGui.BeginDisabled(Runtime.PerformanceActive);
             float progressWidth=(projectionExport is not null||Runtime.ProjectionRebuilding||ShowParticleToolbarProgress)?Math.Min(120*DirectorImGuiTheme.Scale,ImGui.GetContentRegionAvail().X*.25f):0;
@@ -171,7 +170,6 @@ internal sealed partial class DirectorCreationWorkspace
         if (fullPicker) flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
         if (ImGui.Begin(title + (fullPicker ? "###creation-picker-" + auxiliary : "###creation-library"), ref open, flags))
         {
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
             ImGui.BeginDisabled(Runtime.Exporting || Runtime.PerformanceActive);
             if (auxiliary is "resources" or "presets" or "projects")
             {

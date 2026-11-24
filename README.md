@@ -1,147 +1,151 @@
 # VS Director
 
-VS Director is a camera, replay, and scene creation mod for [Vintage Story](https://www.vintagestory.at/). It provides a dockable workspace for composing shots, editing camera paths and recorded scenes, creating visual effects, and exporting video through OBS Studio or FFmpeg.
+简体中文 | [English](README.en.md)
 
-The mod supports local client workflows and optional server features for permissions, remote camera access, and recording coordination. English and Simplified Chinese interfaces are available.
+VS Director 是为 [Vintage Story](https://www.vintagestory.at/) 开发的摄影机、回放与场景创作模组。它提供可停靠的工作区，可用于构图、编辑摄影机路径和录制的场景、制作视觉效果，并通过 OBS Studio 或 FFmpeg 导出视频。
 
-## Requirements and installation
+本模组支持纯客户端工作流程，也提供可选的服务端功能，用于权限管理、远程摄影机访问和录制协调。界面支持英语和简体中文。
 
-| Component | Requirement |
+## 依赖与安装
+
+| 组件 | 要求 |
 | --- | --- |
-| [Vintage Story](https://www.vintagestory.at/) | 1.22.3 minimum; the same package also targets 1.23.0-pre.1 |
-| [VSImGui](https://mods.vintagestory.at/imgui) | 1.2.7, installed separately |
-| [FFmpeg](https://ffmpeg.org/download.html) | Required for direct MP4 recording and GIF/APNG export |
-| [OBS Studio](https://obsproject.com/download) | Required for OBS recording; the companion source plugin targets OBS Studio 32.0.4 |
+| [Vintage Story](https://www.vintagestory.at/) | 最低版本 1.22.3；同一安装包也支持 1.23.0-pre.1 |
+| [VSImGui](https://mods.vintagestory.at/imgui) | 版本 1.2.7，需单独安装 |
+| [FFmpeg](https://ffmpeg.org/download.html) | 直接录制 MP4 和导出 GIF/APNG 时需要 |
+| [OBS Studio](https://obsproject.com/download) | 通过 OBS 录制时需要；配套源插件面向 OBS Studio 32.0.4 |
 
-The ImGui workspace uses an installed system Chinese font to supplement missing characters; no CJK font is bundled. Windows uses Microsoft YaHei or another available Chinese font, macOS uses its Chinese system fonts, and Linux uses Fontconfig to locate a font with Chinese coverage. Systems without Chinese fonts need one installed. FontSettings is optional; its selected font and size are preserved, and Director restores missing characters and editor icons after font rebuilds.
+ImGui 工作区使用系统中已安装的中文字体补齐缺失字符；模组不附带中日韩字体。Windows 使用微软雅黑或其他可用的中文字体，macOS 使用系统中文字体，Linux 通过 Fontconfig 查找支持中文的字体。系统没有中文字体时需自行安装。FontSettings 为可选模组；其选定的字体和字号会被保留，Director 会在字体图集重建后恢复缺失字符和编辑器图标。
 
-Install the VS Director mod ZIP and VSImGui in the client's Mods directory. Open the Director panel with **F9**; keyboard bindings can be changed in the game's controls settings. For the companion [OBS plugin](https://mods.vintagestory.at/vsdirectorobsplugins), see the [installation and build instructions](obs-plugin/README.md).
+将 VS Director 模组 ZIP 和 VSImGui 安装到客户端的 Mods 目录。按 **F9** 打开 Director 面板；快捷键可在游戏控制设置中修改。配套的 [OBS plugin](https://mods.vintagestory.at/vsdirectorobsplugins) 可参阅[安装与构建说明](obs-plugin/README.md)。
 
-The 1.23 adaptation covers replay serialization and block entities, camera FOV, offscreen terrain visibility, native text inputs, and workspace picking. The [compatibility checks](#build-and-validation) exercise the same DLL against both game versions. Complete recording/export workflows and multiplayer sessions still require in-game verification. Later 1.23 builds require separate validation.
+对 1.23 的适配涵盖回放序列化和方块实体、摄影机视野、离屏地形可见性、原生文本输入及工作区选取。[兼容性检查](#构建与验证)会使用同一 DLL 测试两个游戏版本。完整的录制与导出流程以及多人游戏仍需在游戏内验证。后续 1.23 版本也需要单独验证。
 
-### Client and server operation
+### 客户端与服务端运行
 
-VS Director can run on the client without a server installation. Personal cameras, camera paths, following loaded entities, the creation workspace, replay recording/playback, and video export are available locally. Recordings contain only the chunks, entities, and events received by the client. Moving a local camera does not load distant terrain from the server.
+VS Director 可以仅安装在客户端。个人摄影机、摄影机路径、跟随已加载实体、创作工作区、回放录制与播放以及视频导出均可在本地使用。录制内容只包含客户端收到的区块、实体和事件。移动本地摄影机不会让服务端加载远处地形。
 
-Installing VS Director on the server enables server-managed permissions, remote camera chunk loading and replay preloading, remote tracking and sound relay, and actor performance recording that temporarily changes the player's position or collision dimensions. When the server provides the Director channel, server permissions apply; a pending permission response does not grant unrestricted local access.
+世界录制会在配置的快照半径内跟随玩家和 Director 摄影机。新观察到的区块会分批捕获；必要时，会在首次拦截到方块写入之前创建快照。这能保留离开初始录制区域后遇到的树木和其他地形，包括未完成的变化。回放会记录每个区块首次被观察到的时间；在该时间之前的地形状态仍然未知。使用固定捕获区域制作的旧录制无法重建已保存区块范围之外的变化。新录制使用回放数据格式版本 26，需要兼容的读取器。
 
-The package is universal and declares `requiredOnServer: false`. Servers that install VS Director require connecting clients to install it as well. Server installations retain the declared VSImGui dependency.
+在服务端安装 VS Director 后，可以使用服务端管理的权限、远程摄影机区块加载和回放预加载、远程追踪和声音转发，以及会临时改变玩家位置或碰撞尺寸的演员表演录制。服务端提供 Director 通道时，以服务端权限为准；权限请求尚未收到回复时，不会获得不受限的本地访问权限。
 
-## Features
+安装包为通用包，并声明 `requiredOnServer: false`。安装了 VS Director 的服务端会要求连接的客户端也安装本模组。服务端安装仍保留声明的 VSImGui 依赖。
 
-- **Camera composition:** saved camera positions, free cameras, and player or entity follow cameras, with personal camera libraries and optional remote chunk loading.
-- **Camera animation:** keyframes, editable curves, trimming, easing, automatic Bezier interpolation, looping, reverse playback, and speed controls.
-- **Replay capture and playback:** client recording of entities, animations, held items, particles, positional audio, loaded chunks, and block changes; playback supports pause, seeking, speed adjustment, and first-person or third-person actor views.
-- **Replay editing and presets:** a searchable preset browser that creates editable tracks and keyframes for follow rigs, tracking shots, orbits, camera movement, shake, FOV, time effects, color grading, and title cards.
-- **Scene creation:** actor, particle, and blueprint editing in a dockable workspace with a shared timeline and contextual property inspectors.
-- **Recording and export:** replay video export and live offscreen recording from fixed, path, or follow cameras, using OBS or direct FFmpeg MP4 output. The companion OBS source receives offscreen video and spatial camera audio.
-- **Voice integration:** a public [DirectorVoiceApi](src/Voice/DirectorVoiceApi.cs) for spatial PCM audio capture, replay, and export.
+## 功能
 
-Each new replay preset creates one collapsible timeline group. Expand it to edit individual elements, or disable/delete the group to manage the entire preset. Weather, sky and composition effects are timeline elements that leave the scene defaults intact. Ctrl+Z and Ctrl+Shift+Z undo and redo replay edits throughout the workspace; text fields retain their own text undo. Existing ungrouped edits remain editable. Replay title cards and fade overlays currently appear in the on-screen preview and are not included in offscreen export.
+- **摄影机构图：** 保存摄影机位置、自由摄影机，以及跟随玩家或实体的摄影机；支持个人摄影机库和可选的远程区块加载。
+- **摄影机动画：** 关键帧、可编辑曲线、裁剪、缓动、自动贝塞尔插值、循环、倒放和速度控制。
+- **回放录制与播放：** 在客户端录制实体、动画、手持物品、粒子、空间音频、已加载区块和方块变化；播放时可暂停、跳转、调整速度，并以第一或第三人称查看演员。
+- **回放编辑与预设：** 可搜索的预设浏览器，用于创建可编辑的轨道和关键帧，包括跟随机位、追踪镜头、环绕镜头、摄影机运动、抖动、视野、时间效果、调色和字幕卡。
+- **场景创作：** 在可停靠的工作区中编辑演员、粒子和蓝图，并使用共享时间轴和上下文属性检查器。
+- **录制与导出：** 导出回放视频，或通过固定、路径及跟随摄影机进行实时离屏录制；支持 OBS 或直接通过 FFmpeg 输出 MP4。配套 OBS 源可接收离屏视频和空间摄影机音频。
+- **语音集成：** 提供公开的 [DirectorVoiceApi](src/Voice/DirectorVoiceApi.cs)，用于捕获、回放和导出空间 PCM 音频。
 
-## Creation workspace
+每次添加回放预设都会创建一个可折叠的时间轴分组。展开分组可编辑单个元素，也可禁用或删除整个分组。天气、天空和构图效果以时间轴元素的形式存在，不会修改场景默认值。在整个工作区中可用 Ctrl+Z 和 Ctrl+Shift+Z 撤销、重做回放编辑；文本框保留自身的文本撤销功能。现有未分组的编辑内容仍可编辑。回放字幕卡和淡入淡出叠层目前只显示在屏幕预览中，不会包含在离屏导出中。
 
-The default layout places **Objects** and **Content** on the left, **Tools** and **Properties** on the right, the game viewport in the center, and the timeline below. Windows can be moved and docked. Optional View, Bones, IK, and Actions windows initially float.
+## 创作工作区
 
-Content navigation retains each object's section, selection, and scroll position. Search locates native and module parameters. Layout version 4 applies a one-time migration of the creation docks; subsequent opens preserve the user's arrangement.
+默认布局将**对象**和**内容**放在左侧，**工具**和**属性**放在右侧，游戏视口位于中央，时间轴位于下方。窗口可移动和停靠。可选的视图、骨骼、IK 和动作窗口最初以浮动方式显示。
 
-### Particle editing
+内容导航会保留每个对象的分区、选中项和滚动位置。搜索可查找原生参数及模块参数。布局版本 4 会对创作工作区的停靠布局执行一次性迁移；此后再次打开会保留用户的布局。
 
-Select an emitter or child effect in Content to edit emission and timing, shape and binding, motion, color and size, material, geometry, environment, evolution, or child events. The inspector displays the selected parameter group. Effect settings, presets, and source resources have separate entries; curves, gradients, and JSON editors open on demand. Batch scope is explicit and resets when switching objects.
+### 粒子编辑
 
-### Blueprint import and preview
+在内容面板中选择发射器或子效果，可编辑发射与时间、形状与绑定、运动、颜色与大小、材质、几何、环境、演化和子事件。属性检查器会显示选中参数组。效果设置、预设和来源资源各有独立入口；曲线、渐变和 JSON 编辑器按需打开。批量操作的作用范围会明确显示，并在切换对象时重置。
 
-**Add → Projection** imports Buildwright `.vsbp` files or native block-schematic `.json` files from the local library, game/mod templates, or a selected file. Imports copy the source into the project and do not place blocks in the world.
+### 蓝图导入与预览
 
-Select a projection and choose **Preview projection** from its context menu to open an isolated rotating view. Drag to orbit, middle-drag to pan, and scroll to zoom. The inspector controls lighting, background, and GIF/APNG export. Exit preview from Tools to restore the previous timeline position.
+通过**添加 → 投影**，可从本地资源库、游戏或模组模板、指定文件导入 Buildwright `.vsbp` 文件或原生方块结构 `.json` 文件。导入时会将来源复制到项目中，不会在世界中放置方块。
 
-World region capture saves loaded blocks to the Buildwright library without placing blocks. In the capture tool, right-drag to define the corners, release to confirm, left-click to clear, and press Esc to leave.
+选择投影后，从右键菜单中点击**预览投影**，即可打开独立的旋转视图。拖动可环绕，中键拖动可平移，滚轮可缩放。属性检查器提供光照、背景和 GIF/APNG 导出设置。从工具面板退出预览后，将恢复此前的时间轴位置。
 
-### Blueprint editing and animation
+世界区域捕获会将已加载的方块保存到 Buildwright 资源库，不会放置方块。在捕获工具中，按住右键拖动以确定两个角点，松开确认；左键单击清除，按 Esc 退出。
 
-Content organizes blocks, regions, growth, material layers, particles, physics, preview, and output. The block list supports name and coordinate filtering, Ctrl/Shift selection, viewport picking, and move/rotate/scale handles, including in isolated preview. Editing operations include copying, deleting, restoring, integer region export, and extracting or cutting selections into independent Director presets.
+### 蓝图编辑与动画
 
-Structures support complete projection rotation and mirroring, editable particle attachments, and these animation controls:
+内容面板将方块、区域、生长、材质层、粒子、物理、预览和输出分类组织。方块列表支持按名称和坐标筛选、Ctrl/Shift 多选、视口选取，以及移动、旋转和缩放控制柄；独立预览中也可使用这些功能。编辑操作包括复制、删除、恢复、导出整数坐标区域，以及将选中内容提取或剪切为独立的 Director 预设。
 
-- Appearance, seeded fill, fall/rain, and two waves with six selectable directions.
-- Five glass replacement layers and four priority edge layers using native block resources.
-- Edge particles on the twelve block edges, with count, speed, interval, lifetime, color, rainbow, glow, and outline controls.
-- Grouped structure parameters, resource selection keys, and optional per-block transform, visibility, and override tracks.
+结构支持整体投影旋转与镜像、可编辑的粒子附着，以及以下动画控制：
 
-Embedded particle schemes use the shared particle editor and simulator. Beam, lightning, and trail effects attach as child effects. Automatic torch, fire, and firepit particles follow edited or deleted source cells and use saved block variants; they do not reproduce live fuel or weather simulation. Disabling per-block keyframes preserves their data. Initial transform keys use absolute local values; additive mode is available explicitly.
+- 显现、按种子填充、下落或降雨，以及两种波浪效果；波浪可选六个方向。
+- 使用原生方块资源的五层玻璃替换层和四层优先级边缘层。
+- 沿方块十二条边生成边缘粒子，并控制数量、速度、间隔、寿命、颜色、彩虹色、发光和轮廓。
+- 分组的结构参数、资源选择关键帧，以及可选的逐方块变换、可见性和覆盖轨道。
 
-### Physics, limits, and export formats
+嵌入式粒子方案使用共用的粒子编辑器和模拟器。光束、闪电和拖尾效果可作为子效果附着。自动火把、火焰和火坑粒子会跟随被编辑或删除的来源单元格，并使用保存的方块变体；它们不会模拟实时燃料或天气。关闭逐方块关键帧不会删除其数据。初始变换关键帧使用绝对局部值；加法模式可明确选择。
 
-Visual physics uses a fixed 120 Hz simulation with terrain collision, separation, drag, spin, impact, gravity, bounce, seek snapshots, and cancellation. It does not simulate block-to-block stacking.
+### 物理、限制与导出格式
 
-| Resource | Limit |
+视觉物理采用固定 120 Hz 模拟，包含地形碰撞、分离、阻力、旋转、冲击、重力、反弹、跳转快照和取消功能。它不模拟方块之间的堆叠。
+
+| 资源 | 上限 |
 | --- | --- |
-| Structure physics | 6,000 source/copy cells per structure |
-| Particles | 6,000 per effect and 24,000 per project, including outlines |
+| 结构物理 | 每个结构 6,000 个来源或副本单元格 |
+| 粒子 | 每个效果 6,000 个、每个项目 24,000 个，含轮廓粒子 |
 
-Geometry rebuilds and world capture are processed across frames; the block list is virtualized and cached. Large animated structures can require substantially more resources than static structures.
+几何重建和世界捕获会跨帧处理；方块列表采用虚拟化和缓存。大型动画结构所需资源可能远高于静态结构。
 
-Native VSBP/JSON exports contain static blocks at integer positions. Individual display rotation or scale is rejected rather than silently discarded. Director structure presets preserve source assets, cell overrides, clips, tracks, particle schemes, and textures. External particle binding targets must belong to the exported hierarchy, and performance clips must be baked before export. Existing version-1 projections require an explicit upgrade; opening a project does not migrate them automatically.
+原生 VSBP/JSON 导出只包含位于整数坐标的静态方块。单个显示对象的旋转或缩放会导致导出被拒绝，以免静默丢失这些设置。Director 结构预设会保留来源资源、单元格覆盖、片段、轨道、粒子方案和纹理。外部粒子绑定目标必须属于导出的层级，表演片段在导出前必须烘焙。现有版本 1 投影需要明确升级；打开项目不会自动迁移它们。
 
-Embedded entities and surface decorations are retained but not displayed. Missing or unsupported meshes are reported and prevent block export. Native liquids use a static preview material without the world's refraction and wave shaders. Visual fidelity for specific game and mod resources requires in-game verification.
+嵌入的实体和表面装饰会被保留，但不会显示。缺失或不支持的网格会被报告，并阻止方块导出。原生液体使用静态预览材质，不包含世界中的折射和波浪着色器。特定游戏或模组资源的视觉效果需要在游戏内验证。
 
-## Build and validation
+## 构建与验证
 
-Development requires the .NET 10 SDK, a Vintage Story installation, and extracted VSImGui 1.2.7 assemblies. Build release packages against the **Vintage Story 1.22.3 SDK** to retain a single binary for both supported game versions. The `game: 1.22.3` dependency in `modinfo.json` remains the minimum version.
+开发需要 .NET 10 SDK、Vintage Story 安装目录，以及解压后的 VSImGui 1.2.7 程序集。发布包应针对 **Vintage Story 1.22.3 SDK** 构建，以便同一二进制文件支持两个游戏版本。`modinfo.json` 中的 `game: 1.22.3` 依赖仍表示最低版本。
 
 ```powershell
 dotnet build VSDirector.csproj -c Release -p:VintageStoryPath="path/to/1.22.3" -p:VSImGuiPath="path/to/vsimgui_1.2.7"
 ```
 
-Release packages are written to `artifacts/`. To build without packaging, add `-p:PackMod=false`. The `VINTAGE_STORY` and `VSIMGUI` environment variables can also provide the dependency paths.
+发布包输出到 `artifacts/`。若只构建而不打包，可添加 `-p:PackMod=false`。也可通过环境变量 `VINTAGE_STORY` 和 `VSIMGUI` 提供依赖路径。
 
-Run the core tests from the repository root:
+在仓库根目录运行核心测试：
 
 ```powershell
 dotnet run --project tests/VSDirector.CoreTests/VSDirector.CoreTests.csproj -c Release
 ```
 
-Run the game compatibility checks with both installations:
+使用两个游戏安装目录运行兼容性检查：
 
 ```powershell
 ./tools/TestGameCompatibility.ps1 -BaselineGamePath 'path/to/1.22.3' -NewGamePath 'path/to/1.23.0-pre.1' -VSImGuiPath 'path/to/vsimgui_1.2.7'
 ```
 
-The script builds once, checks native member references, and runs PatchProbe with each game's assemblies and assets in separate directories. Logs are written to `artifacts/compat*-probe.log`. The checks do not deploy the mod or replace manual gameplay validation.
+该脚本只构建一次，检查原生成员引用，并分别使用两个游戏版本的程序集和资源在独立目录运行 PatchProbe。日志写入 `artifacts/compat*-probe.log`。这些检查不会部署模组，也不能代替手动游戏验证。
 
-To run the ImGui font regression checks independently, run PatchProbe with `--imgui-fonts` (pass the same `VintageStoryPath` and `VSImGuiPath` build properties). These checks cover Chinese glyphs, the selected default font, atlas rebuilds, and font scope restoration. In-game validation should also open the Chinese workspace without FontSettings, then repeat with FontSettings installed and change its font selection.
+若需单独运行 ImGui 字体回归检查，可使用 `--imgui-fonts` 运行 PatchProbe（传入相同的 `VintageStoryPath` 和 `VSImGuiPath` 构建属性）。这些检查覆盖中文字符、选定的默认字体、字体图集重建和字体作用域恢复。游戏内验证还应先在没有 FontSettings 的情况下打开中文工作区，再安装 FontSettings、修改字体选择并重复检查。
 
-## Head tracking and head-motion elements
+## 头部追踪与头部运动元素
 
-On Windows, select **FreeTrack 2.0 Enhanced** as OpenTrack's output. Open **Settings → Interface → Head tracking settings**, enable tracking, and apply. Tracking is disabled by default. Keypad **\*** opens settings, **5** recenters, and **0** enables or pauses tracking; bindings can be changed in the game's controls settings. Configuration is stored separately in `vsdirector-headtracking.json`.
+在 Windows 上，将 OpenTrack 的输出设为 **FreeTrack 2.0 Enhanced**。打开**设置 → 界面 → 头部追踪设置**，启用追踪并应用。追踪默认关闭。小键盘 **\*** 打开设置，**5** 重置中心，**0** 启用或暂停追踪；这些按键可在游戏控制设置中修改。配置单独保存在 `vsdirector-headtracking.json`。
 
-The integrated controls include yaw, pitch and roll gains, translation gains and limits for each axis, baseline offsets, smoothing, first-person model hiding, head-controlled crouching (hold or toggle, with axis and hysteresis), and threshold or continuous lean-to-zoom with mouse sensitivity, smoothing and vignette controls. Crouching and first-person model options apply to ordinary gameplay. If Zoom Button is installed, its zoom configuration is used. Neither OpenTrack nor Zoom Button is bundled.
+内置控制包括偏航、俯仰和翻滚增益，各轴的平移增益与限制、基准偏移、平滑、隐藏第一人称模型、头部控制蹲伏（按住或切换，可设轴和滞后阈值），以及阈值式或连续式倾身缩放，并提供鼠标灵敏度、平滑和暗角控制。蹲伏和第一人称模型选项也适用于普通游戏过程。如果安装了 Zoom Button，则使用其缩放配置。本模组不附带 OpenTrack 或 Zoom Button。
 
-In a replay, choose **Add element → Head motion** to create a collapsible group with camera and head-motion children. Open the motion keyframe and select **Record / replace motion**. Activate a director camera and tracking first; use Keypad **5** to recenter. Recording seeks to the keyframe, pauses replay playback and captures movement in real time against a fixed camera baseline. **Stop and save** saves the motion and, if the camera child is empty, adds editable camera keys for the recorded interval. A retake preserves existing camera edits. **Cancel recording** keeps the previous take. Expand the group to edit its children, or mute/delete the entire group. A saved clip supports timeline placement, source in/out trimming, playback rate, strength, independent translation/rotation/zoom toggles, and undo/redo. Changing timing in the motion keyframe settings also resizes its matching two-key camera interval; more elaborate camera animation remains independent. A connection loss or game pause stops and saves the captured portion. Switching replay or starting export cancels an unfinished take.
+在回放中选择**添加元素 → 头部运动**，会创建一个包含摄影机和头部运动子元素的可折叠分组。打开运动关键帧并选择**录制／替换运动**。先启用 Director 摄影机和追踪，并用小键盘 **5** 重置中心。录制会跳转到该关键帧、暂停回放，并以固定摄影机基准实时捕获运动。**停止并保存**会保存运动；如果摄影机子元素为空，还会为录制区间添加可编辑的摄影机关键帧。重录会保留现有摄影机编辑。**取消录制**会保留上一次录制。展开分组可编辑子元素，也可静音或删除整个分组。已保存的片段支持调整时间轴位置、来源入点和出点、播放速度、强度，分别开关平移／旋转／缩放，以及撤销和重做。在运动关键帧设置中修改时间，也会调整与其对应的双关键帧摄影机区间；更复杂的摄影机动画仍独立处理。连接断开或游戏暂停时，会停止并保存已捕获部分。切换回放或开始导出会取消未完成的录制。
 
-Recorded motion uses the camera's local axes, including Vintage Story's native 180-degree pitch convention. Disable the camera child to layer motion over another camera, orbit or follow track. Older standalone recordings are wrapped in groups without changing their samples or inventing a camera baseline; their empty camera child can be populated using the camera row's add-key action. Replay, seek, preview and export evaluate stored samples without live tracker input, including on systems without Windows or OpenTrack. Live tracking applies to normal gameplay and director cameras outside replay, and while recording a head-motion element.
+录制的运动使用摄影机局部坐标轴，包括 Vintage Story 原生的 180 度俯仰约定。关闭摄影机子元素，可将运动叠加到其他摄影机、环绕或跟随轨道上。旧版独立录制会被包装成分组，不改变其采样，也不会凭空生成摄影机基准；可以通过摄影机行的添加关键帧操作填充其空白子元素。回放、跳转、预览和导出会直接计算已保存的采样，不需要实时追踪器；没有 Windows 或 OpenTrack 的系统也能使用。实时追踪适用于回放之外的普通游戏和 Director 摄影机，也适用于录制头部运动元素期间。
 
-When the standalone VS-6DOF mod is installed, it retains ordinary first-person control and VS Director takes over director cameras to avoid double offsets. Director's settings shortcut becomes **Ctrl+Keypad \***. Standalone settings remain separate. Hardware tracking, mod combinations and gameplay should be checked in-game after installation.
+安装独立的 VS-6DOF 模组后，它仍负责普通第一人称控制；VS Director 接管 Director 摄影机，以避免偏移叠加。Director 的设置快捷键会改为 **Ctrl+小键盘 \***。两者的设置互相独立。硬件追踪、模组组合和游戏过程应在安装后于游戏内验证。
 
-This integration adapts [VS-6DOF](https://github.com/bjfishman/VS-6DOF), credited to **DF**, including the [TGU-HansJack fork](https://github.com/TGU-HansJack/VS-6DOF), under [CC0 1.0](licenses/VS-6DOF-CC0.txt). Source notices and the full license are included in the mod ZIP. VS Director's original code remains MIT-licensed.
+本集成改编自 [VS-6DOF](https://github.com/bjfishman/VS-6DOF)（作者 **DF**），包括 [TGU-HansJack 分支](https://github.com/TGU-HansJack/VS-6DOF)，遵循 [CC0 1.0](licenses/VS-6DOF-CC0.txt)。源代码声明和完整许可文件包含在模组 ZIP 中。VS Director 的原创代码仍采用 MIT 许可。
 
-## Authors and contributors
+## 作者与贡献者
 
-| Author | Contributions |
+| 作者 | 贡献 |
 | --- | --- |
-| [HansJack](https://github.com/TGU-HansJack) | Project author and maintainer; camera, replay, creation, and recording systems. |
-| [HanosThePlacid](https://github.com/HanosThePlacid) | Replay camera preset library, preset browser, supporting timeline features, and camera/timeline usability improvements ([PR #2](https://github.com/vscn-studio/vs_director/pull/2)). |
+| [HansJack](https://github.com/TGU-HansJack) | 项目作者与维护者；摄影机、回放、创作及录制系统。 |
+| [HanosThePlacid](https://github.com/HanosThePlacid) | 回放摄影机预设库、预设浏览器、相关时间轴功能，以及摄影机和时间轴易用性改进（[PR #2](https://github.com/vscn-studio/vs_director/pull/2)）。 |
 
-See the [contributor history](https://github.com/vscn-studio/vs_director/graphs/contributors) for additional contributions. Pull requests, bug reports, and documentation improvements are welcome. Read the [contributing guide](CONTRIBUTING.md) for code style, localization, saved data compatibility, testing, and voice integration requirements.
+更多贡献见[贡献者历史](https://github.com/vscn-studio/vs_director/graphs/contributors)。欢迎提交拉取请求、问题报告和文档改进。代码风格、本地化、存档数据兼容性、测试和语音集成要求见[贡献指南](CONTRIBUTING.md)。
 
-## License and acknowledgments
+## 许可与致谢
 
-Original VS Director code, interface, and documentation are licensed under the [MIT License](LICENSE). Copyright notices are retained in [COPYRIGHT.txt](COPYRIGHT.txt).
+VS Director 的原创代码、界面和文档采用 [MIT 许可证](LICENSE)。版权声明保留在 [COPYRIGHT.txt](COPYRIGHT.txt) 中。
 
-Third-party components and adapted resources retain their respective licenses and attribution. See the [third-party notices](licenses/THIRD-PARTY.txt) for details, including FontSettings, Tabler Icons, InGameDevTools, BBS-FS, Mine-imator, and Fieldwright via Buildwright.
+第三方组件和改编资源保留各自的许可证与署名。详情见[第三方声明](licenses/THIRD-PARTY.txt)，其中包括 FontSettings、Tabler Icons、InGameDevTools、BBS-FS、Mine-imator，以及通过 Buildwright 使用的 Fieldwright。
 
-The companion OBS plugin's original source is MIT-licensed. Binaries linked with libobs are distributed under GPL-2.0-or-later; see the [OBS distribution terms](licenses/OBS-THIRD-PARTY.txt) and [plugin documentation](obs-plugin/README.md).
+配套 OBS 插件的原创源代码采用 MIT 许可。链接 libobs 的二进制文件以 GPL-2.0-or-later 分发；参阅 [OBS 分发条款](licenses/OBS-THIRD-PARTY.txt)和[插件文档](obs-plugin/README.md)。
 
-Game and third-party models, textures, animations, and audio remain subject to their respective rights holders' terms. Importing or exporting them with VS Director does not place them under this project's MIT License.
+游戏及第三方的模型、纹理、动画和音频仍受各自权利人的条款约束。通过 VS Director 导入或导出这些资源，不会使其适用本项目的 MIT 许可证。
 
-Vintage Story is a trademark of Anego Studios. VS Director is an independent mod and is not affiliated with or endorsed by Anego Studios.
+Vintage Story 是 Anego Studios 的商标。VS Director 是独立模组，与 Anego Studios 没有关联，也未获得其认可。

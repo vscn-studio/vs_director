@@ -3,6 +3,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
 using VSDirector.Data;
 using VSDirector.Replay;
+using VSDirector.Rendering;
 
 namespace VSDirector.Gui;
 
@@ -55,6 +56,8 @@ internal sealed class DirectorReplayScreenEffectsRenderer : IRenderer, IDisposab
         }
         DefaultShaderUniforms uniforms = capi.Render.ShaderUniforms;
         restorer.Capture(uniforms);
+        if (DirectorOffscreenRenderRuntime.IsRendering)
+            DirectorOffscreenRenderRuntime.RestoreGradeOnViewExit(restorer.Restore);
         uniforms.ExtraSepia = Math.Clamp(uniforms.ExtraSepia + grade.Sepia, 0f, 1.5f);
         uniforms.ExtraContrastLevel += grade.Contrast;
         uniforms.DamageVignetting = Math.Max(uniforms.DamageVignetting, grade.Vignette);

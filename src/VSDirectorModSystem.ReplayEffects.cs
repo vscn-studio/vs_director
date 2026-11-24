@@ -14,7 +14,8 @@ namespace VSDirector;
 /// </summary>
 public sealed partial class VSDirectorModSystem
 {
-    private readonly record struct LookAtSmoothing(double Time, float Yaw, float Pitch, float Fov);
+    private readonly record struct LookAngles(float Yaw, float Pitch, float Fov);
+    private readonly record struct LookAtSmoothing(double Time, LookAngles Target, LookAngles Result);
 
     private readonly Dictionary<Guid, LookAtSmoothing> replayLookAtSmoothing = new();
 
@@ -114,22 +115,32 @@ public sealed partial class VSDirectorModSystem
         }
 
         pose = DirectorReplayCameraElementMath.EvaluateLookAt(tracking, subject, anchor, dimension, fov);
-        if (tracking.TrackSmoothTimeSeconds > 0.0001d)
-        {
-            if (replayLookAtSmoothing.TryGetValue(trackId, out LookAtSmoothing previous)
-                && time >= previous.Time - 1e-6d
-                && time - previous.Time <= 0.5d)
-            {
-                double amount = 1d - Math.Exp(-(time - previous.Time) / tracking.TrackSmoothTimeSeconds);
-                pose.Yaw = (float)(previous.Yaw + DeltaDegrees(previous.Yaw, pose.Yaw) * amount);
-                pose.Pitch = (float)(previous.Pitch + (pose.Pitch - previous.Pitch) * amount);
-                pose.Fov = (float)(previous.Fov + (pose.Fov - previous.Fov) * amount);
-            }
-            replayLookAtSmoothing[trackId] = new LookAtSmoothing(time, pose.Yaw, pose.Pitch, pose.Fov);
-        }
+        SmoothReplayLookAt(trackId, pose, time, tracking.TrackSmoothTimeSeconds);
         guideTarget = new DirectorReplayCameraGuideTarget(subject.X, subject.Y, subject.Z, dimension,
             primaryEntity?.EntityId ?? 0L);
         return true;
+    }
+
+    private void SmoothReplayLookAt(Guid trackId, CameraPreset pose, double time, double seconds)
+    {
+        var target = new LookAngles(pose.Yaw, pose.Pitch, pose.Fov);
+        if (seconds > 0.0001d && replayLookAtSmoothing.TryGetValue(trackId, out var previous))
+        {
+            double elapsed = time - previous.Time;
+            var from = previous.Result;
+            if (elapsed > 0d && elapsed <= 0.5d)
+            {
+                double amount = 1d - Math.Exp(-elapsed / seconds);
+                pose.Yaw = (float)(from.Yaw + DeltaDegrees(from.Yaw, pose.Yaw) * amount);
+                pose.Pitch = (float)(from.Pitch + (pose.Pitch - from.Pitch) * amount);
+                pose.Fov = (float)(from.Fov + (pose.Fov - from.Fov) * amount);
+            }
+            else if (elapsed == 0d && target == previous.Target)
+            {
+                (pose.Yaw, pose.Pitch, pose.Fov) = (from.Yaw, from.Pitch, from.Fov);
+            }
+        }
+        replayLookAtSmoothing[trackId] = new(time, target, new(pose.Yaw, pose.Pitch, pose.Fov));
     }
 
     private static double SubjectRadius(Entity entity)

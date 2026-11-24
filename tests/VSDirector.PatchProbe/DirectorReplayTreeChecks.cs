@@ -43,24 +43,35 @@ internal static class DirectorReplayTreeChecks
         try
         {
             foreach (bool paged in new[] { false, true })
-            foreach (bool historical in new[] { false, true })
+            foreach (int baselineKind in new[] { 0, 1, 2 })
             foreach (double capturedAt in new[] { 0d, 3d })
-                CheckTree(type, paged, capturedAt, historical);
+                CheckTree(type, paged, capturedAt, baselineKind);
         }
         finally { receivedChunk = null; harmony.UnpatchAll(harmony.Id); }
-        Console.WriteLine("PASS 8 tree replay variants: baseline, felling, rewind, paused/partial/repeated chunk replacement, delayed capture, historical baseline, paged seek and restoration of the live cut tree");
+        Console.WriteLine("PASS 12 tree replay variants: standing/partially cut/fully cut, rewind, chunk replacement, delayed/moving/historical capture, paged seek and live-world restoration");
     }
 
-    private static void CheckTree(Type type, bool paged, double capturedAt, bool historical)
+    private static void CheckTree(Type type, bool paged, double capturedAt, int baselineKind)
     {
+        bool historical = baselineKind != 0;
         int[] baseline = new int[32768];
         baseline[1 + 32 + 1024] = 1; baseline[1 + 32 + 2048] = 1; baseline[1 + 32 + 3072] = 2;
         var document = new DirectorReplayDocument { DurationSeconds = 12 };
-        if (historical) document.SessionMerge = new DirectorSessionMergeOrigin();
+        if (baselineKind == 1) document.SessionMerge = new DirectorSessionMergeOrigin();
+        if (baselineKind == 2) document.WorldSnapshot.FollowCaptureArea = true;
         document.WorldSnapshot.Chunks.Add(new DirectorReplayChunkSnapshot { ChunkX = 10, ChunkY = 0, ChunkZ = 10,
             CapturedAtSeconds = capturedAt, SolidRuns = DirectorReplayChunkCodec.Encode(baseline), FluidRuns = [] });
         for (int y = 1; y <= 3; y++) document.BlockEvents.Add(new DirectorReplayBlockEvent
-            { TimeSeconds = 5, X = 321, Y = y, Z = 321, SolidBlockId = 0, FluidBlockId = 0 });
+            { TimeSeconds = y == 3 ? 5 : 7, X = 321, Y = y, Z = 321, SolidBlockId = 0, FluidBlockId = 0 });
+        if (!historical)
+        {
+            document.BlockEvents.Add(new() { X=353, Y=1, Z=321, SolidBlockId=1, BlockEntityCaptured=true });
+            document.BlockEvents.Add(new() { X=353, Y=1, Z=321, SolidBlockId=1, BlockEntityCaptured=true,
+                BlockEntityClass="KnappingSurface", TimeSeconds=4.5 });
+            document.SoundEvents.Add(new() { X=353.5, Y=1, Z=321.5, TimeSeconds=5.1, Location="game:sounds/player/knap2.ogg" });
+            document.SoundEvents.Add(new() { X=353.5, Y=1, Z=321.5, TimeSeconds=5.2, Location="game:sounds/player/collect3.ogg" });
+        }
+        document.BlockEvents = document.BlockEvents.OrderBy(e => e.TimeSeconds).ToList();
         string? temp = null;
         if (paged)
         {
@@ -136,7 +147,12 @@ internal static class DirectorReplayTreeChecks
             values.Clear(); AccessTools.Method(typeof(ClientWorldMap), "loadChunkMT").Invoke(map, [packet, received]);
             if (notifications != 2) throw new Exception("Initial chunk load bypassed historical reconstruction");
             Settle(4); Tree(true);
-            Settle(6); Tree(false);
+            Settle(6);
+            if (values.GetValueOrDefault((321,3,321,BlockLayersAccess.Solid)) != 0
+                || values.GetValueOrDefault((321,1,321,BlockLayersAccess.Solid)) != 1)
+                throw new Exception("Partial felling did not preserve the uncut trunk");
+            Settle(4, true); Tree(true);
+            Settle(8); Tree(false);
             Settle(4, true); Tree(true);
             values.Clear(); // A real server/preload column contains the already felled tree.
             Call("ObserveServerRecordingChunkLoad", 10, 0, 10);
@@ -149,8 +165,8 @@ internal static class DirectorReplayTreeChecks
             Call("ObserveServerRecordingChunkLoad", 10, 0, 10);
             Settle(4); Tree(true);
             for (int frame = 0; frame < 8; frame++) { Settle(4); Tree(true); }
-            Settle(6); Tree(false);
-            Call("ObserveServerRecordingChunkLoad", 10, 0, 10); Settle(6); Tree(false);
+            Settle(8); Tree(false);
+            Call("ObserveServerRecordingChunkLoad", 10, 0, 10); Settle(8); Tree(false);
             Settle(0, true); Tree(capturedAt == 0);
             values[(321, 1, 321, BlockLayersAccess.Solid)] = 1;
             Call("ObserveServerRecordingChunkLoad", 10, 0, 10); Settle(0);
@@ -161,6 +177,20 @@ internal static class DirectorReplayTreeChecks
             }
             else Tree(capturedAt == 0);
             values.Clear(); Call("ObserveServerRecordingChunkLoad", 10, 0, 10); Settle(4); Tree(true);
+            if (!historical)
+            {
+                var spot = (353, 1, 321, BlockLayersAccess.Solid);
+                var neighbor = (354, 1, 321, BlockLayersAccess.Solid);
+                values[spot] = 2; values[neighbor] = 1;
+                Call("ObserveServerRecordingChunkLoad", 11, 0, 10); Settle(4);
+                if (values[spot] != 0 || values[neighbor] != 1) throw new Exception("Sparse refresh leaked live terrain or overwrote an unrecorded neighbor");
+                Settle(5);
+                if (values[spot] != 1) throw new Exception("Missing working surface during knapping");
+                Settle(5.21);
+                if (values[spot] != 0) throw new Exception("Sequential playback retained a finished knapping surface");
+                Settle(4, true); Settle(12, true);
+                if (values[spot] != 0) throw new Exception("Seeking past completion retained a finished knapping surface");
+            }
         }
         finally
         {
@@ -168,6 +198,8 @@ internal static class DirectorReplayTreeChecks
             if (temp is not null) { File.Delete(temp); File.Delete(temp + ".pages"); }
         }
         Tree(false); // Leaving replay must preserve the real-world felling.
+        if (!historical && values[(353,1,321,BlockLayersAccess.Solid)] != 2)
+            throw new Exception("Exiting sparse playback did not restore latest live block");
     }
 
     private static void Inspect(string path)
@@ -187,14 +219,25 @@ internal static class DirectorReplayTreeChecks
                 offset += run.Length;
                 if (offset <= index) continue;
                 if (run.BlockId != 0) baselinePresent++;
+                Console.WriteLine($"Removed ({position.X},{position.Y},{position.Z}) baseline={run.BlockId} captured={chunk.CapturedAtSeconds:0.000} first-removal={removed.TimeSeconds:0.000}; events="
+                    + string.Join(",", position.Indices.Select(i => document.BlockEvents[i]).Select(e => $"{e.TimeSeconds:0.000}:{e.SolidBlockId}")));
                 break;
             }
         }
         Console.WriteLine($"READ-ONLY recording inspection: {document.BlockEvents.Count} block events; {removals} removed positions; {baselinePresent} retain a non-air pre-removal baseline");
         Console.WriteLine($"World dimension={document.WorldSnapshot.Dimension}, chunks={chunks.Count}, duration={document.DurationSeconds}, historical={document.HasHistoricalBaselines}");
+        Console.WriteLine($"Snapshot center=({document.WorldSnapshot.CenterChunkX},{document.WorldSnapshot.CenterChunkZ}), radius={document.WorldSnapshot.RadiusChunks}; chunk ranges X={chunks.Keys.Min(c => c.ChunkX)}..{chunks.Keys.Max(c => c.ChunkX)}, Z={chunks.Keys.Min(c => c.ChunkZ)}..{chunks.Keys.Max(c => c.ChunkZ)}");
         foreach (var actor in document.Actors.Where(a => !string.IsNullOrEmpty(a.PlayerUid)))
         {
             var samples = actor.Samples.ToArray();
+            var chopping = samples.Where(s => s.AnimationStates.Any(a => a.Code == "axechop")).ToArray();
+            if (chopping.Length > 0) Console.WriteLine($"Axe chopping: t={chopping[0].TimeSeconds:0.000}..{chopping[^1].TimeSeconds:0.000}, pos=({chopping[0].X:0.0},{chopping[0].Y:0.0},{chopping[0].Z:0.0})..({chopping[^1].X:0.0},{chopping[^1].Y:0.0},{chopping[^1].Z:0.0})");
+            if (chopping.Length > 0)
+            {
+                var s = chopping[0]; int x = (int)Math.Floor(s.X) >> 5, y = (int)Math.Floor(s.Y) >> 5, z = (int)Math.Floor(s.Z) >> 5;
+                Console.WriteLine($"Chopping chunk=({x},{y},{z}), captured={chunks.ContainsKey((x,y,z))}; nearby block events="
+                    + document.BlockEvents.Count(e => Math.Abs(e.X-s.X) < 20 && Math.Abs(e.Z-s.Z) < 20));
+            }
             Console.WriteLine($"Player actions: {string.Join(", ", samples.SelectMany(s => s.AnimationStates).Select(a => a.Code + "/" + a.StateCode).Distinct())}");
             var throws = samples.Where(s => s.AnimationStates.Any(a => a.Code.Contains("throw", StringComparison.OrdinalIgnoreCase) || a.StateCode.Contains("throw", StringComparison.OrdinalIgnoreCase))).ToArray();
             if (throws.Length == 0) continue;

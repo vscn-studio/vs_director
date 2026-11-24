@@ -24,6 +24,18 @@ internal static class ReplayPlayerRenderMode
                 && DirectorCameraRuntime.Controller?.IsLocalPlayerEntity(player) == true);
 }
 
+// Both packet construction and subsequent movement add entities to terrain
+// chunks. Chunk unload despawns player entities by UID, which a replay copy
+// shares with its recorded player. The replay manager owns these copies.
+[HarmonyPatch(typeof(WorldChunk), nameof(WorldChunk.AddEntity), typeof(Entity))]
+internal static class ReplayGhostChunkMembershipPatch
+{
+    [HarmonyPrefix]
+    private static bool Prefix(WorldChunk __instance, Entity __0)
+        => __instance is not ClientChunk || __0.EntityId >= 0
+            || DirectorReplayRuntime.Manager?.IsReplayGhost(__0.EntityId) != true;
+}
+
 // Replay actors are driven by recorded samples. Detach them from the normal
 // client tick so live AI, physics, and interpolation cannot overwrite a
 // playback frame; the replay manager runs only the player observer animation
@@ -1709,6 +1721,10 @@ internal static class ReplayLoadedSoundPitchOffsetCapturePatch
     new[] { typeof(int), typeof(BlockPos), typeof(ItemStack) })]
 internal static class ReplaySolidBlockCapturePatch
 {
+    [HarmonyPrefix]
+    private static void Prefix(BlockPos pos)
+        => DirectorReplayRuntime.Manager?.CaptureBlockBeforeChange(pos);
+
     [HarmonyPostfix]
     private static void Postfix(BlockPos pos)
         => DirectorReplayRuntime.Manager?.QueueBlockChanged(pos);
@@ -1720,6 +1736,10 @@ internal static class ReplaySolidBlockCapturePatch
     new[] { typeof(int), typeof(BlockPos), typeof(int) })]
 internal static class ReplayFluidBlockCapturePatch
 {
+    [HarmonyPrefix]
+    private static void Prefix(BlockPos pos)
+        => DirectorReplayRuntime.Manager?.CaptureBlockBeforeChange(pos);
+
     [HarmonyPostfix]
     private static void Postfix(BlockPos pos)
         => DirectorReplayRuntime.Manager?.QueueBlockChanged(pos);
@@ -1741,6 +1761,7 @@ internal static class ReplayMinimalBulkBlockCapturePatch
         int index = 0;
         foreach (BlockPos position in __instance.StagedBlocks.Keys)
         {
+            DirectorReplayRuntime.Manager?.CaptureBlockBeforeChange(position);
             __state[index++] = position.Copy();
         }
     }

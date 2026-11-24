@@ -13,7 +13,22 @@ internal sealed partial class DirectorCreationWorkspace
     private string preferencesSearch="";
     private DateTime preferencesSaveAt;
     private CreationOverlayPreferences Overlay=>editorPreferences.Overlay;
-    private void OpenPreferences(int category){preferencesCategory=category;preferencesOpen=true;}
+    private static readonly string[] PreferencePages = ["creation-pref-operation", "creation-pref-overlay",
+        "creation-pref-timeline", "creation-pref-layout", "creation-new-defaults"];
+    private static readonly int[] PreferenceIndices = [0, 1, 2, 3, 4];
+    private static readonly string[] PreferenceIcons = ["adjustments", "eye", "clock", "layout-grid", "movie"];
+    private bool resetPreferenceScroll;
+    private void SelectPreferenceCategory(int category)
+    {
+        preferencesCategory = category;
+        preferencesSearch = "";
+        resetPreferenceScroll = true;
+    }
+    private void OpenPreferences(int category)
+    {
+        SelectPreferenceCategory(category);
+        preferencesOpen = true;
+    }
     private void PreferenceChanged()
     {preferencesDirty=true;preferencesSaveAt=DateTime.UtcNow.AddMilliseconds(500);Runtime.NewProjectDefaults=editorPreferences.Defaults;}
     private void DrawPreferences()
@@ -21,37 +36,39 @@ internal sealed partial class DirectorCreationWorkspace
         if(preferencesDirty && (!preferencesOpen || DateTime.UtcNow>=preferencesSaveAt))
         {Run(PersistEditorPreferences);preferencesDirty=false;}
         if(!preferencesOpen)return;
-        var size=ImGui.GetIO().DisplaySize;float scale=DirectorImGuiTheme.Scale;
-        ImGui.SetNextWindowSize(Vector2.Min(new Vector2(780,590)*scale,size-new Vector2(24)),ImGuiCond.Appearing);
-        ImGui.SetNextWindowSizeConstraints(Vector2.Min(new Vector2(360,260)*scale,size-new Vector2(24)),size-new Vector2(24));
-        if(ImGui.Begin(L("creation-preferences")+"###creation-preferences",ref preferencesOpen,ImGuiWindowFlags.NoDocking))
+        DirectorImGuiBrowser.SettingsWindow();
+        if(ImGui.Begin(L("creation-preferences")+"###creation-preferences",ref preferencesOpen,
+            ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
-            ImGui.SetWindowFontScale(scale);
-            ImGui.TextWrapped(L("creation-preferences-scope"));
-            ImGui.SetNextItemWidth(-1);ImGui.InputTextWithHint("##preferences-search",L("creation-search-names"),ref preferencesSearch,128);
-            string[] categories=["creation-pref-operation","creation-pref-overlay","creation-pref-timeline","creation-pref-layout","creation-new-defaults"];
-            bool narrow=ImGui.GetContentRegionAvail().X<520*scale;
-            if(narrow)
+            using var spacing = DirectorImGuiBrowser.Use();
+            ImGui.SetNextItemWidth(-ImGui.GetFrameHeight() - ImGui.GetStyle().ItemSpacing.X);
+            if (ImGui.InputTextWithHint("##preferences-search", L("creation-search-names"), ref preferencesSearch, 128))
+                resetPreferenceScroll = true;
+            ImGui.SameLine();
+            ImGui.TextDisabled("(?)");
+            if (ImGui.IsItemHovered()) DirectorImGuiTooltip.Show(L("creation-preferences-scope"));
+            ImGui.Separator();
+            bool locked = Runtime.Exporting || Runtime.PerformanceActive || gizmoUsing;
+            float footer = ImGui.GetFrameHeightWithSpacing() + 2 * ImGui.GetStyle().ItemSpacing.Y;
+            ImGui.BeginChild("preferences-content", new Vector2(0, -footer));
+            DirectorImGuiBrowser.Categories(PreferenceIndices, preferencesCategory, i => L(PreferencePages[i]),
+                i => PreferenceIcons[i], SelectPreferenceCategory);
+            ImGui.BeginChild("settings-fields", Vector2.Zero);
+            if (resetPreferenceScroll) { ImGui.SetScrollY(0); resetPreferenceScroll = false; }
+            ImGui.BeginDisabled(locked);
+            foreach (int i in PreferenceIndices)
             {
-                ImGui.SetNextItemWidth(-1);
-                if(ImGui.BeginCombo("##category",L(categories[preferencesCategory])))
-                {for(int i=0;i<categories.Length;i++)if(ImGui.Selectable(L(categories[i]),preferencesCategory==i))preferencesCategory=i;ImGui.EndCombo();}
+                if (preferencesSearch.Length == 0 && i != preferencesCategory) continue;
+                ImGui.SeparatorText(L(PreferencePages[i]));
+                DrawPreferenceCategory(i);
             }
-            else
-            {
-                ImGui.BeginChild("categories",new(170*scale,0),true);
-                for(int i=0;i<categories.Length;i++)if(ImGui.Selectable(L(categories[i]),preferencesCategory==i))preferencesCategory=i;
-                ImGui.EndChild();ImGui.SameLine();
-            }
-            ImGui.BeginChild("settings-fields",new(0,0),false);
-            ImGui.BeginDisabled(Runtime.Exporting||Runtime.PerformanceActive||gizmoUsing);
-            if(preferencesSearch.Length==0)
-            {
-                ImGui.SeparatorText(L(categories[preferencesCategory]));DrawPreferenceCategory(preferencesCategory);
-                if(Button(L("creation-pref-reset-category")))ResetPreferenceCategory(preferencesCategory);
-            }
-            else for(int i=0;i<categories.Length;i++){ImGui.SeparatorText(L(categories[i]));DrawPreferenceCategory(i);}
-            ImGui.EndDisabled();ImGui.EndChild();
+            ImGui.EndDisabled();
+            ImGui.EndChild();
+            ImGui.EndChild();
+            ImGui.Separator();
+            ImGui.BeginDisabled(locked || preferencesSearch.Length != 0);
+            if (Button(L("creation-pref-reset-category"))) ResetPreferenceCategory(preferencesCategory);
+            ImGui.EndDisabled();
         }
         ImGui.End();
         if(!preferencesOpen && preferencesDirty){Run(PersistEditorPreferences);preferencesDirty=false;}

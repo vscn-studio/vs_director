@@ -1,5 +1,6 @@
 using System.Reflection;
 using HarmonyLib;
+using VSDirector.Networking;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -23,6 +24,7 @@ internal sealed class DirectorModelOutlineRenderer : IRenderer
     private readonly ICoreClientAPI capi;
     private readonly ClientMain game;
     private readonly DirectorConfig config;
+    private readonly System.Func<DirectorPermission, bool> hasPermission;
     private readonly Dictionary<Type, RendererFields?> rendererFields = new();
     private readonly HashSet<string> selectedEntityCodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly MeshRef screenTriangle;
@@ -39,10 +41,11 @@ internal sealed class DirectorModelOutlineRenderer : IRenderer
     private bool successfulFrameLogged;
     private bool disposed;
 
-    internal DirectorModelOutlineRenderer(ICoreClientAPI capi, DirectorConfig config)
+    internal DirectorModelOutlineRenderer(ICoreClientAPI capi, DirectorConfig config, System.Func<DirectorPermission, bool> hasPermission)
     {
         this.capi = capi;
         this.config = config;
+        this.hasPermission = hasPermission;
         game = capi.World as ClientMain
             ?? throw new InvalidOperationException("VS Director model outlines require the desktop client.");
         screenTriangle = capi.Render.UploadMesh(BuildScreenTriangle());
@@ -60,6 +63,7 @@ internal sealed class DirectorModelOutlineRenderer : IRenderer
         _ = deltaTime;
         _ = stage;
         if (!config.EnableModelOutlines
+            || !hasPermission(DirectorPermission.ModelOutlines)
             || config.ModelOutlineEntityCodes.Count == 0
             || !ShadersReady()
             || EntityShapeRendererType is null)
@@ -82,8 +86,9 @@ internal sealed class DirectorModelOutlineRenderer : IRenderer
             return;
         }
         noTargetsLogged = false;
-        bool throughObstacles = config.ModelOutlineThroughObstacles;
-        bool respectSceneDepth = !throughObstacles && destination.DepthTextureId > 0;
+        bool throughObstacles = config.ModelOutlineThroughObstacles && hasPermission(DirectorPermission.ThroughWallOutlines);
+        if (!throughObstacles && destination.DepthTextureId <= 0) return;
+        bool respectSceneDepth = !throughObstacles;
         float maskBufferScale = respectSceneDepth
             ? DepthAwareMaskBufferScale
             : MaskBufferScale;

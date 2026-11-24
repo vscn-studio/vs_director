@@ -17,6 +17,34 @@ internal static class DirectorImGuiBrowser
     }
 
     internal static bool Narrow => ImGui.GetContentRegionAvail().X < 500 * DirectorImGuiTheme.Scale;
+    internal static void SettingsWindow()
+    {
+        ImGui.SetNextWindowPos(ImGui.GetMainViewport().GetCenter(), ImGuiCond.Appearing, new Vector2(.5f));
+        DirectorImGuiLayout.WindowSize(new Vector2(760, 560), new Vector2(360, 320));
+    }
+
+    internal static void Categories<T>(T[] pages, T current, Func<T, string> label, Func<T, string> icon, Action<T> select) where T : notnull
+    {
+        if (Narrow)
+        {
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.BeginCombo("##settings-category", label(current)))
+            {
+                foreach (var page in pages)
+                    if (ImGui.Selectable(label(page), EqualityComparer<T>.Default.Equals(page, current))) select(page);
+                ImGui.EndCombo();
+            }
+            return;
+        }
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, DirectorImGuiTheme.Panel);
+        ImGui.BeginChild("settings-categories", new Vector2(SidebarWidth, 0));
+        ImGui.PopStyleColor();
+        foreach (var page in pages)
+            if (NavigationItem(page.ToString()!, label(page), icon(page), EqualityComparer<T>.Default.Equals(page, current))) select(page);
+        ImGui.EndChild();
+        ImGui.SameLine();
+    }
+
     internal static float SidebarWidth => Math.Clamp(ImGui.GetContentRegionAvail().X * .24f,
         144 * DirectorImGuiTheme.Scale, 184 * DirectorImGuiTheme.Scale);
 
@@ -40,9 +68,9 @@ internal static class DirectorImGuiBrowser
         ImGui.GetWindowDrawList().AddText((min + max) * .5f - inkCenter, color, text);
     }
 
-    internal static bool IconButton(string id, string icon)
+    internal static bool IconButton(string id, string icon, float side = 0)
     {
-        bool clicked = ImGui.Button("##" + id, new Vector2(ImGui.GetFrameHeight()));
+        bool clicked = ImGui.Button("##" + id, new Vector2(side > 0 ? side : ImGui.GetFrameHeight()));
         CenterIcon(icon, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), ImGui.GetColorU32(ImGuiCol.Text));
         return clicked;
     }

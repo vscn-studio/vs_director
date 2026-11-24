@@ -24,7 +24,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         int y = internalY - document.WorldSnapshot.Dimension * GlobalConstants.DimensionSizeInChunks;
         var key = new ReplayChunkKey(x, y, z);
         if (baselineChunks.TryGetValue(key, out var chunk)
-            && (!document.HasHistoricalBaselines || chunk.CapturedAtSeconds <= requestedTime))
+            ? !document.HasHistoricalBaselines || chunk.CapturedAtSeconds <= requestedTime
+            : sparsePositions.ContainsKey(key))
         {
             if (historyRefreshChunk == key) historyRefreshIndex = 0;
             else if (historyRefreshSet.Add(key)) historyRefreshQueue.Enqueue(key);
@@ -59,6 +60,12 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
     private readonly Dictionary<ReplayChunkKey, DirectorReplayChunkSnapshot> baselineChunks;
     private readonly Dictionary<BlockKey, DirectorReplayBlockEntitySnapshot> baselineBlockEntitySnapshots;
     private readonly Dictionary<BlockKey, IReadOnlyList<DirectorReplayBlockEvent>> blockEventsByPosition;
+    private readonly HashSet<BlockKey> legacyEmptyStarts = new();
+    private readonly List<DirectorReplayBlockEvent> legacyCompletions = new();
+    private readonly Dictionary<ReplayChunkKey, BlockKey[]> sparsePositions;
+    private readonly Dictionary<ReplayChunkKey, DirectorReplayBlockEntitySnapshot[]> entitiesByChunk;
+    private int historicalSnapshotIndex;
+    private readonly Queue<BlockKey> restoreUnobservedEntities = new();
     private readonly HashSet<BlockKey> baselineBlockEntities;
     private readonly HashSet<string> unavailableBlockEntityClasses = new(StringComparer.Ordinal);
     private readonly Dictionary<BlockKey, DirectorReplayBlockEvent> pendingEventBlockEntities = new();
@@ -142,6 +149,66 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         baselineBlockEntities = document.WorldSnapshot.BlockEntities
             .Select(snapshot => new BlockKey(snapshot.X, snapshot.Y, snapshot.Z, snapshot.Dimension))
             .ToHashSet();
+        entitiesByChunk = baselineBlockEntitySnapshots.Values
+            .GroupBy(s => new ReplayChunkKey(s.X >> 5, s.Y >> 5, s.Z >> 5))
+            .ToDictionary(g => g.Key, g => g.ToArray());
+        sparsePositions = blockEventsByPosition.Keys.Where(k => k.Dimension == document.WorldSnapshot.Dimension
+            && !baselineChunks.ContainsKey(new(k.X >> 5, k.Y >> 5, k.Z >> 5)))
+            .GroupBy(k => new ReplayChunkKey(k.X >> 5, k.Y >> 5, k.Z >> 5))
+            .ToDictionary(g => g.Key, g => g.ToArray());
+        if (!document.HasHistoricalBaselines) RepairLegacyPlacements();
+    }
+
+    private void RepairLegacyPlacements()
+    {
+        // Older clients seeded newly initialized entities outside the snapshot
+        // with their *placed* block ID at time zero, before a BE existed.
+        foreach (var group in sparsePositions.Values)
+        foreach (var key in group)
+        {
+            var history = blockEventsByPosition[key];
+            if (history.Count < 2) continue;
+            var first = history[0];
+            var placed = history[1];
+            if (first.TimeSeconds != 0 || !first.BlockEntityCaptured || !string.IsNullOrEmpty(first.BlockEntityClass)
+                || first.SolidBlockId == 0 || placed.TimeSeconds <= 0 || placed.SolidBlockId != first.SolidBlockId
+                || !placed.BlockEntityCaptured || placed.BlockEntityClass is not ("Sapling" or "KnappingSurface")) continue;
+            var empty = first.DeepClone();
+            empty.SolidBlockId = 0;
+            legacyEmptyStarts.Add(key);
+            var last = history[^1];
+            DirectorReplayBlockEvent? removed = null;
+            if (last.BlockEntityClass == "KnappingSurface" && KnappingCompletion(last) is double end)
+            {
+                removed = new DirectorReplayBlockEvent { TimeSeconds = end, X = key.X, Y = key.Y, Z = key.Z,
+                    Dimension = key.Dimension, FluidBlockId = last.FluidBlockId, BlockEntityCaptured = true };
+                legacyCompletions.Add(removed);
+            }
+            // Leave all intermediate voxel states backed by the original replay pages.
+            blockEventsByPosition[key] = new DirectorReplayList<DirectorReplayBlockEvent>(
+                history.Count + (removed is null ? 0 : 1),
+                i => i == 0 ? empty : i == history.Count ? removed! : history[i]);
+        }
+        legacyCompletions.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
+    }
+
+    private double? KnappingCompletion(DirectorReplayBlockEvent last)
+    {
+        var sounds = document.SoundEvents;
+        int start = DirectorReplayTimeSearch.LowerBound(sounds, last.TimeSeconds, s => s.TimeSeconds);
+        double hit = double.NegativeInfinity;
+        for (int i = start; i < sounds.Count; i++)
+        {
+            var s = sounds[i];
+            if (s.TimeSeconds > last.TimeSeconds + 1) break;
+            if (s.RelativePosition || s.Action != DirectorReplaySoundAction.Play
+                || Math.Floor(s.X) != last.X || Math.Floor(s.Y) != last.Y || Math.Floor(s.Z) != last.Z) continue;
+            if (s.Location is "game:sounds/player/knap1.ogg" or "game:sounds/player/knap2.ogg") hit = s.TimeSeconds;
+            if (s.TimeSeconds - hit <= .15 && s.Location is ("game:sounds/player/collect1.ogg"
+                or "game:sounds/player/collect2.ogg" or "game:sounds/player/collect3.ogg"))
+                return s.TimeSeconds;
+        }
+        return null;
     }
 
     public int ModifiedBlockCount => originalBlocks.Count;
@@ -163,7 +230,12 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
     public bool IsReady
         => started && !IsBusy;
 
-    public string Phase => phase.ToString().ToLowerInvariant();
+    public string Phase => HasPendingChunkRefresh ? "refresh" : phase switch
+    {
+        ApplyPhase.Baseline => "baseline",
+        ApplyPhase.Events => "events",
+        _ => "ready"
+    };
 
     public double Progress
     {
@@ -327,11 +399,31 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         historicalChunks = !document.HasHistoricalBaselines ? [] : document.WorldSnapshot.Chunks
             .Where(c => c.CapturedAtSeconds > targetTime).OrderBy(c => c.CapturedAtSeconds).ToArray();
         historicalChunkIndex = 0;
+        restoreUnobservedEntities.Clear();
+        foreach (var key in touchedBlockEntities)
+        {
+            if (IsFutureChunk(key, targetTime)) restoreUnobservedEntities.Enqueue(key);
+        }
         ResetHistoricalChunk();
         deferredChunks?.Dispose();
-        deferredChunks = (!document.HasHistoricalBaselines ? DirectorReplayDeferredChunks.Events(document.WorldSnapshot)
-            : Enumerable.Empty<DirectorReplayBlockEvent>()).GetEnumerator();
+        deferredChunks = DeferredEvents(targetTime).GetEnumerator();
         nextDeferredBlock = deferredChunks.MoveNext() ? deferredChunks.Current : null;
+    }
+
+    private IEnumerable<DirectorReplayBlockEvent> DeferredEvents(double targetTime)
+    {
+        int i = 0;
+        // Indexed reconstruction already includes inferred completions at or before the seek.
+        if (UseIndexedSeek)
+            while (i < legacyCompletions.Count && legacyCompletions[i].TimeSeconds <= targetTime + .000001) i++;
+        if (!document.HasHistoricalBaselines)
+            foreach (var change in DirectorReplayDeferredChunks.Events(document.WorldSnapshot))
+            {
+                while (i < legacyCompletions.Count && legacyCompletions[i].TimeSeconds < change.TimeSeconds)
+                    yield return legacyCompletions[i++];
+                yield return change;
+            }
+        while (i < legacyCompletions.Count) yield return legacyCompletions[i++];
     }
 
     private int AdvanceBaseline(int budget, Stopwatch stopwatch)
@@ -503,6 +595,22 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
 
     private bool AdvanceBaselineBlockEntities(ref int budget, Stopwatch stopwatch)
     {
+        while (budget >= BlockEntityOperationCost && HasBaselineTime(stopwatch)
+            && restoreUnobservedEntities.TryDequeue(out var key))
+        {
+            var position = key.ToBlockPos();
+            if (originalBlockEntities.Remove(key, out var original))
+            {
+                RecreateBlockEntity(original);
+                if (capi.World.BlockAccessor.GetBlockEntity(position) is { } restored)
+                    UnmarkReplayBlockEntity(restored);
+            }
+            else RemoveBlockEntity(position);
+            touchedBlockEntities.Remove(key);
+            originalBlocks.Remove(key);
+            budget -= BlockEntityOperationCost;
+        }
+        if (restoreUnobservedEntities.Count > 0) return false;
         baselineExtraBlockEntities ??= new List<BlockPos>();
         if (!baselineExtraScanComplete)
         {
@@ -534,6 +642,11 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         {
             DirectorReplayBlockEntitySnapshot snapshot =
                 document.WorldSnapshot.BlockEntities[baselineBlockEntityIndex++];
+            if (IsFutureChunk(new(snapshot.X, snapshot.Y, snapshot.Z, snapshot.Dimension), baselineTime))
+            {
+                budget -= BlockEntityScanCost;
+                continue;
+            }
             if (budget < BlockEntityOperationCost)
             {
                 baselineBlockEntityIndex--;
@@ -711,6 +824,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             DirectorReplayBlockEvent change = indexed ? nextIndexedChange! : deferred ? nextDeferredBlock! : document.BlockEvents[nextBlockEvent];
             BlockPos position = new(change.X, change.Y, change.Z, change.Dimension);
             BlockKey key = BlockKey.From(position);
+            if (change.TimeSeconds == 0 && legacyEmptyStarts.Contains(key)) change = blockEventsByPosition[key][0];
             // An event without captured BE state is an opaque transition. Apply
             // the previous authoritative BE state before changing its block.
             if (!change.BlockEntityCaptured && pendingEventBlockEntities.ContainsKey(key))
@@ -826,6 +940,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         historicalCompared = false;
         historicalBlockEntities = null;
         historicalBlockEntityIndex = 0;
+        historicalSnapshotIndex = 0;
         historicalChanges.Clear();
     }
 
@@ -871,6 +986,15 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             budget -= BlockEntityOperationCost;
         }
         if (historicalBlockEntityIndex < historicalBlockEntities.Length) return false;
+        if (entitiesByChunk.TryGetValue(new(chunk.ChunkX, chunk.ChunkY, chunk.ChunkZ), out var snapshots))
+        {
+            while (historicalSnapshotIndex < snapshots.Length && budget >= BlockEntityOperationCost && HasBaselineTime(stopwatch))
+            {
+                RecreateBlockEntity(snapshots[historicalSnapshotIndex++]);
+                budget -= BlockEntityOperationCost;
+            }
+            if (historicalSnapshotIndex < snapshots.Length) return false;
+        }
         appliedTime = Math.Max(appliedTime, chunk.CapturedAtSeconds);
         historicalChunkIndex++;
         ResetHistoricalChunk();
@@ -974,16 +1098,26 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                 {
                     if (!historyRefreshQueue.TryDequeue(out var next)) break;
                     historyRefreshChunk = next; historyRefreshIndex = 0;
-                    var baseline = baselineChunks[next];
-                    // Before an ordinary delayed capture, the recorded baseline
-                    // is empty, just as it is during baseline/seek reconstruction.
-                    bool captured = baseline.CapturedAtSeconds <= requestedTime;
-                    historySolid = DirectorReplayChunkCodec.Decode(captured ? baseline.SolidRuns : null, ChunkBlockCount);
-                    historyFluid = DirectorReplayChunkCodec.Decode(captured ? baseline.FluidRuns : null, ChunkBlockCount);
+                    if (baselineChunks.TryGetValue(next, out var baseline))
+                    {
+                        bool captured = baseline.CapturedAtSeconds <= requestedTime;
+                        historySolid = DirectorReplayChunkCodec.Decode(captured ? baseline.SolidRuns : null, ChunkBlockCount);
+                        historyFluid = DirectorReplayChunkCodec.Decode(captured ? baseline.FluidRuns : null, ChunkBlockCount);
+                    }
                 }
                 var chunk = historyRefreshChunk.Value; int index = historyRefreshIndex++;
-                var key = new BlockKey(chunk.X * 32 + index % 32, chunk.Y * 32 + index / 1024, chunk.Z * 32 + index / 32 % 32, document.WorldSnapshot.Dimension);
-                var position = key.ToBlockPos(); int solid = historySolid![index], fluid = historyFluid![index];
+                var sparse = historySolid is null ? sparsePositions[chunk] : null;
+                var key = sparse is null
+                    ? new BlockKey(chunk.X * 32 + index % 32, chunk.Y * 32 + index / 1024, chunk.Z * 32 + index / 32 % 32, document.WorldSnapshot.Dimension)
+                    : sparse[index];
+                var position = key.ToBlockPos();
+                int solid = historySolid?[index] ?? 0, fluid = historyFluid?[index] ?? 0;
+                bool known = sparse is null;
+                if (historyRefreshIndex >= (sparse?.Length ?? ChunkBlockCount))
+                {
+                    historyRefreshSet.Remove(chunk); historyRefreshChunk = null; historySolid = historyFluid = null;
+                }
+                budget--;
                 if (blockEventsByPosition.TryGetValue(key, out var changes))
                 {
                     int at = LastPositionEvent(changes, requestedTime);
@@ -991,26 +1125,24 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                     {
                         var change = changes[at];
                         solid = change.SolidBlockId; fluid = change.FluidBlockId;
+                        known = true;
                     }
                 }
+                if (!known) continue;
                 int liveSolid = capi.World.BlockAccessor.GetBlock(position, BlockLayersAccess.Solid).Id;
                 int liveFluid = capi.World.BlockAccessor.GetBlock(position, BlockLayersAccess.Fluid).Id;
                 if (liveSolid != solid || liveFluid != fluid || originalBlocks.ContainsKey(key)) originalBlocks[key] = new(liveSolid, liveFluid);
-                staged += StageBlockPair(bulk, position, solid, fluid);
                 TryGetReplayBlockEntity(position, requestedTime, out var entity);
-                if (entity is not null || capi.World.BlockAccessor.GetBlockEntity(position) is not null)
+                bool restoreEntity = entity is not null || capi.World.BlockAccessor.GetBlockEntity(position) is not null;
+                if (restoreEntity || touchedBlockEntities.Contains(key)) PreserveLatestRealityBlockEntity(position, key);
+                staged += StageBlockPair(bulk, position, solid, fluid);
+                if (restoreEntity)
                 {
-                    PreserveLatestRealityBlockEntity(position, key);
                     if (staged > 0) { bulk.Commit(); bulk.ReadFromStagedByDefault = true; staged = 0; }
                     if (entity is not null) RecreateBlockEntity(entity); else RemoveBlockEntity(position);
                     budget -= BlockEntityOperationCost;
                 }
-                budget--;
                 if (staged >= CommitBatchSize) { bulk.Commit(); bulk.ReadFromStagedByDefault = true; staged = 0; }
-                if (historyRefreshIndex >= ChunkBlockCount)
-                {
-                    historyRefreshSet.Remove(chunk); historyRefreshChunk = null; historySolid = historyFluid = null;
-                }
             }
             if (staged > 0) bulk.Commit();
         }
@@ -1241,6 +1373,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             return;
         }
 
+        bool processImmediately = onMainThread && !ReplayChunkEntityInitializationPatch.IsInitializing;
         bool enqueueMainThreadTask = false;
         lock (liveRealityObservationSync)
         {
@@ -1253,14 +1386,14 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                 key,
                 out LiveRealityObservationKind pending);
             pendingLiveRealityObservations[key] = pending | kind;
-            if (!onMainThread && !liveRealityObservationTaskQueued)
+            if (!processImmediately && !liveRealityObservationTaskQueued)
             {
                 liveRealityObservationTaskQueued = true;
                 enqueueMainThreadTask = true;
             }
         }
 
-        if (onMainThread)
+        if (processImmediately)
         {
             ProcessPendingLiveRealityObservations();
             return;
@@ -1556,6 +1689,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         out DirectorReplayBlockEntitySnapshot? snapshot)
     {
         BlockKey key = BlockKey.From(position);
+        snapshot = null;
+        if (IsFutureChunk(key, timeSeconds)) return false;
         bool found = position.dimension == document.WorldSnapshot.Dimension
             && baselineChunks.ContainsKey(
                 new ReplayChunkKey(position.X >> 5, position.Y >> 5, position.Z >> 5));
@@ -1589,6 +1724,11 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
 
         return found;
     }
+
+    private bool IsFutureChunk(BlockKey key, double time)
+        => document.HasHistoricalBaselines && key.Dimension == document.WorldSnapshot.Dimension
+            && baselineChunks.TryGetValue(new(key.X >> 5, key.Y >> 5, key.Z >> 5), out var chunk)
+            && chunk.CapturedAtSeconds > time;
 
     private static int ReadBlockRun(IReadOnlyList<DirectorReplayBlockRun> runs, int index)
     {

@@ -49,6 +49,15 @@ public static class DirectorReplayPreloadPlanner
         bool includeWorldSnapshotColumns,
         int radiusChunks = DefaultRadiusChunks,
         int maxSourceColumns = DefaultMaxSourceColumns)
+        => Build(document, preferredPlayerUid, includeWorldSnapshotColumns, CancellationToken.None, radiusChunks, maxSourceColumns);
+
+    public static DirectorReplayPreloadPlan Build(
+        DirectorReplayDocument document,
+        string? preferredPlayerUid,
+        bool includeWorldSnapshotColumns,
+        CancellationToken cancellationToken,
+        int radiusChunks = DefaultRadiusChunks,
+        int maxSourceColumns = DefaultMaxSourceColumns)
     {
         ArgumentNullException.ThrowIfNull(document);
         int radius = Math.Clamp(radiusChunks, 0, 2);
@@ -63,6 +72,7 @@ public static class DirectorReplayPreloadPlanner
             DirectorReplayPreloadColumn? previous = null;
             foreach (DirectorReplayActorSample sample in actor.Samples)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!double.IsFinite(sample.X) || !double.IsFinite(sample.Z))
                 {
                     continue;
@@ -103,6 +113,7 @@ public static class DirectorReplayPreloadPlanner
             HashSet<DirectorReplayPreloadColumn> automaticSet = automatic.ToHashSet();
             foreach (DirectorReplayChunkSnapshot chunk in chunks)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 DirectorReplayPreloadColumn column = new(
                     chunk.ChunkX,
                     chunk.ChunkZ,
@@ -282,8 +293,7 @@ public static class DirectorReplayPreloadPlanner
         HashSet<DirectorReplayPreloadColumn> unique = new();
         List<DirectorReplayPreloadColumn> result = new();
         truncated = false;
-        foreach (DirectorReplayPreloadColumn column in automaticColumns.Concat(
-                     NormalizeOverrideColumns(includedColumns)))
+        foreach (DirectorReplayPreloadColumn column in NormalizeOverrideColumns(includedColumns).Concat(automaticColumns))
         {
             if (excluded.Contains(column) || !unique.Add(column))
             {

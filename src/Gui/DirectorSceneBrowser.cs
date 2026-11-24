@@ -123,7 +123,6 @@ internal sealed class DirectorSceneBrowser : IDisposable
             bool drawContents = ImGui.Begin($"{WindowTitle}###vsdirector-scene-browser", ref opened, Flags | ImGuiWindowFlags.AlwaysAutoResize);
             try
             {
-                ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
                 if (drawContents) OnDraw();
             }
             finally
@@ -143,7 +142,6 @@ internal sealed class DirectorSceneBrowser : IDisposable
                 ImGuiWindowFlags.NoBringToFrontOnFocus);
             try
             {
-                ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
                 if (drawContents) OnDraw();
             }
             finally { ImGui.End(); }

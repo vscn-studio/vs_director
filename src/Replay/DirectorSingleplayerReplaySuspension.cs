@@ -16,6 +16,7 @@ internal sealed class DirectorSingleplayerReplaySuspension : IDisposable
     private GameCalendar? calendar;
     private bool restorePlatformPause;
     private bool calendarRunsWhenUnpaused;
+    private bool loadingTerrain;
 
     internal DirectorSingleplayerReplaySuspension(ICoreClientAPI capi, ClientMain game)
     {
@@ -101,9 +102,10 @@ internal sealed class DirectorSingleplayerReplaySuspension : IDisposable
 
         try
         {
-            if (!game.Platform.IsGamePaused)
+            bool pauseServer = !loadingTerrain || game.IsPaused || restorePlatformPause;
+            if (game.Platform.IsGamePaused != pauseServer)
             {
-                game.Platform.SetGamePausedState(paused: true);
+                game.Platform.SetGamePausedState(pauseServer);
             }
             if (calendar?.IsRunning == true)
             {
@@ -118,6 +120,11 @@ internal sealed class DirectorSingleplayerReplaySuspension : IDisposable
                 exception.GetBaseException().Message);
             return false;
         }
+    }
+
+    internal void SetTerrainLoading(bool loading)
+    {
+        loadingTerrain = loading;
     }
 
     private void HoldDuringPlaybackCleanup()
@@ -140,6 +147,7 @@ internal sealed class DirectorSingleplayerReplaySuspension : IDisposable
         }
 
         IsActive = false;
+        loadingTerrain = false;
         bool keepPlatformPaused = restorePlatformPause || game.IsPaused;
         try
         {

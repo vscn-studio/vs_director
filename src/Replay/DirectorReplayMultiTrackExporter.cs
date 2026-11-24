@@ -59,10 +59,13 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
         this.applyTrack = applyTrack;
         game = capi.World as ClientMain
             ?? throw new InvalidOperationException("Replay export requires the desktop client.");
-        capi.Event.RegisterRenderer(this, EnumRenderStage.Done, "vsdirector-replay-multitrack");
+        capi.Event.RegisterRenderer(this, EnumRenderStage.Ortho, "vsdirector-replay-multitrack");
+        capi.Event.RegisterRenderer(this, EnumRenderStage.Done, "vsdirector-replay-multitrack-no-overlays");
     }
 
-    public double RenderOrder => 0.975d;
+    // Titles and fades are drawn at 0.992; GuiManager draws ImGui and the HUD at 1.
+    public double RenderOrder => 0.995d;
+    private bool receivedOrtho;
 
     public int RenderRange => int.MaxValue;
 
@@ -433,7 +436,14 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
         _ = deltaTime;
-        _ = stage;
+        if (stage == EnumRenderStage.Ortho) receivedOrtho = true;
+        else if (stage == EnumRenderStage.Done)
+        {
+            bool alreadyHandled = receivedOrtho;
+            receivedOrtho = false;
+            if (alreadyHandled) return;
+        }
+        else return;
         ExportSession? active = session;
         if (active is null)
         {
@@ -461,8 +471,7 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
                     return;
                 }
 
-                // SelectTrack runs at the Done render stage, after the current
-                // framebuffer already exists. The frame gate waits for both a
+                // The current framebuffer already exists. The frame gate waits for both a
                 // fresh camera frame and the configured post-seek settle frames.
                 return;
             }
@@ -945,6 +954,7 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
         disposed = true;
         Stop();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Done);
+        capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);
     }
 
     private static int NormalizeEvenDimension(int value, int fallback)

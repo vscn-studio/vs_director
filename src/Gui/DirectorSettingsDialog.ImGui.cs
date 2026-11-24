@@ -14,33 +14,7 @@ internal sealed partial class DirectorSettingsDialog
     private bool permissionsExpanded;
     private bool resetFieldsScroll;
 
-    protected override VSImGui.API.CallbackGUIStatus Draw(float deltaSeconds)
-    {
-        if (docked) return DrawStatus();
-        if (Opened)
-        {
-            DirectorImGuiLayout.WindowSize(new Vector2(760, 560), new Vector2(360, 320));
-        }
-        return base.Draw(deltaSeconds);
-    }
-
-    private void DrawDocked()
-    {
-        if (!Opened) return;
-        using var font = DirectorImGuiRuntime.UseFont(dialog: false);
-        DirectorImGuiLayout.WindowSize(new Vector2(760, 560), new Vector2(360, 320));
-        bool opened = Opened;
-        bool visible = ImGui.Begin($"{Lang.Get("vsdirector:settings-title")}###vsdirector-settings", ref opened,
-            ImGuiWindowFlags.NoBringToFrontOnFocus
-                | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
-        try
-        {
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
-            if (visible) OnDraw();
-        }
-        finally { ImGui.End(); }
-        if (!opened) Close();
-    }
+    protected override void PrepareWindow() => DirectorImGuiBrowser.SettingsWindow();
 
     protected override bool OnDraw()
     {
@@ -89,25 +63,7 @@ internal sealed partial class DirectorSettingsDialog
     private void DrawCategoryNavigation()
     {
         var pages = Enum.GetValues<SettingsPage>().Where(IsPageAvailable).ToArray();
-        if (DirectorImGuiBrowser.Narrow)
-        {
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.BeginCombo("##settings-category", CategoryLabel(page)))
-            {
-                foreach (var target in pages)
-                    if (ImGui.Selectable(CategoryLabel(target), page == target)) SelectCategory(target);
-                ImGui.EndCombo();
-            }
-            return;
-        }
-        float width = DirectorImGuiBrowser.SidebarWidth;
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, DirectorImGuiTheme.Panel);
-        ImGui.BeginChild("settings-categories", new Vector2(width, 0), false);
-        ImGui.PopStyleColor();
-        foreach (var target in pages)
-            if (DirectorImGuiBrowser.NavigationItem(target.ToString(), CategoryLabel(target), CategoryIcon(target), page == target)) SelectCategory(target);
-        ImGui.EndChild();
-        ImGui.SameLine();
+        DirectorImGuiBrowser.Categories(pages, page, CategoryLabel, CategoryIcon, SelectCategory);
     }
 
     private static string CategoryIcon(SettingsPage target) => target switch
@@ -158,7 +114,8 @@ internal sealed partial class DirectorSettingsDialog
                 ImGui.EndDisabled();
                 if (ImGui.Button(Lang.Get("vsdirector:settings-download-ffmpeg"))) OpenFfmpegDownload();
             }
-            if (target == SettingsPage.Accessibility && draft.EnableModelOutlines && !searching) DrawOutlineEntities();
+            if (target == SettingsPage.Accessibility && draft.EnableModelOutlines && !searching
+                && owner.HasPermission(DirectorPermission.ModelOutlines)) DrawOutlineEntities();
             if (target == SettingsPage.Interface && ImGui.Button(Lang.Get("vsdirector:head-settings"))) owner.OpenHeadTrackingSettings();
             ImGui.Spacing();
             ImGui.PopID();
@@ -479,7 +436,9 @@ internal sealed partial class DirectorSettingsDialog
         {
             "OffscreenEncoder" or "OffscreenVideoQuality" or "OffscreenVideoBitrateKbps" or "FfmpegVideoPreset" => ffmpeg,
             "OffscreenCaptureDirectorAudio" or "OffscreenMuteOtherObsAudio" => !ffmpeg,
-            "ModelOutlineColor" or "ModelOutlineThickness" or "ModelOutlineThroughObstacles" => draft.EnableModelOutlines,
+            "EnableModelOutlines" => owner.HasPermission(DirectorPermission.ModelOutlines),
+            "ModelOutlineColor" or "ModelOutlineThickness" => draft.EnableModelOutlines && owner.HasPermission(DirectorPermission.ModelOutlines),
+            "ModelOutlineThroughObstacles" => draft.EnableModelOutlines && owner.HasPermission(DirectorPermission.ModelOutlines | DirectorPermission.ThroughWallOutlines),
             "EnableGreenScreenSky" => draft.EnableGreenScreenSupport,
             "GreenScreenSkyHideClouds" => draft.EnableGreenScreenSupport && draft.EnableGreenScreenSky,
             _ => true

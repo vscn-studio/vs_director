@@ -104,8 +104,7 @@ internal sealed partial class DirectorReplayManager
         };
         pendingLoad = loading;
         replayLoadOverlayVisible = false;
-        loading.Task = LoadReplayWithServerCompanionAsync(path,
-            new ReplayLoadProgress(loading), loading.Cancellation.Token);
+        BeginPlaybackLoad(loading);
         return true;
     }
 }

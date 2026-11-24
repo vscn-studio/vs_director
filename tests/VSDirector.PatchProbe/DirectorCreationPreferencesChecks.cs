@@ -56,7 +56,7 @@ internal static partial class DirectorImGuiProbe
             // Render the actual category window, including narrow layout and search.
             foreach(string search in new[]{"","IK"})
             {
-                AccessTools.Field(type,"preferencesSearch").SetValue(workspace,search);Call("OpenPreferences",1);
+                Call("OpenPreferences",1);AccessTools.Field(type,"preferencesSearch").SetValue(workspace,search);
                 for(int i=0;i<3;i++){ImGui.NewFrame();Call("DrawPreferences");ImGui.Render();}
             }
             var empty=new DirectorCreationProject();

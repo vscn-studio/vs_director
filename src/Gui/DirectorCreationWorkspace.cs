@@ -145,7 +145,6 @@ internal sealed partial class DirectorCreationWorkspace
         if (reveal || requested) { ImGui.SetNextWindowCollapsed(false); ImGui.SetNextWindowFocus(); }
         ImGui.SetNextWindowSize(new Vector2(320, title.EndsWith("###vsdirector-creation-tools", StringComparison.Ordinal) ? 72 : 320) * DirectorImGuiTheme.Scale, ImGuiCond.FirstUseEver);
         bool visible = ImGui.Begin(title, ref open, flags);
-        ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         if(requested && ImGui.GetWindowDockID()==0)
         {
             var position=ImGui.GetWindowPos();var size=ImGui.GetWindowSize();var display=ImGui.GetIO().DisplaySize;
@@ -184,7 +183,7 @@ internal sealed partial class DirectorCreationWorkspace
             Item(L("creation-project-settings"),()=>auxiliary="settings",ready);
             Item(L("creation-export-menu"),()=>auxiliary="output",ready);
             Item(L("creation-world-settings"),()=>view=true,ready);
-            ImGui.Separator();Item(L("creation-global-settings"),owner.OpenCreationGlobalSettings);
+            ImGui.Separator();Item(L("creation-global-settings"),owner.OpenGlobalSettings);
             return;
         }
         if (menu is "创作" or "项目")
@@ -320,7 +319,6 @@ internal sealed partial class DirectorCreationWorkspace
         DrawBlueprintCapture();
         if (!structureCapture) return;
         bool visible = ImGui.Begin(L("creation-capture-scene-structure") + "###creation-structure-capture", ref structureCapture, ImGuiWindowFlags.AlwaysAutoResize);
-        ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         if (!visible) { ImGui.End(); return; }
         ImGui.TextWrapped(L("creation-structure-corners", structureFirst.X, structureFirst.Y, structureFirst.Z));
         if (Button(L("creation-confirm-second-corner"))) Run(() => { var second = Runtime.SelectedBlock(); Select(Runtime.CaptureStructure(structureFirst, second)); structureCapture = false; });
@@ -606,7 +604,6 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.SetNextWindowSize(new Vector2(580, pathDialog ? 500 : modal == L("creation-animation-name") ? 260 : 150) * DirectorImGuiTheme.Scale, ImGuiCond.Appearing);
         bool open = true;
         if (!ImGui.BeginPopupModal(L("creation-creation") + "###creation-dialog", ref open, ImGuiWindowFlags.NoSavedSettings)) return;
-        ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         try
         {
             ImGui.TextUnformatted(modal);
@@ -659,7 +656,6 @@ internal sealed partial class DirectorCreationWorkspace
         bool open = Runtime.Preview;
         if (ImGui.Begin(L("creation-camera-preview") + "###vsdirector-creation-preview", ref open))
         {
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
             host.TrackCreationDock("###vsdirector-creation-preview");
             if (Runtime.PreviewTexture > 0 && Project is { } p)
             {

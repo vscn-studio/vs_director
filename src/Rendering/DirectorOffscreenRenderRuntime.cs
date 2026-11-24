@@ -19,6 +19,12 @@ internal static class DirectorOffscreenRenderRuntime
 
     internal static DirectorOffscreenViewRequest? CurrentView => currentScope?.View;
 
+    // These passes do not dispatch the main window's AfterFinalComposition stage.
+    internal static void RestoreGradeOnViewExit(Action restore)
+    {
+        if (currentScope is not null) currentScope.RestoreGrade = restore;
+    }
+
     /// <summary>
     /// Monotonic frame id assigned by the offscreen multi-view renderer.  A
     /// dedicated replay renderer can use this to keep per-view caches scoped
@@ -41,6 +47,7 @@ internal static class DirectorOffscreenRenderRuntime
     private sealed class DirectorOffscreenRenderScope : IDisposable
     {
         private bool disposed;
+        internal Action? RestoreGrade { get; set; }
         internal DirectorOffscreenViewRequest View { get; }
 
         internal long PhysicalFrameNumber { get; }
@@ -61,7 +68,8 @@ internal static class DirectorOffscreenRenderRuntime
             }
 
             disposed = true;
-            currentScope = null;
+            try { RestoreGrade?.Invoke(); }
+            finally { currentScope = null; }
         }
     }
 }

@@ -11,9 +11,7 @@ internal sealed class DirectorAnchorServer : IDisposable
     private const int DimensionHeight = 32768;
     private const int MinRadiusChunks = 1;
     private const int HardMaxRadiusChunks = 12;
-    // Replay route preload is intentionally a small, moving observation
-    // window.  Keep the server-side limit tight as a second line of defence
-    // against a stale client or an oversized custom packet.
+    // Bound each dispatch batch independently of the retained plan size.
     private const int HardMaxPreloadSourceColumns = 16;
     private const int HardMaxPreloadExpandedColumns = 16;
     // Chunk-column loading can synchronously generate terrain and serialize a
@@ -50,7 +48,7 @@ internal sealed class DirectorAnchorServer : IDisposable
             .SetMessageHandler<DirectorChunkPreloadRequest>(OnPreloadRequest)
             .SetMessageHandler<DirectorBlockSoundEvent>(OnBlockSound);
         sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
-        tickListenerId = sapi.Event.RegisterGameTickListener(OnServerTick, 250);
+        tickListenerId = sapi.Event.RegisterGameTickListener(OnServerTick, 50);
     }
 
     internal DirectorServerConfig Config => config;
@@ -258,9 +256,23 @@ internal sealed class DirectorAnchorServer : IDisposable
 
         string replayId = request.ReplayId?.Trim() ?? string.Empty;
         long now = sapi.World.ElapsedMilliseconds;
+        if (request.RemovedColumns is { Count: > 0 } removals)
+        {
+            if (removals.Count > Data.DirectorReplayPreloadPlanner.MaxExpandedColumns || removals.Any(c => c is null)
+                || !preloads.TryGetValue(player.PlayerUID, out var current) || current.ReplayId != replayId
+                || request.BatchId < current.BatchId)
+            {
+                SendPreloadStatus(player, replayId, false, "preload-session-lost", 0, 0, request.BatchId);
+                return;
+            }
+            foreach (var c in removals)
+                ReleasePreloadColumn(current, new PreloadColumn(c.X, c.Z, c.Dimension));
+            UpdateProtectedChunks(player.PlayerUID);
+        }
         if (request.Columns is not { Count: > 0 })
         {
             if (preloads.TryGetValue(player.PlayerUID, out PreloadState? heartbeat)
+                && heartbeat.BatchId == request.BatchId
                 && string.Equals(heartbeat.ReplayId, replayId, StringComparison.Ordinal))
             {
                 heartbeat.LastRequestMs = now;
@@ -275,7 +287,7 @@ internal sealed class DirectorAnchorServer : IDisposable
                 return;
             }
 
-            SendPreloadStatus(player, replayId, allowed: false, "invalid-preload", 0, 0);
+            SendPreloadStatus(player, replayId, allowed: false, "preload-session-lost", 0, 0, request.BatchId);
             return;
         }
 
@@ -338,12 +350,37 @@ internal sealed class DirectorAnchorServer : IDisposable
             return;
         }
 
-        PreloadState next = new(replayId, expanded, now) { BatchId = request.BatchId };
-        RetainPreload(next);
-        if (preloads.Remove(player.PlayerUID, out PreloadState? existing))
+        preloads.TryGetValue(player.PlayerUID, out PreloadState? existing);
+        PreloadState next;
+        if (request.KeepPreviousBatches)
         {
-            ReleasePreload(existing);
+            if (existing is null || existing.ReplayId != replayId
+                || existing.PlanColumns.Count + expanded.Count(c => !existing.PlanColumns.Contains(c))
+                    > Data.DirectorReplayPreloadPlanner.MaxExpandedColumns)
+            {
+                SendPreloadStatus(player, replayId, false, "preload-session-lost", 0, 0, request.BatchId);
+                return;
+            }
+            next = existing;
+            next.Columns = expanded;
+            next.CompleteColumns.IntersectWith(expanded);
+            foreach (var column in next.LastDispatchColumns.Keys.ToArray())
+                if (request.RetryDelivery || !expanded.Contains(column)) next.LastDispatchColumns.Remove(column);
+            if (request.RetryDelivery) next.CompleteColumns.Clear();
+            next.LastCompleteColumns = next.CompleteColumns.Count;
+            next.NextColumnIndex = 0;
+            next.LastRequestMs = now;
+            next.EnsurePending = true;
         }
+        else
+        {
+            if (existing is not null) ReleasePreload(existing);
+            next = new PreloadState(replayId, expanded, now);
+        }
+        next.PlanColumns.UnionWith(expanded);
+        next.BatchId = request.BatchId;
+        next.RetryDelivery = request.RetryDelivery;
+        RetainPreload(next);
         preloads[player.PlayerUID] = next;
         UpdateProtectedChunks(player.PlayerUID);
         sapi.Logger.Debug(
@@ -481,6 +518,7 @@ internal sealed class DirectorAnchorServer : IDisposable
 
     private void OnServerTick(float deltaTime)
     {
+        if (anchors.Count == 0 && preloads.Count == 0) return;
         _ = deltaTime;
         long now = sapi.World.ElapsedMilliseconds;
         long timeoutMs = Math.Clamp(config.AnchorTimeoutSeconds, 2, 60) * 1000L;
@@ -535,7 +573,7 @@ internal sealed class DirectorAnchorServer : IDisposable
 
     private bool TryEnsureAnchorChunks(long now, long resendMs)
     {
-        foreach ((string playerUid, AnchorState state) in anchors)
+        foreach ((string playerUid, AnchorState state) in anchors.OrderBy(entry => entry.Value.LastEnsureMs))
         {
             if (!state.EnsurePending && now - state.LastEnsureMs < resendMs)
             {
@@ -556,7 +594,7 @@ internal sealed class DirectorAnchorServer : IDisposable
 
     private bool TryEnsurePreloadChunks(long now, long resendMs)
     {
-        foreach ((string playerUid, PreloadState state) in preloads)
+        foreach ((string playerUid, PreloadState state) in preloads.OrderBy(entry => entry.Value.LastEnsureMs))
         {
             if (!state.EnsurePending && now - state.LastEnsureMs < resendMs)
             {
@@ -577,24 +615,19 @@ internal sealed class DirectorAnchorServer : IDisposable
 
     private void EnsureAnchorChunks(IServerPlayer player, AnchorState state, long now)
     {
-        int chunkSize = sapi.WorldManager.ChunkSize;
         int total = state.Columns.Count;
         int start = total == 0 ? 0 : state.NextColumnIndex % total;
         int inspected = Math.Min(MaxColumnsPerEnsure, total);
         for (int offset = 0; offset < inspected; offset++)
         {
             AnchorColumn column = state.Columns[(start + offset) % total];
-            if (state.CompleteColumns.Contains(column))
-            {
-                continue;
-            }
-
             if (HasCompleteColumn(player, column.X, column.Z, state.Dimension))
             {
                 state.CompleteColumns.Add(column);
                 RetainAnchorColumn(state, column);
                 continue;
             }
+            state.CompleteColumns.Remove(column);
 
             if (!TryMarkColumnDispatch(state.LastDispatchColumns, column, now))
             {
@@ -602,74 +635,65 @@ internal sealed class DirectorAnchorServer : IDisposable
             }
 
             RetainAnchorColumn(state, column);
-            int dimensionOffset = state.Dimension * DimensionHeight / chunkSize;
-            // ForceSendChunkColumn() only queues 3D chunks in 1.22.3.  The
-            // client also needs the 2D map chunk before remote terrain can be
-            // meshed correctly.
-            sapi.WorldManager.SendChunk(
-                column.X,
-                dimensionOffset,
-                column.Z,
-                player,
-                onlyIfInRange: false);
             if (state.Dimension != 0 && state.LoadRequestedColumns.Add(column))
             {
                 sapi.WorldManager.LoadChunkColumnForDimension(column.X, column.Z, state.Dimension);
             }
-            sapi.WorldManager.ForceSendChunkColumn(player, column.X, column.Z, state.Dimension);
+            SendMissingChunks(player, column.X, column.Z, state.Dimension, false);
         }
 
         state.NextColumnIndex = total == 0 ? 0 : (start + inspected) % total;
-        state.EnsurePending = false;
+        state.EnsurePending = state.CompleteColumns.Count < total;
         state.LastEnsureMs = now;
         ReportAnchorProgress(player, state);
     }
 
     private void EnsurePreloadChunks(IServerPlayer player, PreloadState state, long now)
     {
-        int chunkSize = sapi.WorldManager.ChunkSize;
         PreloadColumn[] columns = state.Columns.ToArray();
         int start = columns.Length == 0 ? 0 : state.NextColumnIndex % columns.Length;
-        int inspected = Math.Min(MaxColumnsPerEnsure, columns.Length);
-        for (int offset = 0; offset < inspected; offset++)
+        int work = 0;
+        for (int offset = 0; offset < columns.Length; offset++)
         {
             PreloadColumn column = columns[(start + offset) % columns.Length];
-            if (state.CompleteColumns.Contains(column))
+            var retained = new AnchorColumn(column.X, column.Z);
+            bool needsRetention = column.Dimension == 0 && !state.RetainedColumns.Contains(retained);
+            bool forceDispatch = state.RetryDelivery && !state.LastDispatchColumns.ContainsKey(column);
+            bool sent = !forceDispatch && HasCompleteColumn(player, column.X, column.Z, column.Dimension);
+            // Check the entire batch for delivery, but only start work on one column per tick.
+            if (needsRetention)
             {
-                continue;
+                if (work >= MaxColumnsPerEnsure) continue;
+                retention.Acquire(retained);
+                state.RetainedColumns.Add(retained);
+                work++;
+                state.NextColumnIndex = (start + offset + 1) % columns.Length;
             }
-
-            if (HasCompleteColumn(player, column.X, column.Z, column.Dimension))
+            if (sent)
             {
                 state.CompleteColumns.Add(column);
                 continue;
             }
+            state.CompleteColumns.Remove(column);
 
-            if (!TryMarkColumnDispatch(state.LastDispatchColumns, column, now))
+            if ((!needsRetention && work >= MaxColumnsPerEnsure)
+                || !TryMarkColumnDispatch(state.LastDispatchColumns, column, now))
             {
                 continue;
             }
 
-            var retainedColumn = new AnchorColumn(column.X, column.Z);
-            if (state.RetainedColumns.Add(retainedColumn)) retention.Acquire(retainedColumn);
+            if (!needsRetention) work++;
+            state.NextColumnIndex = (start + offset + 1) % columns.Length;
             if (column.Dimension != 0 && state.LoadRequestedColumns.Add(column))
                 sapi.WorldManager.LoadChunkColumnForDimension(column.X, column.Z, column.Dimension);
-            int dimensionOffset = column.Dimension * DimensionHeight / chunkSize;
-            sapi.WorldManager.SendChunk(
-                column.X,
-                dimensionOffset,
-                column.Z,
-                player,
-                onlyIfInRange: false);
-            // Priority loading above is asynchronous, limited to one column per server tick.
-            sapi.WorldManager.ForceSendChunkColumn(player, column.X, column.Z, column.Dimension);
+            if (forceDispatch && sapi.World is ServerMain server
+                && server.Clients.TryGetValue(player.ClientId, out var client))
+                client.forceSendMapChunks.Add(sapi.WorldManager.MapChunkIndex2D(column.X, column.Z));
+            SendMissingChunks(player, column.X, column.Z, column.Dimension, forceDispatch);
         }
 
-        state.NextColumnIndex = columns.Length == 0
-            ? 0
-            : (start + inspected) % columns.Length;
         int completeColumns = state.CompleteColumns.Count;
-        state.EnsurePending = false;
+        state.EnsurePending = completeColumns < columns.Length;
         state.LastEnsureMs = now;
         if (completeColumns == state.LastCompleteColumns)
         {
@@ -729,6 +753,19 @@ internal sealed class DirectorAnchorServer : IDisposable
 
         lastDispatch[column] = now;
         return true;
+    }
+
+    private void SendMissingChunks(IServerPlayer player, int x, int z, int dimension, bool retryDelivery)
+    {
+        var world = sapi.WorldManager;
+        int size = world.ChunkSize;
+        int offset = dimension * DimensionHeight / size;
+        int height = (world.MapSizeY + size - 1) / size;
+        for (int y = offset; y < offset + height; y++)
+        {
+            if (retryDelivery || !world.HasChunk(x, y, z, player))
+                world.SendChunk(x, y, z, player, onlyIfInRange: false);
+        }
     }
 
     private bool HasCompleteColumn(IServerPlayer player, int chunkX, int chunkZ, int dimension)
@@ -894,6 +931,21 @@ internal sealed class DirectorAnchorServer : IDisposable
         state.LastDispatchColumns.Clear();
         state.EnsurePending = false;
         state.ProtectedChunks.Clear();
+    }
+
+    private void ReleasePreloadColumn(PreloadState state, PreloadColumn column)
+    {
+        if (!state.PlanColumns.Remove(column)) return;
+        state.Columns.Remove(column);
+        state.CompleteColumns.Remove(column);
+        state.LastDispatchColumns.Remove(column);
+        state.LoadRequestedColumns.Remove(column);
+        var horizontal = new AnchorColumn(column.X, column.Z);
+        if (column.Dimension == 0 && state.RetainedColumns.Remove(horizontal)) retention.Release(horizontal);
+        int size = sapi.WorldManager.ChunkSize;
+        int yOffset = column.Dimension * DimensionHeight / size;
+        for (int y = 0; y < (sapi.WorldManager.MapSizeY + size - 1) / size; y++)
+            state.ProtectedChunks.Remove(sapi.WorldManager.ChunkIndex3D(column.X, y + yOffset, column.Z));
     }
 
     private void RemoveAnchor(string playerUid)
@@ -1081,11 +1133,13 @@ internal sealed class DirectorAnchorServer : IDisposable
             EnsurePending = true;
         }
 
-        public int BatchId { get; init; }
+        public int BatchId { get; set; }
+        public bool RetryDelivery { get; set; }
 
         public string ReplayId { get; }
 
-        public HashSet<PreloadColumn> Columns { get; }
+        public HashSet<PreloadColumn> Columns { get; set; }
+        public HashSet<PreloadColumn> PlanColumns { get; } = new();
 
         public HashSet<AnchorColumn> RetainedColumns { get; } = new();
 

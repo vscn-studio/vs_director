@@ -233,7 +233,8 @@ public sealed class DirectorReplayPages
             SessionMerge = document.SessionMerge, IncludesWorldSnapshot = document.IncludesWorldSnapshot,
             ParticleCaptureVersion = document.ParticleCaptureVersion, Markers = document.Markers, SpeedKeyframes = document.SpeedKeyframes,
             ViewportTimeline = document.ViewportTimeline, IncludedPreloadColumns = document.IncludedPreloadColumns, ExcludedPreloadColumns = document.ExcludedPreloadColumns,
-            WorldSnapshot = new() { Dimension = document.WorldSnapshot.Dimension, MapSizeY = document.WorldSnapshot.MapSizeY,
+            WorldSnapshot = new() { FollowCaptureArea = document.WorldSnapshot.FollowCaptureArea,
+                Dimension = document.WorldSnapshot.Dimension, MapSizeY = document.WorldSnapshot.MapSizeY,
                 CenterChunkX = document.WorldSnapshot.CenterChunkX, CenterChunkZ = document.WorldSnapshot.CenterChunkZ,
                 RadiusChunks = document.WorldSnapshot.RadiusChunks }
         };

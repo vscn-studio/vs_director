@@ -163,6 +163,21 @@ public static class DirectorReplayElementTimeline
 
         start = selectedStart.DeepClone();
         end = selectedEnd.DeepClone();
+        // Older presets replaced the animated interval's end with the adjacent
+        // hold's start. That shared pose is the end of the incoming blend.
+        if (start.FollowBlend != DirectorReplayElementInterpolation.Hold)
+        {
+            var shared = frames.FirstOrDefault(k => k.TrackId == selectedStart.TrackId
+                && k.FollowEntityRole == DirectorReplayFollowEntityKeyframeRole.Start
+                && k.TimeSeconds > selectedStart.TimeSeconds + TimeEpsilon
+                && k.TimeSeconds < selectedEnd.TimeSeconds - TimeEpsilon);
+            if (shared is not null && shared.FollowBlend == DirectorReplayElementInterpolation.Hold
+                && shared.EntityActorKey == selectedStart.EntityActorKey && shared.EntityId == selectedStart.EntityId)
+            {
+                end = shared.DeepClone();
+                end.FollowEntityRole = DirectorReplayFollowEntityKeyframeRole.End;
+            }
+        }
         return true;
     }
 

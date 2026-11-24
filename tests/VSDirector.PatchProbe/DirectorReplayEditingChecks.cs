@@ -59,6 +59,8 @@ internal static partial class DirectorImGuiProbe
         var playbackType = manager.GetType().GetNestedType("Playback", BindingFlags.NonPublic)!;
         var playback = RuntimeHelpers.GetUninitializedObject(playbackType);
         var controller = Bare("Runtime.DirectorCameraController");
+        bool freeCameraAllowed = false;
+        Set(controller, "canUseFreeCamera", (Func<bool>)(() => freeCameraAllowed));
         var exporter = Bare("Replay.DirectorReplayMultiTrackExporter");
         Set(manager, "exporter", exporter); Set(manager, "independentVoiceExportGate", new object());
         Set(manager, "independentVoiceExportStatus", "idle"); Set(manager, "playback", playback);
@@ -78,6 +80,14 @@ internal static partial class DirectorImGuiProbe
         harmony.Patch(AccessTools.Method(manager.GetType(), "PersistTimelineEdit"), prefix: new HarmonyMethod(typeof(DirectorImGuiProbe), nameof(SaveReplayEditProbe)));
         try
         {
+            var observerPose = new CameraPreset { X = 4, Y = 5, Z = 6 };
+            if (Call(controller, "TryStartFreeCamera", new object?[] { null }) is not false)
+                throw new Exception("Free camera activated without permission");
+            Call(owner, "RestoreReplayObserverPose", observerPose);
+            var restoredState = (DirectorReplayCameraState)AccessTools.Field(owner.GetType(), "replayCameraState").GetValue(owner)!;
+            if (restoredState.Mode != DirectorReplayCameraMode.Fixed || (bool)AccessTools.Property(controller.GetType(), "IsFreeCamera").GetValue(controller)!)
+                throw new Exception("Restoring the observer pose unlocked free camera without permission");
+            freeCameraAllowed = true;
             foreach (var preset in catalog)
             foreach (double start in new[] { 0d, 18d, 20d })
             {

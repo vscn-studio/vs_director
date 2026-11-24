@@ -172,7 +172,6 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         try
         {
             workspace.TimelineDockId = ImGui.GetWindowDockID();
-            ImGui.SetWindowFontScale(Scale);
             if (visible)
             {
                 workspace.ReportBounds("timeline", ImGui.GetCursorScreenPos(), ImGui.GetContentRegionAvail());

@@ -28,6 +28,9 @@ internal sealed class DirectorPauseControls(GuiComposer composer, VSDirectorModS
     internal string ReplayName => (composer.GetElement(ReplayNameKey) as GuiElementTextInput)?.GetText() ?? "";
     internal string CameraName => (composer.GetElement(CameraNameKey) as GuiElementTextInput)?.GetText() ?? "";
     internal string SelectedSource => (composer.GetElement(OffscreenSourceKey) as GuiElementDropDown)?.SelectedValue ?? "";
+    private const DirectorPermission LayoutPermissions = DirectorPermission.ReplayCapture
+        | DirectorPermission.OffscreenSavedSources | DirectorPermission.CameraLibrary | DirectorPermission.FreeCamera;
+    internal DirectorPermission VisiblePermissions { get; private set; }
     internal static int RowCount(VSDirectorModSystem owner) => 1
         + (owner.HasPermission(DirectorPermission.ReplayCapture) ? 1 : 0)
         + (owner.IsReplayPlaying ? 1 : 0)
@@ -47,6 +50,7 @@ internal sealed class DirectorPauseControls(GuiComposer composer, VSDirectorModS
 
     internal void AddControls(double width, double height, double pitch, params Func<GuiComposer, bool>[] actions)
     {
+        VisiblePermissions = owner.PermissionsForPauseMenu & LayoutPermissions;
         double actionWidth = ActionColumnWidth;
         double fieldWidth = width - actionWidth - ButtonGap;
         double y = 0;
@@ -96,6 +100,8 @@ internal sealed class DirectorPauseControls(GuiComposer composer, VSDirectorModS
         if (owner.HasPermission(DirectorPermission.FreeCamera))
             Button(FreeCameraButtonKey, "escape-free-camera", 0, y, width, actions[5]);
     }
+
+    internal bool NeedsPermissionRefresh => VisiblePermissions != (owner.PermissionsForPauseMenu & LayoutPermissions);
 
     public override void ComposeElements(Context ctx, ImageSurface surface)
     {

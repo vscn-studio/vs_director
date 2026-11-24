@@ -10,6 +10,13 @@ internal sealed partial class DirectorWorkspaceHud
 {
     private DirectorImGuiWindow? imGuiToolbarWindow, imGuiResourceWindow;
     private DirectorSceneBrowser? sceneBrowser;
+    private DirectorAboutDialog? aboutDialog;
+
+    internal void OpenAbout()
+    {
+        aboutDialog ??= new DirectorAboutDialog(capi);
+        aboutDialog.Open();
+    }
     private DirectorWorkspaceSection sceneCategory = DirectorWorkspaceSection.Cameras;
     private string sceneSearch = "";
 
@@ -33,6 +40,7 @@ internal sealed partial class DirectorWorkspaceHud
         commands.Add(new("navigation", Lang.Get(layout.NavigationMode ? "vsdirector:workspace-edit-mode" : "vsdirector:workspace-navigate-mode"), () => ToggleNavigationMode()));
         commands.Add(new("hud", Lang.Get(owner.Config.HideHudOnCamera ? "vsdirector:workspace-show-hud" : "vsdirector:workspace-hide-hud"), () => ToggleCameraHud()));
         commands.Add(new("reset-layout", Lang.Get("vsdirector:workspace-reset-layout"), imGuiWorkspace.ResetLayout));
+        commands.Add(new("about", Lang.Get("vsdirector:workspace-about"), OpenAbout));
         var form = DirectorWorkspaceMenus.Toolbar(commands);
         imGuiToolbarWindow ??= new DirectorImGuiWindow(capi, "workspace-menu", docked: true, escape: () => OnEscapePressed(), overlay: true, workspace: imGuiWorkspace);
         imGuiToolbarWindow.Render("", form);

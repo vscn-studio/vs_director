@@ -18,6 +18,8 @@ public enum DirectorPermission : long
     PresetPackages = 1L << 13,
     RemoteChunkAccess = 1L << 15,
     ActorRecording = 1L << 16,
+    ModelOutlines = 1L << 17,
+    ThroughWallOutlines = 1L << 18,
     All = OffscreenCurrentView
         | OffscreenSavedSources
         | FreeCamera
@@ -28,6 +30,8 @@ public enum DirectorPermission : long
         | ReplayPlayback
         | RemoteChunkAccess
         | ActorRecording
+        | ModelOutlines
+        | ThroughWallOutlines
 }
 
 public sealed record DirectorPermissionDefinition(
@@ -61,6 +65,8 @@ public static class DirectorPermissions
             Define(DirectorPermission.ReplayPlayback, "replay-playback"),
             Define(DirectorPermission.RemoteChunkAccess, "remote-chunks"),
             Define(DirectorPermission.ActorRecording, "actor-recording"),
+            Define(DirectorPermission.ModelOutlines, "model-outlines"),
+            Define(DirectorPermission.ThroughWallOutlines, "through-wall-outlines"),
         };
 
     public static bool IsAdminRole(string? roleCode)

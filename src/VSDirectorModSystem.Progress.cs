@@ -33,6 +33,8 @@ public sealed partial class VSDirectorModSystem
             ? Lang.Get("vsdirector:replay-export-state-" + loadingPhase)
             : Lang.Get("vsdirector:workspace-replay-loading", Lang.Get("vsdirector:workspace-replay-phase-" + loadingPhase),
                 (ReplayLoadingProgress * 100).ToString("0.0", CultureInfo.InvariantCulture));
+        if (loadingPhase == "chunks" && replay?.StartupTerrainProgress is { } terrain)
+            detail = Lang.Get("vsdirector:replay-preload-received", terrain.Ready, terrain.Total);
         return new(IsReplayLoading, false, ReplayLoadingProgress, loadingPhase,
             Lang.Get("vsdirector:replay-progress-loading"), detail, PlaybackLoadError);
     }

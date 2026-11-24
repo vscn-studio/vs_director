@@ -221,6 +221,15 @@ public sealed class DirectorChunkPreloadRequest
 
     [ProtoMember(5)]
     public int BatchId;
+
+    [ProtoMember(6)]
+    public bool KeepPreviousBatches;
+
+    [ProtoMember(7)]
+    public bool RetryDelivery;
+
+    [ProtoMember(8)]
+    public List<DirectorChunkPreloadColumn> RemovedColumns = new();
 }
 
 [ProtoContract]

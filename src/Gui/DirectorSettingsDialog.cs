@@ -21,22 +21,12 @@ internal sealed partial class DirectorSettingsDialog : DirectorImGuiDialog
     private string[] outlineEntityNames = [];
     private DirectorPermissionMemberDto? permissionMember;
     private DirectorPermission permissionDraftMask;
-    private readonly DirectorImGuiWorkspace? workspace;
-    private readonly bool docked;
 
     public DirectorSettingsDialog(ICoreClientAPI capi, VSDirectorModSystem owner)
-        : this(capi, owner, null)
-    {
-    }
-
-    public DirectorSettingsDialog(ICoreClientAPI capi, VSDirectorModSystem owner, DirectorImGuiWorkspace? workspace)
         : base(capi, ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoScrollbar, Lang.Get("vsdirector:settings-title"), "vsdirector-settings", false)
     {
         this.capi = capi;
         this.owner = owner;
-        this.workspace = workspace;
-        docked = workspace is not null;
-        if (docked) workspace!.Add(DrawDocked);
         draft = Clone(owner.Config);
     }
 
@@ -79,7 +69,6 @@ internal sealed partial class DirectorSettingsDialog : DirectorImGuiDialog
     {
         if (disposed) return;
         disposed = true;
-        workspace?.Remove(DrawDocked);
         base.Dispose();
     }
 
@@ -90,7 +79,7 @@ internal sealed partial class DirectorSettingsDialog : DirectorImGuiDialog
         SettingsPage.Interface => owner.HasPermission(DirectorPermission.FreeCamera) || owner.HasPermission(DirectorPermission.CameraLibrary)
             || owner.HasPermission(DirectorPermission.PathLibrary) || owner.HasPermission(DirectorPermission.FollowCameras),
         SettingsPage.Offscreen => owner.HasPermission(DirectorPermission.OffscreenCurrentView) || owner.HasPermission(DirectorPermission.OffscreenSavedSources),
-        SettingsPage.Accessibility => owner.HasWorkspacePermission,
+        SettingsPage.Accessibility => owner.HasWorkspacePermission || owner.HasPermission(DirectorPermission.ModelOutlines),
         SettingsPage.Experimental or SettingsPage.Permissions => owner.IsDirectorAdmin,
         _ => false
     };

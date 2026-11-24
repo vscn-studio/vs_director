@@ -40,86 +40,57 @@ internal static class DirectorReplayWorldCapture
             CenterChunkX = centerChunkX,
             CenterChunkZ = centerChunkZ,
             RadiusChunks = radius,
-            MapSizeY = capi.World.MapSizeY
+            MapSizeY = capi.World.MapSizeY,
+            FollowCaptureArea = true
         };
-        int[] solid = new int[ChunkBlockCount];
-        int[] fluid = new int[ChunkBlockCount];
-        HashSet<BlockPos> capturedBlockEntities = new();
-
         for (int chunkZ = centerChunkZ - radius; chunkZ <= centerChunkZ + radius; chunkZ++)
-        {
             for (int chunkX = centerChunkX - radius; chunkX <= centerChunkX + radius; chunkX++)
-            {
                 for (int chunkY = 0; chunkY < verticalChunks; chunkY++)
-                {
-                    int internalChunkY = chunkY + dimension * GlobalConstants.DimensionSizeInChunks;
-                    IWorldChunk? chunk = game.WorldMap.GetChunk(chunkX, internalChunkY, chunkZ);
-                    if (chunk is null || chunk.Disposed || !chunk.Unpack_ReadOnly() && chunk.Data is null)
-                    {
-                        continue;
-                    }
+                    CaptureChunk(capi, game, snapshot, chunkX, chunkY, chunkZ, 0);
+        return snapshot;
+    }
 
-                    IChunkBlocks? data = chunk.Data;
-                    if (data is null)
-                    {
-                        continue;
-                    }
-
-                    data.TakeBulkReadLock();
-                    try
-                    {
-                        for (int index = 0; index < ChunkBlockCount; index++)
-                        {
-                            solid[index] = data.GetBlockIdUnsafe(index);
-                            fluid[index] = data.GetFluid(index);
-                        }
-                    }
-                    finally
-                    {
-                        data.ReleaseBulkReadLock();
-                    }
-
-                    snapshot.Chunks.Add(new DirectorReplayChunkSnapshot
-                    {
-                        ChunkX = chunkX,
-                        ChunkY = chunkY,
-                        ChunkZ = chunkZ,
-                        SolidRuns = DirectorReplayChunkCodec.Encode(solid),
-                        FluidRuns = DirectorReplayChunkCodec.Encode(fluid)
-                    });
-
-                    foreach (BlockEntity blockEntity in DirectorGameCompatibility.BlockEntities(chunk))
-                    {
-                        BlockPos position = blockEntity.Pos;
-                        BlockPos normalized = position.Copy();
-                        if (normalized.dimension != dimension)
-                        {
-                            normalized.dimension = dimension;
-                            normalized.Y %= BlockPos.DimensionBoundary;
-                        }
-
-                        if (!capturedBlockEntities.Add(normalized))
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            snapshot.BlockEntities.Add(
-                                DirectorReplaySerialization.CaptureBlockEntity(capi, normalized, blockEntity));
-                        }
-                        catch (Exception exception)
-                        {
-                            capi.Logger.Warning(
-                                "VS Director: could not snapshot block entity at {0}: {1}",
-                                normalized,
-                                exception.Message);
-                        }
-                    }
-                }
+    // Shared by the initial snapshot, bounded moving-area capture and the
+    // pre-mutation hook. Never retain references to mutable game chunk storage.
+    internal static bool CaptureChunk(ICoreClientAPI capi, ClientMain game,
+        DirectorReplayWorldSnapshot snapshot, int chunkX, int chunkY, int chunkZ, double time)
+    {
+        int dimension = snapshot.Dimension;
+        IWorldChunk? chunk = game.WorldMap.GetChunk(chunkX,
+            chunkY + dimension * GlobalConstants.DimensionSizeInChunks, chunkZ);
+        if (chunk is null || chunk.Disposed || (!chunk.Unpack_ReadOnly() && chunk.Data is null)) return false;
+        IChunkBlocks? data = chunk.Data;
+        if (data is null) return false;
+        int[] solid = new int[ChunkBlockCount], fluid = new int[ChunkBlockCount];
+        data.TakeBulkReadLock();
+        try
+        {
+            for (int index = 0; index < ChunkBlockCount; index++)
+            {
+                solid[index] = data.GetBlockIdUnsafe(index);
+                fluid[index] = data.GetFluid(index);
             }
         }
-
-        return snapshot;
+        finally { data.ReleaseBulkReadLock(); }
+        snapshot.Chunks.Add(new DirectorReplayChunkSnapshot
+        {
+            ChunkX = chunkX, ChunkY = chunkY, ChunkZ = chunkZ, CapturedAtSeconds = time,
+            SolidRuns = DirectorReplayChunkCodec.Encode(solid), FluidRuns = DirectorReplayChunkCodec.Encode(fluid)
+        });
+        foreach (BlockEntity blockEntity in DirectorGameCompatibility.BlockEntities(chunk))
+        {
+            BlockPos position = blockEntity.Pos.Copy();
+            if (position.dimension != dimension)
+            {
+                position.dimension = dimension;
+                position.Y %= BlockPos.DimensionBoundary;
+            }
+            try { snapshot.BlockEntities.Add(DirectorReplaySerialization.CaptureBlockEntity(capi, position, blockEntity)); }
+            catch (Exception exception)
+            {
+                capi.Logger.Warning("VS Director: could not snapshot block entity at {0}: {1}", position, exception.Message);
+            }
+        }
+        return true;
     }
 }

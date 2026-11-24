@@ -20,6 +20,26 @@ using VSDirector.Networking;
 using ProtoBuf;
 
 const string harmonyId = "vscn.vsdirector.patch-probe";
+if (args.Contains("--replay-audio-updates"))
+{
+    DirectorReplayAudioUpdateChecks.Run();
+    return 0;
+}
+if (args.Contains("--replay-render"))
+{
+    DirectorReplayRenderChecks.Run();
+    return 0;
+}
+if (Array.IndexOf(args, "--replay-isolation") is int isolation && isolation >= 0)
+{
+    DirectorReplayIsolationChecks.Run(args.ElementAtOrDefault(isolation + 1));
+    return 0;
+}
+if (args.Contains("--replay-world-capture"))
+{
+    DirectorReplayWorldCaptureChecks.Run();
+    return 0;
+}
 if (args.Contains("--replay-actions"))
 {
     DirectorReplayActionChecks.Run();
@@ -39,7 +59,7 @@ if (args.Contains("--replay-tree"))
 if (args.Contains("--preload"))
 {
     DirectorOptionalServerChecks.Run();
-    DirectorPreloadChecks.Run();
+    DirectorPreloadChecks.Run(args.ElementAtOrDefault(Array.IndexOf(args, "--preload") + 1));
     return 0;
 }
 if (args.Contains("--imgui-browsers"))
@@ -5553,12 +5573,12 @@ try
         "RecordBlockEvent",
         BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("Observed block-entity event writer was not found.");
-    MethodInfo getObservedBlockEntityState = replayManagerType.GetMethod(
-        "TryGetObservedBlockEntityState",
+    MethodInfo captureRecordingChunk = replayManagerType.GetMethod(
+        "CaptureRecordingChunk",
         BindingFlags.Instance | BindingFlags.NonPublic)
-        ?? throw new InvalidOperationException("Observed block-entity baseline cache was not found.");
+        ?? throw new InvalidOperationException("Timed chunk capture was not found.");
     if (!CallsMethod(captureObservedBlockEntityState, recordObservedBlockEvent)
-        || !CallsMethod(captureObservedBlockEntityState, getObservedBlockEntityState))
+        || !CallsMethod(captureObservedBlockEntityState, captureRecordingChunk))
     {
         throw new InvalidOperationException(
             "Dynamic block-entity capture does not seed events from the pre-transition state.");

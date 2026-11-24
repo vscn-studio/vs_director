@@ -154,3 +154,10 @@ first-person mesh visibility and squint shader are adapted in src/HeadTracking/.
 VS Director adds camera integration, capture, deterministic timeline clips,
 connection recovery, localized native settings and compatibility ownership.
 OpenTrack and optional Zoom Button / VS-6DOF mods are not bundled.
+
+The About window uses Markdig by Alexandre Mutel under the BSD 2-Clause license.
+See Markdig-BSD-2-Clause.txt.
+
+Video thumbnails in the About window
+The linked videos and their cover images belong to their respective rights holders.
+The About window retrieves thumbnails from the video platforms at runtime.

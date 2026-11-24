@@ -76,7 +76,6 @@ internal static partial class DirectorImGuiProbe
                     using (var scope = (IDisposable)AccessTools.Method(Runtime("DirectorImGuiRuntime"), "UseFont").Invoke(null, [false])!)
                     {
                         ImGui.Begin("###vsdirector-vsdirector-replay-export");
-                        ImGui.SetWindowFontScale(scale);
                         pos = ImGui.GetWindowPos(); size = ImGui.GetWindowSize();
                         parentScroll = ImGui.GetScrollMaxY();
                         ImGui.End();
@@ -184,7 +183,6 @@ internal static partial class DirectorImGuiProbe
                                 ImGui.SetNextWindowPos(new Vector2(8));
                                 ImGui.SetNextWindowSize(new Vector2(width, 590) * scale);
                                 ImGui.Begin("settings-layout-probe", ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoScrollbar);
-                                ImGui.SetWindowFontScale(scale);
                                 Call(settings, "OnDraw");
                                 var footerBottom = ImGui.GetItemRectMax();
                                 if (frame > 0 && (footerBottom.Y > ImGui.GetWindowPos().Y + ImGui.GetWindowSize().Y

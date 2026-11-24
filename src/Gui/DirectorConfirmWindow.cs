@@ -80,7 +80,6 @@ internal sealed class DirectorConfirmWindow : IDisposable
             bool drawContents = ImGui.Begin($"{WindowTitle}###vsdirector-confirm", ref opened, Flags);
             try
             {
-                ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
                 if (drawContents) OnDraw();
             }
             finally

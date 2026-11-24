@@ -89,7 +89,8 @@ internal static class ReplayRemoteChunkPriorityPatch
 
     private static void Postfix(ClientWorldMap __instance, Packet_ServerChunk p)
     {
-        if (DirectorReplayRuntime.Manager is { IsWorldPlaybackActive: true } manager && GameField?.GetValue(__instance) is ClientMain game)
+        if (DirectorReplayRuntime.Manager is { } manager && (manager.IsWorldPlaybackActive || manager.IsRecording)
+            && GameField?.GetValue(__instance) is ClientMain game)
         {
             int x = p.X, y = p.Y, z = p.Z;
             Guid replayId = manager.ActiveReplayId;
@@ -104,6 +105,9 @@ internal static class ReplayRemoteChunkPriorityPatch
             return;
         }
 
+        if (__instance.GetChunk(p.X, p.Y, p.Z) is ClientChunk { MapChunk: null } loaded
+            && __instance.GetMapChunk(p.X, p.Z) is { } mapChunk)
+            ClientChunkMapChunkField?.SetValue(loaded, mapChunk);
         PrioritizeExistingChunk(__instance, p.X, p.Y, p.Z);
     }
 
@@ -111,7 +115,8 @@ internal static class ReplayRemoteChunkPriorityPatch
     {
         if (packet.Id != 17
             || packet.MapChunk is not { } mapChunkPacket
-            || !IsPendingRemoteColumn(mapChunkPacket.ChunkX, mapChunkPacket.ChunkZ)
+            || (!IsPendingRemoteColumn(mapChunkPacket.ChunkX, mapChunkPacket.ChunkZ)
+                && !DirectorChunkPreloadRuntime.DimensionsAt(mapChunkPacket.ChunkX, mapChunkPacket.ChunkZ).Any())
             || ClientSystemGameField?.GetValue(__instance) is not ClientMain game)
         {
             return;
@@ -135,7 +140,7 @@ internal static class ReplayRemoteChunkPriorityPatch
             return;
         }
 
-        HashSet<int> dimensions = new();
+        HashSet<int> dimensions = DirectorChunkPreloadRuntime.DimensionsAt(chunkX, chunkZ).ToHashSet();
         if (DirectorCameraRuntime.PendingRemoteCameraPose is { } camera)
         {
             dimensions.Add(camera.Dimension);

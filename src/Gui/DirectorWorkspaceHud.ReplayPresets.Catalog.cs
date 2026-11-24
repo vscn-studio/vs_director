@@ -161,7 +161,8 @@ internal sealed partial class DirectorWorkspaceHud
                 DirectorReplayElementTrack track = PresetNewTrack(c, DirectorReplayElementTrackType.FollowEntity, "follow-whip-in", PlayerLabel(player));
                 void Close(DirectorReplayElementKeyframe k)
                 {
-                    k.FollowDistance = 3d; k.FollowHeight = 0.5d; k.FollowSmoothTimeSeconds = 0.05d; k.FollowFov = 60f;
+                    k.FollowMotionMode = CameraFollowMotionMode.Immediate;
+                    k.FollowDistance = 3d; k.FollowHeight = 0.5d; k.FollowFov = 60f;
                 }
                 AddFollowInterval(c, track, player, 0d, 2.5d, k =>
                 {

@@ -427,7 +427,6 @@ internal static partial class DirectorImGuiProbe
                         ImGui.SetNextWindowPos(new Vector2(8));
                         ImGui.SetNextWindowSize(Vector2.Min(new Vector2(280, 430) * scale, io.DisplaySize - new Vector2(16)));
                         ImGui.Begin("添加元素###compact-choices-" + scale, ImGuiWindowFlags.NoSavedSettings);
-                        ImGui.SetWindowFontScale(scale);
                         if (focus) ImGui.SetKeyboardFocusHere();
                         Call(form, "Draw");
                         ImGui.End();
@@ -477,6 +476,7 @@ internal static partial class DirectorImGuiProbe
         var browser = Activator.CreateInstance(Runtime("DirectorImGuiWindow"), api, "resource-browser", true, null, false, false, workspace)!;
         int closed = 0, recorded = 0, stopped = 0, refreshed = 0;
         int[] activated = new int[2];
+        int[] selected = new int[2];
         AccessTools.Event(browser.GetType(), "Closed").GetAddMethod(true)!.Invoke(browser, [(Action)(() => closed++)]);
         Type resourceType = Runtime("DirectorWorkspaceMenus+Resource");
         var resources = Array.CreateInstance(resourceType, 2);
@@ -485,8 +485,8 @@ internal static partial class DirectorImGuiProbe
         {
             int index = i;
             resources.SetValue(Activator.CreateInstance(resourceType,
-                "replay-" + i, "回放 " + (i + 1), "00:30 · 山谷", "回放 " + i, noop,
-                (Action)(() => activated[index]++), false), i);
+                "replay-" + i, "回放 " + (i + 1), "00:30 · 山谷", "回放 " + i, (Action)(() => selected[index]++),
+                (Action)(() => activated[index]++), i == 0), i);
         }
         object MakeForm(string query) => AccessTools.Method(Runtime("DirectorWorkspaceMenus"), "Browser").Invoke(null,
             ["回放列表", query, "山谷", true, "搜索回放", "录制名称", "创建", "录制", "停止", "刷新", "播放",
@@ -506,11 +506,11 @@ internal static partial class DirectorImGuiProbe
             Call(workspace, "Draw", 1f / 60);
             ImGui.Render();
         }
-        void Click(string id)
+        void Click(string id, float y = .5f)
         {
             var bounds = Bounds(browser, id);
             if (bounds.Z <= 0 || bounds.W <= 0) throw new Exception("Missing replay browser item: " + id);
-            io.MousePos = new Vector2(bounds.X + bounds.Z / 2, bounds.Y + bounds.W / 2);
+            io.MousePos = new Vector2(bounds.X + bounds.Z / 2, bounds.Y + bounds.W * y);
             Frame(); io.MouseDown[0] = true; Frame(); io.MouseDown[0] = false; Frame();
         }
         try
@@ -526,9 +526,13 @@ internal static partial class DirectorImGuiProbe
                 Frame(); Frame(); Frame();
                 if (scale == 1) capture("replay");
                 var full = Bounds(browser, "window");
-                if (full.W > 600 * scale || full.X < 0 || full.X + full.Z > io.DisplaySize.X + 1
+                if (full.W <= 0 || full.Y < 0 || full.X < 0 || full.X + full.Z > io.DisplaySize.X + 1
                     || full.Y + full.W > io.DisplaySize.Y + 1)
-                    throw new Exception("Replay browser exceeds the viewport at scale " + scale);
+                    throw new Exception($"Replay browser bounds {full} exceed viewport {io.DisplaySize} at scale {scale}.");
+                int beforeSelect = selected[1], beforeActivate = activated[1];
+                Click("resource-select-replay-1", .75f);
+                if (selected[1] != beforeSelect + 1 || activated[1] != beforeActivate)
+                    throw new Exception("Clicking a replay's detail line must select it without starting playback.");
                 Click("resource-activate-replay-0"); Click("resource-activate-replay-1");
                 Click("resource-refresh");
                 Click("resource-record-menu");
@@ -647,19 +651,16 @@ internal static partial class DirectorImGuiProbe
                 ImGui.SetNextWindowPos(new Vector2(12, 12));
                 ImGui.SetNextWindowSize(new Vector2(width, 34 * RuntimeEnv.GUIScale));
                 ImGui.Begin("Toolbar###editor-controls", ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoSavedSettings);
-                ImGui.SetWindowFontScale((float)GuiElement.scaled(1));
                 Call(toolbar, "Draw");
                 ImGui.End();
                 ImGui.SetNextWindowPos(new Vector2(12, 96));
                 ImGui.SetNextWindowSize(new Vector2(430, 520));
                 ImGui.Begin("VS Director · 属性###editor-fields", ImGuiWindowFlags.NoSavedSettings);
-                ImGui.SetWindowFontScale((float)GuiElement.scaled(1));
                 Call(fields, "Draw");
                 ImGui.End();
                 ImGui.SetNextWindowPos(new Vector2(460, 96));
                 ImGui.SetNextWindowSize(new Vector2(280, 330));
                 ImGui.Begin("添加元素###editor-selector", ImGuiWindowFlags.NoSavedSettings);
-                ImGui.SetWindowFontScale((float)GuiElement.scaled(1));
                 Call(selector, "Draw");
                 ImGui.End();
             }

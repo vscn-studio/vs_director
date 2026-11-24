@@ -6,6 +6,13 @@ public sealed partial class VSDirectorModSystem
 {
     private readonly DirectorReplayEditHistory replayEditHistory = new();
 
+    private void RestoreReplayObserverPose(CameraPreset pose)
+    {
+        if (controller?.TryRestoreReplayCamera(pose) == true)
+            replayCameraState = controller.IsFreeCamera ? DirectorReplayCameraState.Free
+                : DirectorReplayCameraState.FromSource(DirectorReplayCameraMode.Fixed, Guid.Empty);
+    }
+
     private DirectorReplayEditSnapshot? CaptureReplayEdit()
     {
         replayEditHistory.Select(ActiveReplayId);
@@ -25,8 +32,7 @@ public sealed partial class VSDirectorModSystem
         {
             // Restore before readiness checks: a deleted preset camera must not
             // keep playback waiting for chunks at its previous position.
-            controller.TryRestoreReplayCamera(restore);
-            replayCameraState = DirectorReplayCameraState.Free;
+            RestoreReplayObserverPose(restore);
         }
     }
 
@@ -43,8 +49,7 @@ public sealed partial class VSDirectorModSystem
             ResetReplayElementRuntime();
             if (restored.Camera is { } pose && controller is not null)
             {
-                controller.TryRestoreReplayCamera(pose);
-                replayCameraState = DirectorReplayCameraState.Free;
+                RestoreReplayObserverPose(pose);
             }
             pathPreview?.Refresh();
             return true;

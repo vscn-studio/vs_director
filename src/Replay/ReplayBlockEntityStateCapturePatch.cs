@@ -11,6 +11,26 @@ using VSDirector.Runtime;
 
 namespace VSDirector.Replay;
 
+// Initialize callbacks run inside a foreach over the chunk's live BlockEntities.
+// Restoring a replay entity can remove or insert entries in that same dictionary.
+[HarmonyPatch(typeof(ClientChunk), "InitBlockEntitiesFromPacket", typeof(ClientMain))]
+internal static class ReplayChunkEntityInitializationPatch
+{
+    [ThreadStatic]
+    private static bool initializing;
+    internal static bool IsInitializing => initializing;
+
+    [HarmonyPrefix]
+    private static void Prefix(out bool __state)
+    {
+        __state = initializing;
+        initializing = true;
+    }
+
+    [HarmonyFinalizer]
+    private static void Finalizer(bool __state) => initializing = __state;
+}
+
 internal static class ReplayBlockEntityStateCapturePatch
 {
     private const string DoorBehaviorTypeName = "Vintagestory.GameContent.BEBehaviorDoor";

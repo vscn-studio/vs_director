@@ -96,11 +96,9 @@ internal sealed partial class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGui
                     SetNodePos(dockId, position);
                     SetNodeSize(dockId, size);
                     SplitNode(dockId, ImGuiDir.Down, .30f, out uint bottom, out uint top);
-                    // Keep settings, replay resources and scenes in a
-                    // dedicated left-side dock so they share one tab strip.
+                    // Replay resources and scenes share the left tab strip.
                     float leftRatio = Math.Clamp(320 * DirectorImGuiTheme.Scale / size.X, .16f, .32f);
                     SplitNode(top, ImGuiDir.Left, leftRatio, out uint left, out uint center);
-                    DockWindow("###vsdirector-settings", left);
                     DockWindow("###vsdirector-resource-browser", left);
                     DockWindow("###vsdirector-scene-browser", left);
                     LeftDockId = left;

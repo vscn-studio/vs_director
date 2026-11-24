@@ -29,6 +29,7 @@ internal sealed class DirectorCameraController : IDisposable
     private readonly ICoreClientAPI capi;
     private readonly ClientMain game;
     private readonly DirectorConfig config;
+    private readonly Func<bool> canUseFreeCamera;
 
     private CameraPreset? activeCamera;
     private PathPlayback? activePath;
@@ -181,10 +182,11 @@ internal sealed class DirectorCameraController : IDisposable
 
     public event Action<string>? FollowTargetLost;
 
-    public DirectorCameraController(ICoreClientAPI capi, DirectorConfig config)
+    public DirectorCameraController(ICoreClientAPI capi, DirectorConfig config, Func<bool> canUseFreeCamera)
     {
         this.capi = capi;
         this.config = config;
+        this.canUseFreeCamera = canUseFreeCamera;
         game = capi.World as ClientMain
             ?? throw new InvalidOperationException("VS Director requires the Vintage Story desktop client.");
         capi.Input.InWorldAction += OnInWorldAction;
@@ -300,6 +302,11 @@ internal sealed class DirectorCameraController : IDisposable
 
     public bool TryStartFreeCamera(out string error)
     {
+        if (!canUseFreeCamera())
+        {
+            error = Vintagestory.API.Config.Lang.Get("vsdirector:permission-feature-denied");
+            return false;
+        }
         CameraPreset? pose = CurrentPose;
         if (pose is null && !TryCaptureCurrentView("Replay Free Camera", out pose))
         {
@@ -369,7 +376,7 @@ internal sealed class DirectorCameraController : IDisposable
         // roll/FOV. Do not upright it as when entering free look from a shot.
         if (!TrySetReplayPose(pose, out _)) return false;
         guiPointerCameraInput = false;
-        freeCameraActive = true;
+        freeCameraActive = canUseFreeCamera();
         return true;
     }
 

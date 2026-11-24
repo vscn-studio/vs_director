@@ -652,6 +652,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
 
     public override bool OnEscapePressed()
     {
+        if (aboutDialog?.IsVisible == true) { aboutDialog.Close(); return true; }
         if (creationWorkspace?.Active == true) { creationWorkspace.RequestEscape(); return true; }
         if (cameraDragOriginal is not null) { FinishCameraToolDrag(cancel: true); return true; }
         if (DirectorToolWindows.HasOpenTool) { DirectorToolWindows.Close(); return true; }
@@ -696,6 +697,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         imGuiToolbarWindow?.Close();
         imGuiResourceWindow?.Close();
         sceneBrowser?.Close();
+        aboutDialog?.Close();
         DirectorToolWindows.Close();
         DirectorToolWindows.CloseWorkspaceMenu = null;
         EndReplayViewportFreeCameraPointerInput();
@@ -2252,6 +2254,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         imGuiToolbarWindow?.Dispose(); imGuiToolbarWindow = null;
         imGuiResourceWindow?.Dispose(); imGuiResourceWindow = null;
         sceneBrowser?.Dispose(); sceneBrowser = null;
+        aboutDialog?.Dispose(); aboutDialog = null;
         imGuiInspectorWindow?.Dispose();
         imGuiViewWindow?.Dispose(); imGuiViewWindow = null;
         imGuiTransformWindow?.Dispose(); imGuiTransformWindow = null;
@@ -16675,10 +16678,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 else
                 {
                     changed |= state.Excluded.Remove(column);
-                    if (!state.Automatic.Contains(column))
-                    {
-                        changed |= state.Included.Add(column);
-                    }
+                    changed |= state.Included.Add(column);
                 }
             }
         }

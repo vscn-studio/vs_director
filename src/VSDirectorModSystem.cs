@@ -192,6 +192,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
     internal bool IsDirectorAdmin => permissionClient?.IsAdmin == true;
 
     internal bool IsClientOnly => permissionClient?.IsClientOnly == true;
+    internal DirectorPermission PermissionsForPauseMenu => permissionClient?.Permissions ?? DirectorPermissions.DefaultPlayerPermissions;
 
     internal IReadOnlyList<DirectorPermissionMemberDto> PermissionMembers
         => permissionClient?.Members ?? Array.Empty<DirectorPermissionMemberDto>();
@@ -1464,13 +1465,17 @@ public sealed partial class VSDirectorModSystem : ModSystem
         modelStore = new DirectorModelStore(api);
         actionModIntegration = new DirectorActionModIntegration(api);
         actionEnvironment = new DirectorActionEnvironmentController(api);
-        controller = new DirectorCameraController(api, config);
+        controller = new DirectorCameraController(api, config, () => HasPermission(DirectorPermission.FreeCamera));
         controller.PathCompleted += OnPathCompleted;
         controller.SequenceCompleted += OnSequenceCompleted;
         controller.FollowTargetLost += OnFollowTargetLost;
         DirectorCameraRuntime.Controller = controller;
         DirectorEscapeMenuRuntime.Attach(this);
-        replay = new DirectorReplayManager(api, config, controller, SetReplayInputLock, ApplyTimedRecordingTrack);
+        replay = new DirectorReplayManager(api, config, controller, SetReplayInputLock, ApplyTimedRecordingTrack)
+        {
+            CanPreloadRemoteTerrain = () => HasPermission(DirectorPermission.RemoteChunkAccess)
+                && api.Network.GetChannel(DirectorNetwork.ChannelName).Connected
+        };
         voiceBridge.Configure(
             () => config,
             () => capi is not null && !disposed,
@@ -1504,7 +1509,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         greenScreenSkyRenderer = new DirectorGreenScreenSkyRenderer(api);
         DirectorGreenScreenRuntime.Attach(config, greenScreenSkyRenderer);
         greenScreenPreviewRenderer = new DirectorGreenScreenPreviewRenderer(api);
-        modelOutlineRenderer = new DirectorModelOutlineRenderer(api, config);
+        modelOutlineRenderer = new DirectorModelOutlineRenderer(api, config, HasPermission);
         replayCompositionOverlay = new DirectorReplayCompositionOverlay(api);
         replayProgressOverlay = new DirectorReplayProgressOverlay(api, this);
         replayScreenEffects = new VSDirector.Gui.DirectorReplayScreenEffectsRenderer(api);
@@ -1590,7 +1595,6 @@ public sealed partial class VSDirectorModSystem : ModSystem
         pendingVsmc2Shapes.Clear();
         vsmc2ShapeStatuses.Clear();
         settingsDialog?.Dispose();
-        creationGlobalSettings?.Dispose();
         settingsDialog = null;
         pathPreview?.Dispose();
         pathPreview = null;
@@ -1730,42 +1734,28 @@ public sealed partial class VSDirectorModSystem : ModSystem
             return;
         }
 
-        settingsDialog ??= new DirectorSettingsDialog(capi, this,
-            workspace is { } activeWorkspace && activeWorkspace.IsOpened()
-                ? activeWorkspace.ImGuiWorkspace
-                : null);
+        settingsDialog ??= new DirectorSettingsDialog(capi, this);
         settingsDialog.ToggleOpen();
     }
-    private DirectorSettingsDialog? creationGlobalSettings;
-    internal void OpenCreationGlobalSettings()
-    {
-        if(capi is null)return;
-        // A standalone native settings host also works while legacy workspace
-        // callbacks are suspended by the independent creation dock.
-        creationGlobalSettings ??= new DirectorSettingsDialog(capi,this);
-        if(!creationGlobalSettings.IsOpened())creationGlobalSettings.ToggleOpen();
-    }
+    internal void OpenWorkspaceAbout() => workspace?.OpenAbout();
+
     internal void OpenReplayStorageSettings()
     {
         if (capi is null) return;
-        settingsDialog ??= new DirectorSettingsDialog(capi, this,
-            workspace is { } activeWorkspace && activeWorkspace.IsOpened()
-                ? activeWorkspace.ImGuiWorkspace
-                : null);
+        settingsDialog ??= new DirectorSettingsDialog(capi, this);
         settingsDialog.OpenReplayStorage();
     }
 
-    internal void OpenSettingsFromEscapeMenu()
+    internal void OpenSettingsFromEscapeMenu() => OpenGlobalSettings();
+
+    internal void OpenGlobalSettings()
     {
         if (capi is null)
         {
             return;
         }
 
-        settingsDialog ??= new DirectorSettingsDialog(capi, this,
-            workspace is { } activeWorkspace && activeWorkspace.IsOpened()
-                ? activeWorkspace.ImGuiWorkspace
-                : null);
+        settingsDialog ??= new DirectorSettingsDialog(capi, this);
         if (!settingsDialog.IsOpened())
         {
             settingsDialog.ToggleOpen();
@@ -12691,6 +12681,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
             automaticReplayAuthorizationPending = false;
             permissionClient?.Reset();
             anchorClient?.ResetSession();
+            ClearReplayPreloadPreview();
             chunkPreloadClient?.ResetSession();
             permissionClient?.RequestSnapshot();
             pathPreview?.Refresh();
@@ -14206,6 +14197,35 @@ public sealed partial class VSDirectorModSystem : ModSystem
                     Fov = offscreenPose.Fov
                 }
                 : null;
+        Guid preloadId = previewChunkPreloadId;
+        DirectorReplayPreloadPlan? plan = previewChunkPreloadPlan;
+        if (!HasPermission(DirectorPermission.RemoteChunkAccess))
+            plan = null;
+        else if (sceneReplay?.TryGetChunkPreloadPlan(out Guid replayId, out DirectorReplayPreloadPlan replayPlan) == true)
+        {
+            preloadId = replayId;
+            if (previewChunkPreloadPlan is { } preview)
+            {
+                var combined = replayPlan.ExpandedColumns.Concat(preview.ExpandedColumns)
+                    .Distinct().Take(DirectorReplayPreloadPlanner.MaxExpandedColumns).ToArray();
+                plan = new DirectorReplayPreloadPlan(combined, combined, combined, 0, false);
+            }
+            else plan = replayPlan;
+        }
+        else if (plan is null && controller?.ActivePathId is Guid activePathId
+                 && library?.FindPath(activePathId) is CameraPath activePath)
+        {
+            preloadId = activePathId;
+            plan = DirectorReplayPreloadPlanner.Build(activePath);
+        }
+
+        bool remoteWarmup = remoteFollow is not null || remoteOffscreen is not null;
+        if (sceneReplay?.CanStreamReplayTerrain(plan, remoteWarmup) == false)
+        {
+            // The integrated server cannot drain heartbeats while suspended.
+            if (plan is null) chunkPreloadClient?.Stop();
+            return;
+        }
         anchorClient?.Update(
             remoteFollow?.EffectiveAnchorPose
                 ?? remoteOffscreen?.EffectiveAnchorPose
@@ -14228,23 +14248,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
             cameraAnchor is not null ? replayAnchor : null,
             replayAnchorRadiusOverride,
             replayOwnsRemoteChunkWindow);
-        if (!HasPermission(DirectorPermission.RemoteChunkAccess))
-        {
-            chunkPreloadClient?.Stop();
-        }
-        else if (sceneReplay?.TryGetChunkPreloadPlan(out Guid replayId, out DirectorReplayPreloadPlan preloadPlan) == true)
-        {
-            chunkPreloadClient?.Update(replayId, preloadPlan);
-        }
-        else if (controller?.ActivePathId is Guid activePathId
-                 && library?.FindPath(activePathId) is CameraPath activePath)
-        {
-            chunkPreloadClient?.Update(activePathId, DirectorReplayPreloadPlanner.Build(activePath));
-        }
-        else if (previewChunkPreloadId != Guid.Empty && previewChunkPreloadPlan is not null)
-        {
-            chunkPreloadClient?.Update(previewChunkPreloadId, previewChunkPreloadPlan);
-        }
+        if (plan is not null)
+            chunkPreloadClient?.Update(preloadId, plan);
         else
         {
             chunkPreloadClient?.Stop();
@@ -14587,8 +14592,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         {
             if (!editingFree)
             {
-                controller.TryRestoreReplayCamera(original);
-                replayCameraState = DirectorReplayCameraState.Free;
+                RestoreReplayObserverPose(original);
             }
             replayElementReturnPose = null;
             replayShootingBasePose = null;
@@ -14619,7 +14623,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         }
         else if (!editingFree && appliedCameraTypes.Count == 0
             && replayCameraState.Mode == DirectorReplayCameraMode.Fixed
-            && controller.TryStartFreeCamera(out _))
+            && HasPermission(DirectorPermission.FreeCamera) && controller.TryStartFreeCamera(out _))
         {
             replayCameraState = DirectorReplayCameraState.Free;
         }
@@ -15266,6 +15270,9 @@ public sealed partial class VSDirectorModSystem : ModSystem
             workspace?.Refresh();
         }
         settingsDialog?.RefreshPermissions();
+        if (DirectorEscapeMenuRuntime.Controls?.NeedsPermissionRefresh == true
+            && DirectorEscapeMenuRuntime.Dialog is { } pauseMenu && pauseMenu.IsOpened())
+            DirectorEscapeMenuComposePatch.BuildWindow(pauseMenu);
     }
 
     private void OnAnchorStatus(DirectorAnchorStatus status)

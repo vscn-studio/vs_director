@@ -458,7 +458,6 @@ internal sealed partial class DirectorCreationWorkspace
         ImGui.SetNextWindowSizeConstraints(new(Math.Min(260, display.X - 20), Math.Min(160, display.Y - 40)), display - new Vector2(20, 40));
         ImGui.SetNextWindowBgAlpha(1);
         bool visible = ImGui.Begin((keyId != Guid.Empty || PoseEditorValid ? L("creation-edit-keyframe") : L("creation-edit-clip")) + "###creation-timeline-editor", ref timelineEditor, ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoCollapse);
-        ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
         try { if (visible) { if(PoseEditorValid)DrawPoseKeyEditor();else DrawTimelineSelection(); } } finally { ImGui.End(); }
     }
     private void DrawTimelineTransport()

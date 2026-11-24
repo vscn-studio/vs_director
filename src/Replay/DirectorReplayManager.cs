@@ -80,10 +80,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
     private const double ParticlePlaybackWorkBudgetMilliseconds = 2d;
     private const double MaxParticlePlaybackAgeSeconds = 0.25d;
     private const int PlaybackReadyRadiusChunks = 0;
-    // A replay can describe thousands of route columns.  Startup only needs
-    // the two areas the player can actually observe: the active camera and
-    // the replay anchor at time zero.  Keeping this small also keeps the
-    // integrated-server request and client readiness checks bounded.
+    // Add a small window when a detached camera moves beyond the planned route.
     private const int PlaybackPreloadWindowRadiusChunks = 1;
     // Keep integrated-server ticks responsive while a replay baseline is
     // applied.  Large batches can trip the host watchdog even though the
@@ -134,8 +131,6 @@ internal sealed partial class DirectorReplayManager : IDisposable
     private HashSet<string> recordingVisibleActors = new(StringComparer.Ordinal);
     private Dictionary<BlockKey, CachedBlockEntity> recordingBlockEntities = new();
     private Dictionary<BlockKey, CachedBlockState> recordingBlockStates = new();
-    private readonly ConditionalWeakTable<BlockEntity, ObservedBlockState> observedBlockEntityStates = new();
-    private readonly object observedBlockEntitySync = new();
     private readonly ConditionalWeakTable<object, ReplayLoadedSoundMarker> replayLoadedSounds = new();
     private readonly List<WeakReference<ILoadedSound>> replayLoadedSoundReferences = new();
     private readonly object soundCaptureSync = new();
@@ -163,6 +158,11 @@ internal sealed partial class DirectorReplayManager : IDisposable
     private readonly DirectorDedicatedReplayRenderer dedicatedReplayRenderer;
     private readonly DirectorReplayVisualEnvironmentController visualEnvironment;
     private readonly DirectorSingleplayerReplaySuspension singleplayerWorldSuspension;
+    private long nextTerrainCheckMs;
+    private bool waitingForTerrain;
+    private long lastTerrainProgressMs;
+    private int lastMissingTerrainColumns = -1;
+    private bool terrainTimedOut;
     private readonly Dictionary<long, ReplayRenderedPose> renderedCapturePoses = new();
     private readonly object particleCaptureSync = new();
     private object? visualCalendar;
@@ -201,6 +201,9 @@ internal sealed partial class DirectorReplayManager : IDisposable
     private string independentVoiceExportOutputFile = string.Empty;
     private int independentVoiceExportTrackCount;
     private PendingReplayLoad? pendingLoad;
+    internal System.Func<bool>? CanPreloadRemoteTerrain { private get; set; }
+    private DirectorReplayPreloadPlan? lastRoute, lastStreamingPlan;
+    private List<DirectorReplayPreloadColumn>? lastObservationCenters;
     private PendingPlaybackStart? pendingPlaybackStart;
     private PendingPreloadEditorLoad? pendingPreloadEditorLoad;
     private LoadedPreloadEditor? loadedPreloadEditor;
@@ -320,7 +323,17 @@ internal sealed partial class DirectorReplayManager : IDisposable
     internal DirectorReplayDocument? ActiveDocument => playback?.Document;
     internal bool IsWorldPlaybackActive => playback?.WorldPlayback is not null;
     internal bool IsServerRecordingWorldPlaybackActive => playback?.Document.HasHistoricalBaselines == true && playback.WorldPlayback is not null;
-    internal void ObserveServerRecordingChunkLoad(int x, int y, int z) => playback?.WorldPlayback?.ObserveServerRecordingChunkLoad(x, y, z);
+    internal void ObserveServerRecordingChunkLoad(int x, int y, int z)
+    {
+        playback?.WorldPlayback?.ObserveServerRecordingChunkLoad(x, y, z);
+        if (recording is { } active)
+        {
+            int dimension = active.WorldSnapshot.Dimension;
+            var key = new ChunkKey(x, y - dimension * GlobalConstants.DimensionSizeInChunks, z, dimension);
+            if (WithinObservedCaptureWorld(active, new BlockPos(key.X * 32, key.Y * 32, key.Z * 32, dimension)))
+                CaptureRecordingChunk(key);
+        }
+    }
 
     internal bool IsReplayBlockEntity(BlockEntity blockEntity)
         => playback?.WorldPlayback?.IsReplayBlockEntity(blockEntity) == true;
@@ -426,10 +439,10 @@ internal sealed partial class DirectorReplayManager : IDisposable
             {
                 if (!starting.ChunksReady)
                 {
-                    double chunkProgress = starting.StartupPreloadColumns.Count == 0
+                    double chunkProgress = starting.StartupPlan.ExpandedColumns.Count == 0
                         ? 1d
                         : starting.PreloadReadyColumns
-                            / (double)starting.StartupPreloadColumns.Count;
+                            / (double)starting.StartupPlan.ExpandedColumns.Count;
                     return 0.35d + Math.Clamp(chunkProgress, 0d, 1d) * 0.15d;
                 }
 
@@ -734,16 +747,16 @@ internal sealed partial class DirectorReplayManager : IDisposable
         if (pendingPlaybackStart is { } starting)
         {
             replayId = starting.Document.Id;
-            plan = CreatePlaybackPreloadWindowPlan(starting.StartupPreloadColumns);
+            plan = starting.StartupPlan;
             return plan.ExpandedColumns.Count > 0;
         }
         if (playback is { } active)
         {
             replayId = active.Document.Id;
-            plan = CreatePlaybackPreloadWindowPlan(BuildPlaybackPreloadWindow(
+            plan = BuildPlaybackPreloadWindow(
                 active.Document,
                 active.TimeSeconds,
-                active.PreloadPlan));
+                active.PreloadPlan);
             return plan.ExpandedColumns.Count > 0;
         }
 
@@ -767,7 +780,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             truncated: false);
     }
 
-    private IReadOnlyList<DirectorReplayPreloadColumn> BuildPlaybackPreloadWindow(
+    private DirectorReplayPreloadPlan BuildPlaybackPreloadWindow(
         DirectorReplayDocument document,
         double timeSeconds,
         DirectorReplayPreloadPlan fallbackPlan)
@@ -818,6 +831,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
             }
         }
 
+        if (ReferenceEquals(lastRoute, fallbackPlan) && lastObservationCenters!.SequenceEqual(centers))
+            return lastStreamingPlan!;
         List<DirectorReplayPreloadColumn> window = new();
         HashSet<DirectorReplayPreloadColumn> unique = new();
         int radius = PlaybackPreloadWindowRadiusChunks;
@@ -847,9 +862,14 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         // User-selected columns lead the queue, including those away from the current camera.
         var excluded = document.ExcludedPreloadColumns.ToHashSet();
-        return DirectorReplayPreloadPlanner.NormalizeOverrideColumns(document.IncludedPreloadColumns)
-            .Concat(window).Where(column => !excluded.Contains(column) && column.X >= 0 && column.Z >= 0)
+        var columns = DirectorReplayPreloadPlanner.NormalizeOverrideColumns(document.IncludedPreloadColumns)
+            .Concat(window).Concat(fallbackPlan.ExpandedColumns)
+            .Where(column => !excluded.Contains(column) && column.X >= 0 && column.Z >= 0
+                && column.X < game.WorldMap.ChunkMapSizeX && column.Z < game.WorldMap.ChunkMapSizeZ)
             .Distinct().Take(DirectorReplayPreloadPlanner.MaxExpandedColumns).ToArray();
+        lastRoute = fallbackPlan;
+        lastObservationCenters = centers;
+        return lastStreamingPlan = CreatePlaybackPreloadWindowPlan(columns);
     }
 
     internal void RequestPreloadEditor(Guid replayId)
@@ -1003,13 +1023,14 @@ internal sealed partial class DirectorReplayManager : IDisposable
         if (pendingPlaybackStart?.Document.Id == replayId)
         {
             pendingPlaybackStart.PreloadPlan = plan;
-            pendingPlaybackStart.StartupPreloadColumns = BuildPlaybackPreloadWindow(
+            pendingPlaybackStart.StartupPlan = BuildPlaybackPreloadWindow(
                 pendingPlaybackStart.Document,
                 timeSeconds: 0d,
                 plan);
             pendingPlaybackStart.ChunksReady = false;
             pendingPlaybackStart.PreloadReadyColumns = 0;
             pendingPlaybackStart.LastPreloadCheckMs = 0;
+            pendingPlaybackStart.LastTerrainProgressMs = 0;
         }
         if (playback?.Document.Id == replayId)
         {
@@ -1868,6 +1889,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
         decodedSnapshotSolid = null;
         decodedSnapshotFluid = null;
         recordingElapsedSeconds = 0d;
+        pendingWorldCapture.Clear();
+        nextWorldCaptureScan = 0;
         recordingAccumulator = 0d;
         entityStateAccumulator = 0d;
         recordingPaused = false;
@@ -2004,7 +2027,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
                 FlushPendingBlockChanges();
                 CaptureFrame(recordingElapsedSeconds);
                 CaptureFullEntityStates(recordingElapsedSeconds);
-                CaptureBlockEntityChanges(recordingElapsedSeconds);
+                CaptureBlockEntityChanges();
             }
             lock (soundCaptureSync)
             {
@@ -2043,7 +2066,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             FlushPendingBlockChanges();
             CaptureFrame(recordingElapsedSeconds);
             CaptureFullEntityStates(recordingElapsedSeconds);
-            CaptureBlockEntityChanges(recordingElapsedSeconds);
+            CaptureBlockEntityChanges();
             pendingEntityStateCaptures.Clear();
             pendingBlockEntityCapture = null;
             recordingPaused = true;
@@ -2059,7 +2082,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
                     recordingElapsedSeconds));
                 pausedBlockChanges.Clear();
             }
-            QueueBlockEntityCapture(recordingElapsedSeconds);
+            QueueBlockEntityCapture();
             CaptureFrame(recordingElapsedSeconds);
             CaptureFullEntityStates(recordingElapsedSeconds);
         }
@@ -2198,10 +2221,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         PendingReplayLoad loading = new(info, config.ReplayQuickMode, pauseAfterLoad);
         pendingLoad = loading;
         replayLoadOverlayVisible = pauseAfterLoad;
-        loading.Task = LoadReplayWithServerCompanionAsync(
-            info.Path,
-            new ReplayLoadProgress(loading),
-            loading.Cancellation.Token);
+        BeginPlaybackLoad(loading);
         return true;
     }
 
@@ -4193,6 +4213,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
     public void StopPlayback()
     {
+        lastRoute = lastStreamingPlan = null;
+        lastObservationCenters = null;
         replayLoadOverlayVisible = false;
         StopIndependentVoiceExport();
         if (obsExport is { IsActive: true } obs)
@@ -4388,6 +4410,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
 
         ProcessPausedBlockResync(PendingBlockChangesPerTick);
+        CaptureAdditionalWorldChunks();
         FlushPendingBlockChanges(PendingBlockChangesPerTick);
         ProcessEntityStateCaptures(EntityStateCapturesPerTick, recordingElapsedSeconds);
         ProcessBlockEntityCapture(BlockEntityChunksPerTick);
@@ -6471,47 +6494,15 @@ internal sealed partial class DirectorReplayManager : IDisposable
             return;
         }
 
-        CachedBlockState observed;
-        if (!TryGetObservedBlockEntityState(blockEntity, out observed))
-        {
-            observed = ReadCurrentBlockState(position);
-            StoreObservedBlockEntityState(blockEntity, observed);
-        }
-
         DirectorReplayDocument? active = recording;
         if (active is null
             || !CaptureWorld
             || !WithinObservedCaptureWorld(active, position))
         {
-            if (!baseline)
-            {
-                StoreObservedBlockEntityState(blockEntity, ReadCurrentBlockState(position));
-            }
             return;
         }
 
         BlockKey key = BlockKey.From(position);
-        bool known = recordingBlockStates.ContainsKey(key)
-            || TryGetSnapshotBlockState(key, out _);
-        if (baseline)
-        {
-            if (!known)
-            {
-                RecordBlockEvent(active, position, 0d, observed);
-            }
-            return;
-        }
-
-        if (!known)
-        {
-            // A camera can reach loaded block entities outside the fixed
-            // snapshot. Seed their replay baseline from the last state seen
-            // before this transition, not from the already-mutated object.
-            RecordBlockEvent(active, position, 0d, observed);
-        }
-
-        CachedBlockState current = ReadCurrentBlockState(position);
-        StoreObservedBlockEntityState(blockEntity, current);
         if (recordingPaused)
         {
             QueueBlockPosition(
@@ -6523,6 +6514,14 @@ internal sealed partial class DirectorReplayManager : IDisposable
             return;
         }
 
+        if (!recordingSnapshotChunks.ContainsKey(ChunkKey.FromBlock(key)))
+        {
+            // Register the chunk at the observation time so later removals are
+            // covered by both the block hooks and the periodic entity scan.
+            if (!CaptureRecordingChunk(ChunkKey.FromBlock(key))) return;
+        }
+        if (baseline) return;
+        CachedBlockState current = ReadCurrentBlockState(position);
         RecordBlockEvent(active, position, recordingElapsedSeconds, current);
     }
 
@@ -6534,39 +6533,6 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
 
         playback?.WorldPlayback?.ObserveLiveBlockEntityPacket(position);
-    }
-
-    private bool TryGetObservedBlockEntityState(
-        BlockEntity blockEntity,
-        out CachedBlockState state)
-    {
-        lock (observedBlockEntitySync)
-        {
-            if (observedBlockEntityStates.TryGetValue(blockEntity, out ObservedBlockState? observed))
-            {
-                state = observed.State with { BlockEntityData = CloneBytes(observed.State.BlockEntityData) };
-                return true;
-            }
-        }
-
-        state = default;
-        return false;
-    }
-
-    private void StoreObservedBlockEntityState(BlockEntity blockEntity, CachedBlockState state)
-    {
-        CachedBlockState snapshot = state with { BlockEntityData = CloneBytes(state.BlockEntityData) };
-        lock (observedBlockEntitySync)
-        {
-            if (observedBlockEntityStates.TryGetValue(blockEntity, out ObservedBlockState? observed))
-            {
-                observed.State = snapshot;
-            }
-            else
-            {
-                observedBlockEntityStates.Add(blockEntity, new ObservedBlockState(snapshot));
-            }
-        }
     }
 
     private void QueueBlockNeighborhood(BlockPos position)
@@ -6657,17 +6623,17 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
     }
 
-    private void CaptureBlockEntityChanges(double timeSeconds)
+    private void CaptureBlockEntityChanges()
     {
         pendingBlockEntityCapture = null;
-        QueueBlockEntityCapture(timeSeconds);
+        QueueBlockEntityCapture();
         while (pendingBlockEntityCapture is not null)
         {
             ProcessBlockEntityCapture(int.MaxValue);
         }
     }
 
-    private void QueueBlockEntityCapture(double? timeSeconds = null)
+    private void QueueBlockEntityCapture()
     {
         DirectorReplayDocument? active = recording;
         if (pendingBlockEntityCapture is not null
@@ -6680,7 +6646,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         pendingBlockEntityCapture = new BlockEntityCaptureRound(
             active.WorldSnapshot.Chunks.ToArray(),
-            timeSeconds ?? recordingElapsedSeconds);
+            recordingBlockEntities.Keys.ToLookup(ChunkKey.FromBlock));
     }
 
     private void ProcessBlockEntityCapture(int maximumChunks)
@@ -6692,7 +6658,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             return;
         }
 
-        int end = Math.Min(capture.Chunks.Length, capture.NextChunkIndex + maximumChunks);
+        int end = capture.NextChunkIndex + Math.Min(capture.Chunks.Length - capture.NextChunkIndex, maximumChunks);
         while (capture.NextChunkIndex < end)
         {
             DirectorReplayChunkSnapshot chunkSnapshot = capture.Chunks[capture.NextChunkIndex++];
@@ -6707,18 +6673,17 @@ internal sealed partial class DirectorReplayManager : IDisposable
                 continue;
             }
 
-            capture.ScannedChunks.Add(new ChunkKey(
+            var chunkKey = new ChunkKey(
                 chunkSnapshot.ChunkX,
                 chunkSnapshot.ChunkY,
                 chunkSnapshot.ChunkZ,
-                active.WorldSnapshot.Dimension));
+                active.WorldSnapshot.Dimension);
 
             foreach (BlockEntity blockEntity in DirectorGameCompatibility.BlockEntities(chunk))
             {
                 BlockPos rawPosition = blockEntity.Pos;
                 BlockPos position = new(rawPosition.X, rawPosition.Y, rawPosition.Z, active.WorldSnapshot.Dimension);
                 BlockKey key = BlockKey.From(position);
-                capture.Seen.Add(key);
                 try
                 {
                     string className = capi.ClassRegistry.GetBlockEntityClass(blockEntity.GetType()) ?? string.Empty;
@@ -6727,7 +6692,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
                         || !string.Equals(cached.ClassName, className, StringComparison.Ordinal)
                         || !cached.Data.AsSpan().SequenceEqual(data))
                     {
-                        CaptureBlockEvent(active, position, capture.TimeSeconds);
+                        CaptureBlockEvent(active, position, recordingElapsedSeconds);
                     }
                 }
                 catch (Exception exception)
@@ -6735,17 +6700,17 @@ internal sealed partial class DirectorReplayManager : IDisposable
                     capi.Logger.Debug("VS Director: block entity update could not be captured: {0}", exception.Message);
                 }
             }
+            foreach (BlockKey key in capture.PreviousEntities[chunkKey])
+            {
+                BlockPos position = key.ToBlockPos();
+                if (recordingBlockEntities.ContainsKey(key) && capi.World.BlockAccessor.GetBlockEntity(position) is null)
+                    CaptureBlockEvent(active, position, recordingElapsedSeconds);
+            }
         }
 
         if (capture.NextChunkIndex < capture.Chunks.Length)
         {
             return;
-        }
-
-        foreach (BlockKey removed in recordingBlockEntities.Keys.Where(key =>
-            capture.ScannedChunks.Contains(ChunkKey.FromBlock(key)) && !capture.Seen.Contains(key)).ToArray())
-        {
-            CaptureBlockEvent(active, removed.ToBlockPos(), capture.TimeSeconds);
         }
 
         pendingBlockEntityCapture = null;
@@ -6898,10 +6863,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             return false;
         }
 
-        int chunkX = (int)Math.Floor(position.X / (double)GlobalConstants.ChunkSize);
-        int chunkZ = (int)Math.Floor(position.Z / (double)GlobalConstants.ChunkSize);
-        return Math.Abs(chunkX - snapshot.CenterChunkX) <= snapshot.RadiusChunks
-            && Math.Abs(chunkZ - snapshot.CenterChunkZ) <= snapshot.RadiusChunks;
+        return recordingSnapshotChunks.ContainsKey(ChunkKey.FromBlock(BlockKey.From(position)));
     }
 
     private bool WithinObservedCaptureWorld(DirectorReplayDocument document, BlockPos position)
@@ -6999,27 +6961,24 @@ internal sealed partial class DirectorReplayManager : IDisposable
         try
         {
             SetApplyingReplayState(true);
-            // Register before packet construction: entity creation can query
-            // AnimManager or tessellate before it returns the new instance.
-            replayGhostIds.Add(replayEntityId);
-            Packet_Entity packet = new()
-            {
-                EntityType = actor.EntityCode,
-                EntityId = replayEntityId,
-                SimulationRange = actor.SimulationRange,
-                Data = CloneBytes(state)
-            };
-            ghost = ClientSystemEntities.createOrUpdateEntityFromPacket(packet, game);
-            if (ghost is null)
-            {
-                replayGhostIds.Remove(replayEntityId);
+            var properties = capi.World.GetEntityType(AssetLocation.Create(actor.EntityCode));
+            if (properties?.Client is null || game.LoadedEntities.ContainsKey(replayEntityId))
                 return null;
-            }
+            replayGhostIds.Add(replayEntityId);
+            // The packet factory registers the deserialized ID in a terrain
+            // chunk. Preview snapshots can still contain the source actor's ID.
+            var copy = capi.ClassRegistry.CreateEntity(properties);
+            copy.Api = capi;
+            copy.SimulationRange = actor.SimulationRange;
+            DirectorGameCompatibility.EntityState(copy, state, true);
+            copy.EntityId = replayEntityId;
+            ghost = copy;
+            ghost.Initialize(properties.Clone(), capi, game.WorldMap.ChunkIndex3D(ghost.Pos));
+            ghost.AfterInitialized(onFirstSpawn: false);
 
             DetachReplayMount(ghost);
             ClearReplaySeatPassengers(ghost);
             game.LoadedEntities[ghost.EntityId] = ghost;
-            replayGhostIds.Add(ghost.EntityId);
             replayThirdPersonIds.Add(ghost.EntityId);
             ghost.State = EnumEntityState.Inactive;
             ghost.IdleSoundChanceModifier = 0f;
@@ -9538,8 +9497,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
 
         long entityId = entity.EntityId;
-        DirectorGameCompatibility.EntityState(entity, data, true);
-        entity.EntityId = entityId;
+        try { DirectorGameCompatibility.EntityState(entity, data, true); }
+        finally { entity.EntityId = entityId; }
     }
 
     private static void ConfigureReplayPlayer(EntityPlayer player, bool markShapeModified)
@@ -10752,6 +10711,55 @@ internal sealed partial class DirectorReplayManager : IDisposable
         StopPlayback();
     }
 
+    // The integrated server also suspends its network and chunk threads. Open
+    // the server only while the client is missing data for the current selection.
+    internal bool CanStreamReplayTerrain(DirectorReplayPreloadPlan? plan, bool remoteWarmup)
+    {
+        if (!singleplayerWorldSuspension.IsActive)
+        {
+            nextTerrainCheckMs = 0;
+            lastMissingTerrainColumns = -1;
+            terrainTimedOut = waitingForTerrain = false;
+            return true;
+        }
+
+        long now = Environment.TickCount64;
+        if (now >= nextTerrainCheckMs || plan is null)
+        {
+            nextTerrainCheckMs = now + 250;
+            int missing = plan?.ExpandedColumns.Count(c => !IsTerrainColumnReceived(game.WorldMap, c)) ?? 0;
+            if (remoteWarmup) missing++;
+            if (plan is not null && playback is { } active && !IsPlaybackObservationAreaReady(active.Document, active.TimeSeconds))
+                missing++;
+            if (missing != lastMissingTerrainColumns || game.IsPaused)
+            {
+                lastTerrainProgressMs = now;
+                lastMissingTerrainColumns = missing;
+                terrainTimedOut = false;
+            }
+            if (missing > 0 && !terrainTimedOut && now - lastTerrainProgressMs >= 60000)
+            {
+                terrainTimedOut = true;
+                capi.ShowChatMessage(Lang.Get("vsdirector:replay-preload-stalled"));
+            }
+            waitingForTerrain = missing > 0 && !terrainTimedOut;
+            singleplayerWorldSuspension.SetTerrainLoading(waitingForTerrain);
+        }
+        return waitingForTerrain && !game.IsPaused;
+    }
+
+    internal static bool IsTerrainColumnReceived(ClientWorldMap map, DirectorReplayPreloadColumn column)
+    {
+        int size = map.ClientChunkSize;
+        int offset = column.Dimension * DirectorChunkWindow.DimensionHeight / size;
+        for (int y = 0; y < (map.MapSizeY + size - 1) / size; y++)
+        {
+            if (map.GetChunk(column.X, offset + y, column.Z) is not ClientChunk
+                { LoadedFromServer: true, MapChunk: not null }) return false;
+        }
+        return true;
+    }
+
     private bool SeekForExport(double timeSeconds)
     {
         Playback? active = playback;
@@ -10846,6 +10854,25 @@ internal sealed partial class DirectorReplayManager : IDisposable
         return await DirectorReplayIO.LoadPagedAsync(path, progress, cancellationToken).ConfigureAwait(false);
     }
 
+    private void BeginPlaybackLoad(PendingReplayLoad loading)
+    {
+        var activeStore = store;
+        string? playerUid = capi.World.Player?.PlayerUID;
+        bool snapshot = config.ReplayApplyWorldSnapshot;
+        var token = loading.Cancellation.Token;
+        loading.Task = Task.Run(async () =>
+        {
+            var document = await LoadReplayWithServerCompanionAsync(loading.Info.Path,
+                new ReplayLoadProgress(loading), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            if (!loading.ProjectOwned) activeStore?.ApplyTimelineEdits(loading.Info.Path, document);
+            var route = DirectorReplayPreloadPlanner.Build(document, playerUid,
+                DirectorReplayPlaybackPolicy.ShouldRebuildWorld(document, loading.QuickMode, snapshot),
+                cancellationToken: token);
+            return (document, route);
+        }, token);
+    }
+
     private void PollPendingLoad()
     {
         PendingReplayLoad? loading = pendingLoad;
@@ -10857,24 +10884,12 @@ internal sealed partial class DirectorReplayManager : IDisposable
         pendingLoad = null;
         try
         {
-            DirectorReplayDocument document = task.GetAwaiter().GetResult();
+            var (document, preloadPlan) = task.GetAwaiter().GetResult();
             if (document.WorldId != capi.World.SavegameIdentifier)
                 throw new InvalidDataException("Open the world in which this replay was recorded.");
             if (document.ServerReplay is { RequiredForCompletePlayback: true, Available: false })
                 throw new InvalidDataException("This coordinated replay requires its server companion data. Copy the matching server replay directory beside the client volume and try again.");
             document.Name = loading.Info.Name;
-            if (!loading.ProjectOwned) store?.ApplyTimelineEdits(loading.Info.Path, document);
-            // Do not build the complete route plan here.  Build() rasterizes
-            // every actor sample and scans the whole world snapshot on the
-            // client thread, which can stall an integrated server while the
-            // document is otherwise ready.  Startup only needs the small
-            // observation window around the camera and the t=0 anchor.
-            DirectorReplayPreloadPlan emptyPlan = CreatePlaybackPreloadWindowPlan(
-                Array.Empty<DirectorReplayPreloadColumn>());
-            IReadOnlyList<DirectorReplayPreloadColumn> startupColumns =
-                BuildPlaybackPreloadWindow(document, 0d, emptyPlan);
-            DirectorReplayPreloadPlan preloadPlan = CreatePlaybackPreloadWindowPlan(
-                startupColumns);
             PendingPlaybackStart starting = new PendingPlaybackStart(
                 document,
                 loading.Info.Path,
@@ -10882,8 +10897,10 @@ internal sealed partial class DirectorReplayManager : IDisposable
                 preloadPlan,
                 loading.PauseAfterLoad,
                 preferLiveActors: !config.ReplayUseDedicatedRenderer
-                    && document.Actors.Count > IndependentActorLimitForDenseReplay);
-            starting.StartupPreloadColumns = startupColumns;
+                    && document.Actors.Count > IndependentActorLimitForDenseReplay)
+            {
+                StartupPlan = BuildPlaybackPreloadWindow(document, 0d, preloadPlan)
+            };
             pendingPlaybackStart = starting;
         }
         catch (OperationCanceledException)
@@ -10977,13 +10994,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
         {
             if (!starting.ChunksReady)
             {
-                UpdatePreloadReadiness(starting);
-                // Only the first replay observation window is required before
-                // actors can be initialized. The rest of the route is
-                // intentionally streamed by the background preload client;
-                // waiting for every expanded column can queue thousands of
-                // server chunk loads and trigger the host watchdog.
-                if (!IsPlaybackObservationAreaReady(starting.Document, 0d))
+                if ((CanPreloadRemoteTerrain?.Invoke() == true && !UpdatePreloadReadiness(starting))
+                    || !IsPlaybackObservationAreaReady(starting.Document, 0d))
                 {
                     return;
                 }
@@ -11090,50 +11102,38 @@ internal sealed partial class DirectorReplayManager : IDisposable
             || controller.CurrentPose is not { } cameraPose
             || IsPoseChunkWindowReady(cameraPose.X, cameraPose.Z, cameraPose.Dimension);
 
-    private void UpdatePreloadReadiness(PendingPlaybackStart starting)
+    internal (int Ready, int Total)? StartupTerrainProgress => pendingPlaybackStart is { ChunksReady: false } start
+        ? (start.PreloadReadyColumns, start.StartupPlan.ExpandedColumns.Count) : null;
+
+    private bool UpdatePreloadReadiness(PendingPlaybackStart starting)
     {
         long now = capi.ElapsedMilliseconds;
-        if (starting.LastPreloadCheckMs > 0 && now - starting.LastPreloadCheckMs < 100)
-        {
-            return;
-        }
+        var columns = starting.StartupPlan.ExpandedColumns;
+        if (starting.LastPreloadCheckMs > 0 && now - starting.LastPreloadCheckMs < 500)
+            return starting.PreloadReadyColumns == columns.Count;
 
         starting.LastPreloadCheckMs = now;
         int ready = 0;
-        foreach (DirectorReplayPreloadColumn column in starting.StartupPreloadColumns)
+        DirectorReplayPreloadColumn missing = default;
+        foreach (DirectorReplayPreloadColumn column in columns)
         {
-            if (IsPreloadColumnRendered(column))
-            {
-                ready++;
-            }
+            if (IsTerrainColumnReceived(game.WorldMap, column)) ready++;
+            else missing = column;
         }
-
+        if (starting.LastTerrainProgressMs == 0 || game.IsPaused || ready != starting.PreloadReadyColumns)
+            starting.LastTerrainProgressMs = now;
         if (ready != starting.PreloadReadyColumns)
         {
             starting.PreloadReadyColumns = ready;
             capi.Logger.Debug(
-                "VS Director: replay preload client progress: {0}/{1} columns rendered.",
+                "VS Director: replay startup terrain received: {0}/{1} columns.",
                 ready,
-                starting.StartupPreloadColumns.Count);
+                columns.Count);
         }
-    }
-
-    private bool IsPreloadColumnRendered(DirectorReplayPreloadColumn column)
-    {
-        int chunkSize = game.WorldMap.ClientChunkSize;
-        int chunkCountY = (game.WorldMap.MapSizeY + chunkSize - 1) / chunkSize;
-        int dimensionOffset = column.Dimension * DirectorChunkWindow.DimensionHeight / chunkSize;
-        for (int chunkY = 0; chunkY < chunkCountY; chunkY++)
-        {
-            int internalChunkY = chunkY + dimensionOffset;
-            if (game.WorldMap.GetChunk(column.X, internalChunkY, column.Z) is null
-                || !game.WorldMap.IsChunkRendered(column.X, internalChunkY, column.Z))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        if (ready < columns.Count && now - starting.LastTerrainProgressMs >= 120000)
+            throw new TimeoutException(Lang.Get("vsdirector:replay-preload-incomplete", ready, columns.Count,
+                missing.X, missing.Z, missing.Dimension));
+        return ready == columns.Count;
     }
 
     private bool IsPoseChunkWindowReady(double x, double z, int dimension)
@@ -11222,6 +11222,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
         pausedBlockChanges.Clear();
         pausedBlockResyncBatches.Clear();
         recordingSnapshotChunks.Clear();
+        pendingWorldCapture.Clear();
+        nextWorldCaptureScan = 0;
         renderedCapturePoses.Clear();
         decodedSnapshotChunkKey = null;
         decodedSnapshotSolid = null;
@@ -11444,7 +11446,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         public CancellationTokenSource Cancellation { get; } = new();
 
-        public Task<DirectorReplayDocument>? Task { get; set; }
+        public Task<(DirectorReplayDocument, DirectorReplayPreloadPlan)>? Task { get; set; }
 
         public double Progress;
     }
@@ -11510,8 +11512,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         public DirectorReplayPreloadPlan PreloadPlan { get; set; }
 
-        public IReadOnlyList<DirectorReplayPreloadColumn> StartupPreloadColumns { get; set; }
-            = Array.Empty<DirectorReplayPreloadColumn>();
+        public required DirectorReplayPreloadPlan StartupPlan { get; set; }
+        public long LastTerrainProgressMs { get; set; }
 
         public bool PreferLiveActors { get; }
 
@@ -11688,31 +11690,17 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
     private sealed class BlockEntityCaptureRound
     {
-        public BlockEntityCaptureRound(DirectorReplayChunkSnapshot[] chunks, double timeSeconds)
+        public BlockEntityCaptureRound(DirectorReplayChunkSnapshot[] chunks, ILookup<ChunkKey, BlockKey> previousEntities)
         {
             Chunks = chunks;
-            TimeSeconds = timeSeconds;
+            PreviousEntities = previousEntities;
         }
 
         public DirectorReplayChunkSnapshot[] Chunks { get; }
 
-        public double TimeSeconds { get; }
-
-        public HashSet<BlockKey> Seen { get; } = new();
-
-        public HashSet<ChunkKey> ScannedChunks { get; } = new();
+        public ILookup<ChunkKey, BlockKey> PreviousEntities { get; }
 
         public int NextChunkIndex { get; set; }
-    }
-
-    private sealed class ObservedBlockState
-    {
-        public ObservedBlockState(CachedBlockState state)
-        {
-            State = state;
-        }
-
-        public CachedBlockState State { get; set; }
     }
 
     private sealed record ReplayRenderedPose(

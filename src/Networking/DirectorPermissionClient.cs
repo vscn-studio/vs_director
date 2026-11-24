@@ -8,6 +8,7 @@ internal sealed class DirectorPermissionClient
     private readonly IClientNetworkChannel channel;
     private readonly Action<DirectorPermissionSnapshot> changed;
     private long nextRefreshMs;
+    private bool serverChannelSeen;
 
     public DirectorPermissionClient(
         ICoreClientAPI capi,
@@ -44,12 +45,13 @@ internal sealed class DirectorPermissionClient
     public void RequestSnapshot()
     {
         nextRefreshMs = capi.ElapsedMilliseconds + 1000;
-        // Registered means the server's channel list is still pending. Only
-        // NotConnected positively identifies a server without this channel.
         var state = capi.Network.GetChannelState(DirectorNetwork.ChannelName);
-        if (state == EnumChannelState.NotConnected)
+        if (state is not (EnumChannelState.Connected or EnumChannelState.NotConnected)) return;
+        // In 1.22.7 GetChannelState reports Connected once the list arrives even
+        // for a local channel absent from it. The channel itself records the match.
+        if (!channel.Connected)
         {
-            if (IsKnown) return;
+            if (IsKnown || serverChannelSeen) return;
             IsClientOnly = true;
             IsKnown = true;
             IsAdmin = false;
@@ -58,7 +60,8 @@ internal sealed class DirectorPermissionClient
             changed(new DirectorPermissionSnapshot { PermissionMask = (long)Permissions });
             return;
         }
-        if (state != EnumChannelState.Connected || !channel.Connected) return;
+        if (state != EnumChannelState.Connected) return;
+        serverChannelSeen = true;
         channel.SendPacket(new DirectorPermissionRequest
         {
             Action = (int)DirectorPermissionRequestAction.Refresh
@@ -81,6 +84,7 @@ internal sealed class DirectorPermissionClient
         IsKnown = false;
         IsClientOnly = false;
         IsAdmin = false;
+        serverChannelSeen = false;
         nextRefreshMs = 0;
         Permissions = DirectorPermissions.DefaultPlayerPermissions;
         Members = Array.Empty<DirectorPermissionMemberDto>();

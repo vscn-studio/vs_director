@@ -1197,6 +1197,7 @@ public static class DirectorReplayMath
     {
         DirectorReplayWorldSnapshot result = new()
         {
+            FollowCaptureArea = source?.FollowCaptureArea ?? false,
             Dimension = source?.Dimension ?? 0,
             CenterChunkX = source?.CenterChunkX ?? 0,
             CenterChunkZ = source?.CenterChunkZ ?? 0,

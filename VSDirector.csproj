@@ -12,6 +12,7 @@
     <Copyright>Copyright (c) 2026 HansJack, HanosThePlacid</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Prefer the declared SDK over stale DLLs in test/build output folders. -->
     <AssemblySearchPaths>{HintPathFromItem};$(AssemblySearchPaths)</AssemblySearchPaths>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -54,6 +55,10 @@
 
   <ItemGroup>
     <Compile Include="src\**\*.cs" />
+    <PackageReference Include="Markdig" Version="1.4.1" />
+    <EmbeddedResource Include="README.md;README.en.md" LogicalName="VSDirector.About.%(Filename)%(Extension)" WithCulture="false" />
+    <EmbeddedResource Include="about/videos.json" LogicalName="VSDirector.About.videos.json" />
+    <EmbeddedResource Include="COPYRIGHT.txt;LICENSE" LogicalName="VSDirector.About.%(Filename)%(Extension)" />
     <Content Include="modinfo.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="modicon.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="LICENSE" CopyToOutputDirectory="PreserveNewest" />
@@ -85,6 +90,9 @@
     </ItemGroup>
     <RemoveDir Directories="$(ModPackageDirectory)" />
     <MakeDir Directories="$(MSBuildProjectDirectory)\artifacts;$(ModPackageDirectory);$(ModPackageDirectory)\licenses" />
+    <Copy
+      SourceFiles="$(TargetDir)Markdig.dll"
+      DestinationFolder="$(ModPackageDirectory)" />
     <Copy
       SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)\modinfo.json;$(MSBuildProjectDirectory)\modicon.png;$(MSBuildProjectDirectory)\LICENSE;$(MSBuildProjectDirectory)\COPYRIGHT.txt"
       DestinationFolder="$(ModPackageDirectory)" />

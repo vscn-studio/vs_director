@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Globalization;
 using ImGuiNET;
 using Vintagestory.API.Client;
 using Vintagestory.API.Config;
@@ -63,8 +62,8 @@ internal sealed class DirectorReplayProgressOverlay(ICoreClientAPI api, VSDirect
                 draw.AddRectFilled(min, new Vector2(min.X + width * (float)state.Progress, max.Y), 0xff00b3e6u);
             Centered(state.Title, new Vector2(center.X, min.Y - 12 * scale - fontSize * .5f), width, fontSize);
             string phaseKey = state.Export || state.Phase is "error" or "stopped" ? "replay-export-state-" : "workspace-replay-phase-";
-            string label = Lang.Get("vsdirector:" + phaseKey + state.Phase) + "  "
-                + (state.Progress * 100).ToString("0.0", CultureInfo.InvariantCulture) + "%";
+            string label = Lang.Get("vsdirector:replay-progress-phase-percent",
+                Lang.Get("vsdirector:" + phaseKey + state.Phase), state.Progress * 100);
             Centered(label, center, width - 16 * scale, fontSize);
 
             // New messages enter at the bottom; each of the latest three has its own centered row.

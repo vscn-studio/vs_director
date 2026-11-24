@@ -9,6 +9,9 @@ internal static class DirectorImGuiIcons
     private static readonly Dictionary<string, string> Glyphs = new(StringComparer.Ordinal)
     {
         ["add"] = "\ueb0b",
+        ["book"] = "\uea39",
+        ["brand-github"] = "\uec1c",
+        ["brand-discord"] = "\uece3",
         ["star"] = "\ueb2e",
         ["star-filled"] = "\uf6a6",
         ["history"] = "\uebea",

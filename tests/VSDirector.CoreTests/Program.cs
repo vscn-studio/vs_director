@@ -13,6 +13,7 @@ internal static class SmokeTests
     private static readonly (string Name, Func<Task> Run)[] Cases =
     {
         ("head motion interpolation, local camera axes, trimming, deterministic seek, mute, persistence and undo", RunSync(HeadMotionChecks.Run)),
+        ("recording capture area follows player and camera", RunSync(ReplayCaptureAreaChecks.Run)),
         ("preset groups persist, collapse, mute and delete all children; visual elements restore baseline", RunSync(ReplayElementGroupChecks.Run)),
         ("replay style undo/redo restores visuals, camera and markers atomically; bounded progress history", RunSync(ReplayEditingProgressChecks.Run)),
         ("blueprint projection persistence, automatic/manual particles and bounded export settings", RunSync(CreationProjectionChecks.Run)),
@@ -3554,6 +3555,11 @@ internal static class SmokeTests
         Check.True(overridden.AutomaticColumnSet.Contains(automaticExcluded));
         Check.False(overridden.ExpandedColumnSet.Contains(automaticExcluded));
         Check.True(overridden.ExpandedColumnSet.Contains(manualVista));
+        var capped = DirectorReplayPreloadPlanner.ApplyOverrides(
+            Enumerable.Range(0, DirectorReplayPreloadPlanner.MaxExpandedColumns).Select(x => new DirectorReplayPreloadColumn(x, 0, 0)),
+            [manualVista], [], out bool truncated);
+        Check.True(truncated);
+        Check.Equal(manualVista, capped[0]);
         Check.SequenceEqual(
             new[] { manualVista },
             DirectorReplayPreloadPlanner.NormalizeOverrideColumns(document.IncludedPreloadColumns));

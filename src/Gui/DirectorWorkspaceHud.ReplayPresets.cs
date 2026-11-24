@@ -286,7 +286,8 @@ internal sealed partial class DirectorWorkspaceHud
         keyframe.TrackType = track.TrackType;
         int tick = ReplayTimelineTickAt(keyframe.TimeSeconds);
         c.Timeline.ElementKeyframes.RemoveAll(item =>
-            item.TrackId == track.Id && ReplayTimelineTickAt(item.TimeSeconds) == tick);
+            item.TrackId == track.Id && ReplayTimelineTickAt(item.TimeSeconds) == tick
+            && (track.TrackType != DirectorReplayElementTrackType.FollowEntity || item.FollowEntityRole == keyframe.FollowEntityRole));
         c.Timeline.ElementKeyframes.Add(keyframe);
     }
 

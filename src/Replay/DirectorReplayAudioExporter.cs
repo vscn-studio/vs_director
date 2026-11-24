@@ -804,7 +804,7 @@ internal static class DirectorReplayAudioExporter
 
         internal void InitializeAt(double replaySeconds)
         {
-            ApplyEventsThrough(replaySeconds);
+            ApplyEventsThrough(replaySeconds, restoring: true);
             foreach (Voice voice in voices.ToArray())
             {
                 if (voice.Paused)
@@ -817,12 +817,12 @@ internal static class DirectorReplayAudioExporter
             RemoveFinishedVoices();
         }
 
-        internal void ApplyEventsThrough(double replaySeconds)
+        private void ApplyEventsThrough(double replaySeconds, bool restoring = false)
         {
             while (eventCursor < plan.Events.Count
                 && plan.Events[eventCursor].TimeSeconds <= replaySeconds + TimeEpsilon)
             {
-                ApplyEvent(plan.Events[eventCursor++]);
+                ApplyEvent(plan.Events[eventCursor++], restoring);
             }
         }
 
@@ -902,7 +902,7 @@ internal static class DirectorReplayAudioExporter
             RemoveFinishedVoices();
         }
 
-        private Voice? ApplyEvent(DirectorReplayAudioEvent sound)
+        private Voice? ApplyEvent(DirectorReplayAudioEvent sound, bool restoring = false)
         {
             if (sound.Action == DirectorReplaySoundAction.Play)
             {
@@ -943,9 +943,12 @@ internal static class DirectorReplayAudioExporter
                 active.Asset = nextAsset;
             }
             active.Event = sound;
-            active.PositionFrames = sound.PlaybackPosition * active.Asset.SampleRate;
+            // Parameter updates sample the native audio clock. Seeking to each
+            // observation during mixing cuts the waveform at audio-buffer boundaries.
+            if (restoring || sound.Action == DirectorReplaySoundAction.Pause)
+                active.PositionFrames = sound.PlaybackPosition * active.Asset.SampleRate;
             active.LastEventSeconds = sound.TimeSeconds;
-            active.Paused = sound.Action == DirectorReplaySoundAction.Pause;
+            if (sound.Action == DirectorReplaySoundAction.Pause) active.Paused = true;
             active.Finished = false;
             NormalizePosition(active);
             return active;

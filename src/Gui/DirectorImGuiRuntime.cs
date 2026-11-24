@@ -18,6 +18,7 @@ internal static class DirectorImGuiRuntime
     private static Harmony? initialization;
     private static string iconFontPath = "";
     private static nint iconRanges;
+    private static int fontScopeDepth;
 
     internal static void Initialize(ICoreClientAPI api, Mod mod)
     {
@@ -205,14 +206,28 @@ internal static class DirectorImGuiRuntime
             ImGui.SetNextWindowPos(ImGui.GetMainViewport().GetCenter(), ImGuiCond.Appearing, new Vector2(.5f));
         }
         var font = CurrentDefaultFont();
+        var io = ImGui.GetIO();
+        float previousScale = io.FontGlobalScale;
         bool pushed = font.NativePtr != null;
-        if (pushed) ImGui.PushFont(font);
-        return new FontScope(pushed, DirectorImGuiTheme.Use());
+        if (pushed)
+        {
+            // PushFont snapshots the base size used by docking tabs, popups and child windows.
+            if (fontScopeDepth++ == 0) io.FontGlobalScale *= DirectorImGuiTheme.Scale;
+            ImGui.PushFont(font);
+        }
+        return new FontScope(pushed, previousScale, DirectorImGuiTheme.Use());
     }
 
-    internal readonly struct FontScope(bool pushed, DirectorImGuiTheme.Scope theme) : IDisposable
+    internal readonly struct FontScope(bool pushed, float previousScale, DirectorImGuiTheme.Scope theme) : IDisposable
     {
-        public void Dispose() { theme.Dispose(); if (pushed) ImGui.PopFont(); }
+        public void Dispose()
+        {
+            theme.Dispose();
+            if (!pushed) return;
+            fontScopeDepth--;
+            ImGui.GetIO().FontGlobalScale = previousScale;
+            ImGui.PopFont();
+        }
     }
 
     internal static void Dispose()
@@ -245,7 +260,6 @@ internal abstract class DirectorImGuiDialog : ImGuiDialogWindow
         bool keepOpen = true;
         try
         {
-            ImGui.SetWindowFontScale(DirectorImGuiTheme.Scale);
             if (visible) keepOpen = OnDraw();
         }
         finally { ImGui.End(); }

@@ -8,7 +8,8 @@ public sealed class DirectorReplayDocument
     // clip fields (EndsElement, EndsShot, tracking modes, time effects, follow blend).
     // An older reader drops tracks it does not know, so it must reject these files.
     // 25: independent head-motion clips, including recorded camera-local samples.
-    public const int CurrentSchemaVersion = 25;
+    // 26: moving capture areas preserve unknown terrain before each chunk's first observation.
+    public const int CurrentSchemaVersion = 26;
 
     public const int CurrentParticleCaptureVersion = 1;
 
@@ -37,7 +38,8 @@ public sealed class DirectorReplayDocument
     public VSDirector.Data.DirectorServerReplayLink? ServerReplay { get; set; }
     public DirectorSessionMergeOrigin? SessionMerge { get; set; }
     [System.Text.Json.Serialization.JsonIgnore]
-    public bool HasHistoricalBaselines => SessionMerge is not null || ServerReplay?.Materialized == true;
+    public bool HasHistoricalBaselines => SessionMerge is not null || ServerReplay?.Materialized == true
+        || WorldSnapshot?.FollowCaptureArea == true;
 
     public bool IncludesWorldSnapshot { get; set; }
 
@@ -502,6 +504,8 @@ public sealed class DirectorReplayAnimationSample
 
 public sealed class DirectorReplayWorldSnapshot
 {
+    /// <summary>Chunks were observed along the recording route. Before first observation, preserve live terrain.</summary>
+    public bool FollowCaptureArea { get; set; }
     public int Dimension { get; set; }
 
     public int CenterChunkX { get; set; }
@@ -519,6 +523,7 @@ public sealed class DirectorReplayWorldSnapshot
     public DirectorReplayWorldSnapshot DeepClone()
         => new()
         {
+            FollowCaptureArea = FollowCaptureArea,
             Dimension = Dimension,
             CenterChunkX = CenterChunkX,
             CenterChunkZ = CenterChunkZ,
