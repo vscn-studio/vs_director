@@ -268,6 +268,12 @@ public sealed class DirectorReplayElementKeyframe
 
     public string AudioAsset { get; set; } = string.Empty;
 
+    /// <summary>Non-destructive source trim in seconds. Zero at the end means the full source duration.</summary>
+    public double AudioTrimStartSeconds { get; set; }
+
+    public double AudioTrimEndSeconds { get; set; }
+    public float AudioClipGain { get; set; } = 1f;
+
     public float Volume { get; set; } = 1f;
 
     public float AudioPitch { get; set; } = 1f;
@@ -1118,6 +1124,13 @@ public sealed partial class DirectorReplayViewportTimeline
             DirectorReplayElementTimeline.MaxFreezeDelayTicks);
         result.BlockCode = result.BlockCode?.Trim() ?? string.Empty;
         result.AudioAsset = result.AudioAsset?.Trim() ?? string.Empty;
+        result.AudioClipGain = Math.Clamp(NormalizeFinite(result.AudioClipGain, 1f), 0f, DirectorReplayVoiceTrackPolicy.MaximumVolume);
+        result.AudioTrimStartSeconds = Math.Clamp(NormalizeFinite(result.AudioTrimStartSeconds), 0d, 86400d);
+        result.AudioTrimEndSeconds = Math.Clamp(NormalizeFinite(result.AudioTrimEndSeconds), 0d, 86400d);
+        if (result.AudioTrimEndSeconds > 0d && result.AudioTrimEndSeconds <= result.AudioTrimStartSeconds)
+        {
+            result.AudioTrimEndSeconds = 0d;
+        }
         result.Volume = result.TrackType == DirectorReplayElementTrackType.VoiceAudio
             ? Math.Clamp(NormalizeFinite(result.Volume, 1f), 0f, 2f)
             : Math.Clamp(NormalizeFinite(result.Volume, 1f), 0f, 4f);
@@ -1169,11 +1182,6 @@ public sealed partial class DirectorReplayViewportTimeline
         {
             return false;
         }
-        if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio)
-        {
-            return false;
-        }
-
         HashSet<Guid> removedTracks = timeline.TrackFamily(trackId);
         timeline.Tracks.RemoveAll(item => removedTracks.Contains(item.Id));
         HashSet<Guid> removedClipIds = timeline.Clips

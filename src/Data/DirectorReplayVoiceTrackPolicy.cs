@@ -8,6 +8,22 @@ public static class DirectorReplayVoiceTrackPolicy
 {
     public const float MaximumVolume = 2f;
 
+    public static bool MoveFileClips(DirectorReplayViewportTimeline timeline, Guid source, Guid destination)
+    {
+        if (source == destination || timeline.Tracks.Count(t => (t.Id == source || t.Id == destination)
+                && t.TrackType == DirectorReplayElementTrackType.VoiceAudio
+                && !t.SpeakerId.EndsWith(":volume", StringComparison.Ordinal)) != 2) return false;
+        bool moved = false;
+        foreach (var clip in timeline.ElementKeyframes)
+        {
+            if (clip.TrackId != source || clip.TrackType != DirectorReplayElementTrackType.VoiceAudio
+                || string.IsNullOrWhiteSpace(clip.AudioAsset)) continue;
+            clip.TrackId = destination;
+            moved = true;
+        }
+        return moved;
+    }
+
     public static void EnsureTracks(
         DirectorReplayViewportTimeline timeline,
         IEnumerable<DirectorReplayVoiceFrame>? voiceFrames)
@@ -59,10 +75,19 @@ public static class DirectorReplayVoiceTrackPolicy
             gain = 0f;
             return false;
         }
+        DirectorReplayElementTrack? volumeTrack = timeline.Tracks.FirstOrDefault(item =>
+            item.TrackType == DirectorReplayElementTrackType.VoiceAudio
+            && string.Equals(item.SpeakerId, speakerId + ":volume", StringComparison.Ordinal));
+        if (volumeTrack is not null && !timeline.IsTrackEnabled(volumeTrack))
+        {
+            gain = 0f;
+            return false;
+        }
+        DirectorReplayElementTrack gainTrack = volumeTrack ?? track;
         if (DirectorReplayElementTimeline.TrySample(
                 timeline.ElementKeyframes,
                 DirectorReplayElementTrackType.VoiceAudio,
-                track.Id,
+                gainTrack.Id,
                 timeSeconds,
                 out DirectorReplayElementKeyframe sample))
         {

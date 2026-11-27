@@ -422,6 +422,11 @@ internal sealed partial class DirectorWorkspaceHud
                 }
                 continue;
             }
+            if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio)
+            {
+                DrawVoiceWaveform(timeline, track, y, rowHeight, label, width);
+                DrawVoiceAudioTrimHandles(timeline, track, y, rowHeight, label, width, pixels);
+            }
             if (track.TrackType == DirectorReplayElementTrackType.Camera)
             {
                 foreach (var clip in timeline.Clips.Where(c => c.TrackId == track.Id && c.SourceType == DirectorReplayViewportSourceType.StaticCamera))
@@ -447,6 +452,11 @@ internal sealed partial class DirectorWorkspaceHud
                 }
             foreach (var frame in timeline.ElementKeyframes.Where(f => f.TrackId == track.Id))
             {
+                // Audio assets are duration-bearing clips drawn with their own
+                // selection and trim controls. A generic keyframe glyph on top
+                // of each clip obscures its waveform and suggests the wrong edit model.
+                if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio
+                    && !string.IsNullOrWhiteSpace(frame.AudioAsset)) continue;
                 if (track.TrackType == DirectorReplayElementTrackType.HeadMotion && frame.HeadMotion is { Duration: > 0 } motion)
                 {
                     double motionLeft = Math.Max(label, X(frame.TimeSeconds));
@@ -467,8 +477,6 @@ internal sealed partial class DirectorWorkspaceHud
                 ImGuiTimelineKey(frame.Id.ToString("N"), Time(frame), y, label, width, replayTimelineScrollTicks, pixels, frame.Id == selectedReplayElementKeyframeId, role,
                     TimelineKeyIcon(frame.TrackType.ToString(), frame.Frozen, frame.TimelapseRole == DirectorReplayTimelapseKeyframeRole.End), rowHeight);
             }
-            if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio)
-                DrawVoiceWaveform(timeline, track, y, rowHeight, label, width);
         }
         if (replayElementTrackReordering || resizingTimelineTrack != Guid.Empty)
             ImGuiTimelineReorder(replayElementTrackReordering ? replayElementTrackReorderIndex : replayTimelineFirstVisibleTrack,

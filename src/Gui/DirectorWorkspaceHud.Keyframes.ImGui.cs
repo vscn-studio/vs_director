@@ -126,15 +126,36 @@ internal sealed partial class DirectorWorkspaceHud
             KeyframeAction(form, "apply", SaveReplaySceneName, "primary");
             return;
         }
-        var track = CurrentReplayViewportTimeline().Tracks.FirstOrDefault(t => t.Id == replayFloatingTrackId);
+        var timeline = CurrentReplayViewportTimeline();
+        var track = timeline.Tracks.FirstOrDefault(t => t.Id == replayFloatingTrackId);
         if (track is null) return;
-        if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio)
-        {
-            form.Group(track.Name);
-            KeyframeAction(form, "replay-element-track-clear", ClearReplayTrackKeyframes);
-            return;
-        }
         form.Text(ImGuiLabel("name"), replayFloatingTrackName, value => replayFloatingTrackName = value);
+        var clips = timeline.ElementKeyframes.Where(k => k.TrackId == track.Id
+            && k.TrackType == DirectorReplayElementTrackType.VoiceAudio && !string.IsNullOrEmpty(k.AudioAsset)).ToArray();
+        if (clips.Length > 0)
+        {
+            form.Select(ImGuiLabel("voice-edit-clip"), "", new[] { ("", ImGuiLabel("voice-choose-clip")) }
+                .Concat(clips.Select((k, index) => (k.Id.ToString(), $"{index + 1} · {k.TimeSeconds:0.##} s · {Path.GetFileNameWithoutExtension(k.AudioAsset)}"))), value =>
+            {
+                if (!Guid.TryParse(value, out var id)) return;
+                selectedReplayElementTrackId = track.Id;
+                selectedReplayElementKeyframeId = id;
+                OpenSelectedReplayElementKeyframeEditor();
+            });
+            var destinations = VoiceTrackChoices(timeline).Where(t => t.Id != track.Id).ToArray();
+            if (destinations.Length > 0)
+                form.Select(ImGuiLabel("voice-merge-track"), "", new[] { ("", ImGuiLabel("voice-choose-track")) }
+                    .Concat(destinations.Select(t => (t.Id.ToString(), t.Label))), value =>
+                {
+                    if (!Guid.TryParse(value, out var id)) return;
+                    var edited = CurrentReplayViewportTimeline();
+                    if (!DirectorReplayVoiceTrackPolicy.MoveFileClips(edited, track.Id, id)
+                        || !CommitReplayViewportTimeline(edited)) return;
+                    imGuiTimelineDirty = true;
+                    selectedReplayElementTrackId = id;
+                    OpenReplayTrackEditor(id);
+                });
+        }
         KeyframeAction(form, "apply", ApplyReplayTrackEditor, "primary");
         KeyframeAction(form, "replay-element-track-clear", ClearReplayTrackKeyframes);
         KeyframeAction(form, "delete", DeleteReplayTrackFromEditor, "danger");
@@ -406,7 +427,12 @@ internal sealed partial class DirectorWorkspaceHud
             case DirectorReplayElementTrackType.BlockOverride:
                 Number("blockX", "X"); Number("blockY", "Y"); Number("blockZ", "Z"); N("dimension", "camera-dimension");
                 Text("blockCode", ImGuiLabel("replay-element-block-code")); break;
-            case DirectorReplayElementTrackType.VoiceAudio: N("volume", "replay-element-volume"); break;
+            case DirectorReplayElementTrackType.VoiceAudio:
+                N("volume", "replay-element-volume");
+                if (!CurrentReplayViewportTimeline().Tracks.Any(t => t.Id == frame.TrackId
+                    && t.SpeakerId.EndsWith(":volume", StringComparison.Ordinal)))
+                    form.Button(ImGuiLabel("voice-recorder"), OpenVoiceRecorder);
+                break;
         }
         if (frame.TrackType is not (DirectorReplayElementTrackType.Freeze or DirectorReplayElementTrackType.Timelapse
             or DirectorReplayElementTrackType.FollowEntity or DirectorReplayElementTrackType.Title

@@ -204,6 +204,25 @@ internal sealed partial class DirectorReplayManager : IDisposable
     internal System.Func<bool>? CanPreloadRemoteTerrain { private get; set; }
     private DirectorReplayPreloadPlan? lastRoute, lastStreamingPlan;
     private List<DirectorReplayPreloadColumn>? lastObservationCenters;
+    private DirectorReplayPreloadColumn? pendingCameraColumn;
+
+    internal bool CanPresentCameraPose(CameraPreset pose)
+    {
+        if (playback is not { } active || CanPreloadRemoteTerrain?.Invoke() != true) return true;
+        var column = new DirectorReplayPreloadColumn((int)Math.Floor(pose.X / 32d), (int)Math.Floor(pose.Z / 32d), pose.Dimension);
+        if (column.X < 0 || column.Z < 0 || column.X >= game.WorldMap.ChunkMapSizeX || column.Z >= game.WorldMap.ChunkMapSizeZ
+            || active.Document.ExcludedPreloadColumns.Contains(column)) return true;
+        if (IsTerrainColumnReceived(game.WorldMap, column) && active.WorldPlayback?.IsSynchronizing != true
+            && active.WorldPlayback?.HasPendingColumn(column) != true)
+        {
+            pendingCameraColumn = null;
+            return true;
+        }
+        pendingCameraColumn = column;
+        active.WorldPlayback?.SetObservationColumns(BuildPlaybackPreloadWindow(active.Document, active.TimeSeconds, active.PreloadPlan).ObservationColumnSet);
+        SetPlaybackChunkBuffering(true);
+        return false;
+    }
     private PendingPlaybackStart? pendingPlaybackStart;
     private PendingPreloadEditorLoad? pendingPreloadEditorLoad;
     private LoadedPreloadEditor? loadedPreloadEditor;
@@ -241,7 +260,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
             config,
             controller,
             SeekForExport,
-            () => pendingLoad is null && !IsSeekPending,
+            () => pendingLoad is null && !IsSeekPending && playback is { } active
+                && IsPlaybackObservationAreaReady(active.Document, active.TimeSeconds),
             applyExportTrack);
         capi.Event.BlockChanged += OnBlockChanged;
         capi.Event.OnEntitySpawn += OnEntitySpawn;
@@ -439,10 +459,10 @@ internal sealed partial class DirectorReplayManager : IDisposable
             {
                 if (!starting.ChunksReady)
                 {
-                    double chunkProgress = starting.StartupPlan.ExpandedColumns.Count == 0
+                    double chunkProgress = starting.StartupPlan.ObservationColumns.Count == 0
                         ? 1d
                         : starting.PreloadReadyColumns
-                            / (double)starting.StartupPlan.ExpandedColumns.Count;
+                            / (double)starting.StartupPlan.ObservationColumns.Count;
                     return 0.35d + Math.Clamp(chunkProgress, 0d, 1d) * 0.15d;
                 }
 
@@ -766,7 +786,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
     }
 
     private static DirectorReplayPreloadPlan CreatePlaybackPreloadWindowPlan(
-        IReadOnlyList<DirectorReplayPreloadColumn> columns)
+        IReadOnlyList<DirectorReplayPreloadColumn> columns, IReadOnlyList<DirectorReplayPreloadColumn> observation)
     {
         DirectorReplayPreloadColumn[] snapshot = columns.ToArray();
         // The returned columns are already expanded around the observation
@@ -777,7 +797,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             snapshot,
             snapshot,
             radiusChunks: 0,
-            truncated: false);
+            truncated: false) { ObservationColumns = observation };
     }
 
     private DirectorReplayPreloadPlan BuildPlaybackPreloadWindow(
@@ -803,6 +823,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             }
         }
 
+        if (pendingCameraColumn is { } destination) centers.Add(destination);
         if (controller.IsActive && controller.CurrentPose is { } cameraPose)
         {
             AddCenter(cameraPose.X, cameraPose.Z, cameraPose.Dimension);
@@ -860,16 +881,16 @@ internal sealed partial class DirectorReplayManager : IDisposable
             }
         }
 
-        // User-selected columns lead the queue, including those away from the current camera.
         var excluded = document.ExcludedPreloadColumns.ToHashSet();
-        var columns = DirectorReplayPreloadPlanner.NormalizeOverrideColumns(document.IncludedPreloadColumns)
-            .Concat(window).Concat(fallbackPlan.ExpandedColumns)
-            .Where(column => !excluded.Contains(column) && column.X >= 0 && column.Z >= 0
-                && column.X < game.WorldMap.ChunkMapSizeX && column.Z < game.WorldMap.ChunkMapSizeZ)
+        bool InPlan(DirectorReplayPreloadColumn column) => !excluded.Contains(column) && column.X >= 0 && column.Z >= 0
+            && column.X < game.WorldMap.ChunkMapSizeX && column.Z < game.WorldMap.ChunkMapSizeZ;
+        var observation = centers.Concat(window).Distinct().Where(InPlan).ToArray();
+        var columns = observation.Concat(DirectorReplayPreloadPlanner.NormalizeOverrideColumns(document.IncludedPreloadColumns))
+            .Concat(fallbackPlan.ExpandedColumns).Where(InPlan)
             .Distinct().Take(DirectorReplayPreloadPlanner.MaxExpandedColumns).ToArray();
         lastRoute = fallbackPlan;
         lastObservationCenters = centers;
-        return lastStreamingPlan = CreatePlaybackPreloadWindowPlan(columns);
+        return lastStreamingPlan = CreatePlaybackPreloadWindowPlan(columns, observation);
     }
 
     internal void RequestPreloadEditor(Guid replayId)
@@ -1842,6 +1863,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
             Id = Guid.NewGuid(),
             Name = name,
             WorldId = capi.World.SavegameIdentifier ?? string.Empty,
+            RecordedGameVersion = Vintagestory.API.Config.GameVersion.LongGameVersion,
+            NativePayloadVersion = DirectorReplayDocument.CurrentNativePayloadVersion,
             CreatedUtc = DateTimeOffset.UtcNow,
             SampleRate = DirectorReplayMath.NormalizeSampleRate(config.ReplaySampleRate),
             ParticleCaptureVersion = config.ReplayCaptureParticles
@@ -1850,6 +1873,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         };
         if (config.ReplayCaptureWorld)
         {
+            var snapshotTimer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 document.WorldSnapshot = DirectorReplayWorldCapture.Capture(
@@ -1865,6 +1889,11 @@ internal sealed partial class DirectorReplayManager : IDisposable
             catch (Exception exception)
             {
                 capi.Logger.Error("VS Director: client world snapshot failed; actor capture will continue: {0}", exception);
+            }
+            finally
+            {
+                capi.Logger.Notification("VS Director: recording initial world snapshot captured {0} chunks in {1} ms.",
+                    document.WorldSnapshot.Chunks.Count, snapshotTimer.ElapsedMilliseconds);
             }
         }
 
@@ -2404,6 +2433,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
                 () => applyingReplayState);
             try
             {
+                if (CanPreloadRemoteTerrain?.Invoke() == true)
+                    worldPlayback.SetObservationColumns(BuildPlaybackPreloadWindow(document, 0d, preloadPlan).ObservationColumnSet);
                 worldPlayback.Start();
             }
             catch (Exception exception)
@@ -2551,6 +2582,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
             return false;
         }
 
+        pendingCameraColumn = null;
         playback.TimeSeconds = Math.Clamp(timeSeconds, 0d, playback.Document.DurationSeconds);
         playback.TimedEventSeekPending = true;
         applied = playback.TimeSeconds;
@@ -2940,6 +2972,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         if (ReferenceEquals(document, playback?.Document))
         {
+            ResetReplayVoiceSounds(playback!);
             RefreshPlaybackForVisualChanges(playback!, previous.Visuals, normalized.Visuals);
         }
 
@@ -2963,7 +2996,10 @@ internal sealed partial class DirectorReplayManager : IDisposable
             return false;
         }
         if (ReferenceEquals(document, playback?.Document))
+        {
+            ResetReplayVoiceSounds(playback!);
             RefreshPlaybackForVisualChanges(playback!, previous.ViewportTimeline.Visuals, document.ViewportTimeline.Visuals);
+        }
         return true;
     }
 
@@ -3676,8 +3712,9 @@ internal sealed partial class DirectorReplayManager : IDisposable
             error = "replay-voice-export-path";
             return false;
         }
-        string replayFileName = Path.GetFileNameWithoutExtension(
-            Path.GetFileNameWithoutExtension(active.SourcePath));
+        string replayFileName = Path.GetFileNameWithoutExtension(active.SourcePath);
+        if (!DirectorReplayPages.IsPrimary(active.SourcePath))
+            replayFileName = Path.GetFileNameWithoutExtension(replayFileName);
         string folderName = DirectorRecordingFiles.SanitizeFilePart(replayFileName, "Replay")
             + "-voice-" + DateTimeOffset.UtcNow.ToLocalTime().ToString("yyyy-MM-dd_HH-mm-ss-fff");
         string outputDirectory = Path.Combine(sourceDirectory, folderName);
@@ -4215,6 +4252,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
     {
         lastRoute = lastStreamingPlan = null;
         lastObservationCenters = null;
+        pendingCameraColumn = null;
         replayLoadOverlayVisible = false;
         StopIndependentVoiceExport();
         if (obsExport is { IsActive: true } obs)
@@ -4513,7 +4551,14 @@ internal sealed partial class DirectorReplayManager : IDisposable
             UpdateReplaySoundPauseState(active);
             return;
         }
+        bool resumingCamera = pendingCameraColumn.HasValue;
         SetPlaybackChunkBuffering(false);
+        if (resumingCamera)
+        {
+            pendingCameraColumn = null;
+            ApplyPlaybackFrame(active);
+            return;
+        }
 
         UpdateObsExportStart(active, IsObsExportStartReady(active));
         if (obsExport is { IsActive: true, Client: not null } obs
@@ -6162,6 +6207,43 @@ internal sealed partial class DirectorReplayManager : IDisposable
         }
     }
 
+    internal void CaptureLocalMicrophoneFrame(ReadOnlySpan<short> samples)
+    {
+        DirectorReplayDocument? active = recording;
+        if (active is null || recordingPaused || applyingReplayState || samples.IsEmpty)
+        {
+            return;
+        }
+
+        EntityPlayer? player = capi.World.Player?.Entity;
+        double x = player?.Pos.X ?? 0d;
+        double y = player?.Pos.Y ?? 0d;
+        double z = player?.Pos.Z ?? 0d;
+        int dimension = player?.Pos.Dimension ?? 0;
+        byte[] pcm = DirectorVoicePcm.ToLittleEndianBytes(samples);
+        active.VoiceFrames.Add(new DirectorReplayVoiceFrame
+        {
+            TimeSeconds = Math.Max(0d, recordingElapsedSeconds - samples.Length / (double)DirectorReplayVoiceFrame.SampleRate),
+            SourceId = "vsdirector:local-microphone",
+            SpeakerId = "vsdirector:local-microphone",
+            SpeakerName = capi.World.Player?.PlayerName ?? "Microphone",
+            X = x,
+            Y = y,
+            Z = z,
+            Dimension = dimension,
+            Spatialized = false,
+            Volume = 1f,
+            Pcm16 = pcm
+        });
+        if (voiceTrackRecordingId != active.Id)
+        {
+            voiceTrackRecordingId = active.Id;
+            recordedVoiceSpeakers.Clear();
+        }
+        if (recordedVoiceSpeakers.Add("vsdirector:local-microphone"))
+            DirectorReplayVoiceTrackPolicy.EnsureTracks(active.ViewportTimeline, new[] { active.VoiceFrames[^1] });
+    }
+
     internal bool TryPickReplayEntity(
         Vec3d rayStart,
         Vec3d rayEnd,
@@ -7492,6 +7574,11 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
     private void ApplyPlaybackFrame(Playback active)
     {
+        if (active.WorldPlayback is { } world && CanPreloadRemoteTerrain?.Invoke() == true)
+        {
+            var plan = BuildPlaybackPreloadWindow(active.Document, active.TimeSeconds, active.PreloadPlan);
+            world.SetObservationColumns(plan.ObservationColumnSet);
+        }
         long updateStarted = Stopwatch.GetTimestamp();
         double audioWorkMs = 0;
         double timelineTimeSeconds = active.TimeSeconds;
@@ -8742,7 +8829,10 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
     private void ApplyReplayVoiceFrames(Playback active)
     {
-        if (!CaptureVoice || active.Document.VoiceFrames.Count == 0)
+        IReadOnlyList<DirectorReplayVoiceFrame> frames = active.VoicePlaybackFrames
+            ??= BuildVoicePlaybackFrames(active.Document);
+        bool hasTimelineAudio = frames.Count > active.Document.VoiceFrames.Count;
+        if ((!CaptureVoice && !hasTimelineAudio) || frames.Count == 0)
         {
             ResetReplayVoiceSounds(active);
             return;
@@ -8751,7 +8841,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
         {
             active.VoiceAudio ??= new DirectorOpenAlNative();
             var al = active.VoiceAudio;
-            active.VoiceStream ??= new DirectorReplayVoiceStream(active.Document.VoiceFrames, () => new DirectorReplayVoiceOutput(al));
+            active.VoiceStream ??= new DirectorReplayVoiceStream(frames, () => new DirectorReplayVoiceOutput(al));
             int dimension = controller.CurrentPose?.Dimension ?? game.EntityPlayer.Pos.Dimension;
             active.VoiceStream.Update(active.TimeSeconds, (float)DirectorReplayVisualRuntime.ReplaySpeed,
                 ShouldPauseReplaySounds(active), frame =>
@@ -8777,6 +8867,18 @@ internal sealed partial class DirectorReplayManager : IDisposable
     {
         active.VoiceStream?.Dispose(); active.VoiceStream = null;
         active.VoiceAudio?.Dispose(); active.VoiceAudio = null;
+        active.VoicePlaybackFrames = null;
+    }
+
+    private static IReadOnlyList<DirectorReplayVoiceFrame> BuildVoicePlaybackFrames(DirectorReplayDocument document)
+    {
+        IReadOnlyList<DirectorReplayVoiceFrame> fileFrames = DirectorReplayAudioFileFrames.Create(document.ViewportTimeline);
+        if (fileFrames.Count == 0) return document.Pages?.OpenVoiceView() ?? document.VoiceFrames;
+        IEnumerable<DirectorReplayVoiceFrame> recorded = document.Pages?.OpenVoiceView() ?? document.VoiceFrames;
+        return recorded.Concat(fileFrames)
+            .OrderBy(frame => frame.TimeSeconds)
+            .ThenBy(frame => frame.SourceId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private void ApplyReplaySoundEvent(Playback active, DirectorReplaySoundEvent sound)
@@ -11083,6 +11185,8 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
     private bool IsPlaybackObservationAreaReady(DirectorReplayDocument document, double timeSeconds)
     {
+        if (pendingCameraColumn is { } target && (!IsTerrainColumnReceived(game.WorldMap, target)
+            || playback?.WorldPlayback?.HasPendingColumn(target) == true)) return false;
         if (!IsActiveCameraAreaReady())
         {
             return false;
@@ -11103,12 +11207,12 @@ internal sealed partial class DirectorReplayManager : IDisposable
             || IsPoseChunkWindowReady(cameraPose.X, cameraPose.Z, cameraPose.Dimension);
 
     internal (int Ready, int Total)? StartupTerrainProgress => pendingPlaybackStart is { ChunksReady: false } start
-        ? (start.PreloadReadyColumns, start.StartupPlan.ExpandedColumns.Count) : null;
+        ? (start.PreloadReadyColumns, start.StartupPlan.ObservationColumns.Count) : null;
 
     private bool UpdatePreloadReadiness(PendingPlaybackStart starting)
     {
         long now = capi.ElapsedMilliseconds;
-        var columns = starting.StartupPlan.ExpandedColumns;
+        var columns = starting.StartupPlan.ObservationColumns;
         if (starting.LastPreloadCheckMs > 0 && now - starting.LastPreloadCheckMs < 500)
             return starting.PreloadReadyColumns == columns.Count;
 
@@ -11402,6 +11506,7 @@ internal sealed partial class DirectorReplayManager : IDisposable
 
         public DirectorOpenAlNative? VoiceAudio { get; set; }
         public DirectorReplayVoiceStream? VoiceStream { get; set; }
+        public IReadOnlyList<DirectorReplayVoiceFrame>? VoicePlaybackFrames { get; set; }
         public bool VoiceFailureReported { get; set; }
 
         public HashSet<ILoadedSound> ReplayWorldOwnedSounds { get; } =

@@ -149,7 +149,7 @@ internal sealed partial class DirectorWorkspaceHud
         }
         if (preset.Needs.HasFlag(PresetNeeds.Player) && (player is null || head is null))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-preset-no-player"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-preset-no-player"));
             return true;
         }
 
@@ -164,7 +164,7 @@ internal sealed partial class DirectorWorkspaceHud
         catch (Exception exception)
         {
             capi.Logger.Warning("VS Director: preset {0} failed: {1}", preset.Id, exception);
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-preset-failed", PresetName(preset.Id)));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-preset-failed", PresetName(preset.Id)));
             return true;
         }
         if (!CommitReplayViewportTimeline(timeline))
@@ -787,7 +787,7 @@ internal sealed partial class DirectorWorkspaceHud
         IReadOnlyList<DirectorReplayActorPathSource> players = ReplayPlayerSources();
         if (players.Count == 0)
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-preset-no-player"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-preset-no-player"));
             return true;
         }
         if (players.Count == 1)

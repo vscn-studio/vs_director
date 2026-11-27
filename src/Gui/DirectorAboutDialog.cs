@@ -1,5 +1,6 @@
 using System.Numerics;
 using Video = VSDirector.Gui.DirectorAboutFeed.Video;
+using Sponsor = VSDirector.Gui.DirectorAboutFeed.Sponsor;
 using VSImGui.API;
 using ImGuiNET;
 using Vintagestory.API.Client;
@@ -13,11 +14,13 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
     : DirectorImGuiDialog(api, Lang.Get("vsdirector:workspace-about") + " · VS Director", "about", false)
 {
     private Video[] videos = DirectorAboutFeed.BundledVideos();
+    private Sponsor[] sponsors = DirectorAboutFeed.BundledSponsors();
+    private Task<Sponsor[]?>? sponsorFeed;
     private CancellationTokenSource? requests;
     private Task<Video[]?>? catalog;
     private Task<string?>? release;
     private Task<string[]?>? contributorFeed;
-    private string[]? contributors;
+    private string[] contributors = DirectorAboutFeed.BundledContributors();
     private static readonly Lazy<string> CopyrightNotice = new(() => ReadNotice("COPYRIGHT.txt"));
     private static readonly Lazy<string> License = new(() => ReadNotice("LICENSE"));
     private readonly Dictionary<string, Task<byte[]?>> downloads = new();
@@ -38,6 +41,7 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
         openPopup = true;
         requests = new();
         catalog = ReadRemote(DirectorAboutFeed.FetchVideos, requests.Token);
+        sponsorFeed = ReadRemote(DirectorAboutFeed.FetchSponsors, requests.Token);
         release = ReadRemote(DirectorAboutFeed.FetchVersion, requests.Token);
         contributorFeed = ReadRemote(DirectorAboutFeed.FetchContributors, requests.Token);
         DirectorToolWindows.Claim(this, () => Close());
@@ -50,6 +54,7 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
         requests?.Dispose();
         requests = null;
         catalog = null;
+        sponsorFeed = null;
         release = null;
         contributorFeed = null;
         downloads.Clear();
@@ -90,8 +95,8 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
         ImGui.SetNextWindowPos(viewport.GetCenter(), ImGuiCond.Always, new Vector2(.5f));
         ImGui.SetNextWindowSize(size);
         bool open = Opened;
-        if (ImGui.BeginPopupModal(id, ref open, Flags | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoDecoration
-            | ImGuiWindowFlags.NoBackground))
+        if (ImGui.BeginPopupModal(id, ref open, Flags | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize
+            | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoBackground))
         {
             try
             {
@@ -133,11 +138,11 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
             ImGuiDockNodeFlags.NoSplit | ImGuiDockNodeFlags.NoResize, &documents);
         ImGui.SameLine(0, gap);
         DrawShelf(false, side);
-        bool keepOpen = true;
-        DrawDocument("workspace-about", DrawAbout, &documents, ref keepOpen, ImGui.IsWindowAppearing());
-        DrawDocument("about-contributors", DrawContributors, &documents, ref keepOpen);
-        DrawDocument("about-copyright", DrawCopyright, &documents, ref keepOpen);
-        return keepOpen;
+        bool open = DrawDocument("workspace-about", DrawAbout, &documents, ImGui.IsWindowAppearing());
+        open &= DrawDocument("about-contributors", DrawContributors, &documents);
+        open &= DrawDocument("about-sponsors", DrawSponsors, &documents);
+        open &= DrawDocument("about-copyright", DrawCopyright, &documents);
+        return open;
     }
 
     private static void CenterText(string text)
@@ -153,15 +158,15 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
         return reader.ReadToEnd();
     }
 
-    private unsafe void DrawDocument(string key, Action content, ImGuiWindowClass* documents, ref bool keepOpen,
-        bool focus = false)
+    private unsafe bool DrawDocument(string key, Action content, ImGuiWindowClass* documents, bool focus = false)
     {
         ImGui.SetNextWindowClass(documents);
         ImGui.SetNextWindowDockID(documents->ClassId, ImGuiCond.Always);
         if (focus) ImGui.SetNextWindowFocus();
         float scale = DirectorImGuiTheme.Scale;
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(14, 10) * scale);
-        bool visible = ImGui.Begin(Lang.Get("vsdirector:" + key) + "###vsdirector-document-" + key, ref keepOpen,
+        bool open = true;
+        bool visible = ImGui.Begin(Lang.Get("vsdirector:" + key) + "###vsdirector-document-" + key, ref open,
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings
             | ImGuiWindowFlags.NoFocusOnAppearing);
         ImGui.PopStyleVar();
@@ -173,6 +178,7 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
             }
         }
         finally { ImGui.End(); }
+        return open;
     }
 
     private void DrawDocumentBody(Action content)
@@ -230,13 +236,25 @@ internal sealed class DirectorAboutDialog(ICoreClientAPI api)
             contributors = contributorFeed.Result ?? contributors;
             contributorFeed = null;
         }
-        if (contributors is { Length: > 0 })
+        foreach (string login in contributors)
+            if (ImGui.Selectable(login)) OpenWebLink("https://github.com/" + Uri.EscapeDataString(login));
+    }
+
+    private void DrawSponsors()
+    {
+        if (sponsorFeed is { IsCompletedSuccessfully: true })
         {
-            foreach (string login in contributors)
-                if (ImGui.Selectable(login)) OpenWebLink("https://github.com/" + Uri.EscapeDataString(login));
+            sponsors = sponsorFeed.Result ?? sponsors;
+            sponsorFeed = null;
         }
-        else ImGui.TextWrapped(Lang.Get("vsdirector:" + (contributorFeed is null
-            ? "about-contributors-unavailable" : "about-contributors-loading")));
+        for (int i = 0; i < sponsors.Length; i++)
+        {
+            var sponsor = sponsors[i];
+            ImGui.PushID(i);
+            if (ImGui.Selectable(ChineseLocale ? sponsor.Name : sponsor.NameEn))
+                OpenWebLink(sponsor.Url);
+            ImGui.PopID();
+        }
     }
 
     private void DrawCopyright()

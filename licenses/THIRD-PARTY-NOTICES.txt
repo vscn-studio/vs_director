@@ -1,0 +1,10 @@
+VS Director includes microphone-capture and audio-processing code adapted from
+SimpleVoiceChat by VSCN-Studio. The shared project copyright holders and MIT
+license are covered by the VS Director root LICENSE file.
+
+VS Director also bundles RNNoise native libraries obtained from the
+SimpleVoiceChat build. RNNoise is distributed under the BSD 3-Clause License.
+The complete upstream notice is included in RNNOISE-LICENSE.txt.
+
+RRNoise.NET package notice is included in RRNOISE.NET-LICENSE.txt because the
+bundled RNNoise binaries were obtained from its packaged runtime output.

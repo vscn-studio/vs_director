@@ -4,6 +4,7 @@ using ImGuiNET;
 using Vintagestory.API.Client;
 using Vintagestory.API.Config;
 using VSDirector.Data;
+using VSDirector.Rendering;
 using VSImGui.API;
 
 namespace VSDirector.Gui;
@@ -21,6 +22,10 @@ internal sealed class DirectorReplayExportDialog : DirectorImGuiDialog
     private bool includeAudio = true;
     private string audioBitrateText = "192", settleText = "1", outputText = "", ffmpegText = "ffmpeg";
     private string validationText = "";
+    private Task<string>? codecProbe;
+    private CancellationTokenSource? probeCancellation;
+    private int profile;
+    private bool selectedProfile;
 
     public DirectorReplayExportDialog(ICoreClientAPI capi, VSDirectorModSystem owner, DirectorWorkspaceHud workspace)
         : base(capi, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse, L("export"), "vsdirector-replay-export", false)
@@ -85,9 +90,82 @@ internal sealed class DirectorReplayExportDialog : DirectorImGuiDialog
         ImGui.EndDisabled();
         ImGui.SameLine();
         ImGui.BeginDisabled(!owner.IsReplayPlaying || owner.IsReplayExporting);
-        if (ImGui.Button(L("export"))) StartExport();
+        string popup = L("export-recommend-title") + "###export-profile";
+        if (ImGui.Button(L("export")))
+        {
+            CancelProbe();
+            probeCancellation = new();
+            var token = probeCancellation.Token;
+            string executable = ffmpegText.Trim();
+            codecProbe = Task.Run(() => DirectorOffscreenFfmpegSink.DetectCodec(executable, token), token);
+            selectedProfile = false;
+            ImGui.OpenPopup(popup);
+        }
         ImGui.EndDisabled();
+        DrawProfiles(popup);
         return true;
+    }
+
+    private void CancelProbe()
+    {
+        var cancellation = probeCancellation;
+        probeCancellation = null;
+        if (cancellation is null) return;
+        cancellation.Cancel();
+        _ = codecProbe!.ContinueWith(task => { _ = task.Exception; cancellation.Dispose(); }, TaskScheduler.Default);
+        codecProbe = null;
+    }
+
+    protected override bool OnClose()
+    {
+        CancelProbe();
+        return base.OnClose();
+    }
+
+    private void DrawProfiles(string popup)
+    {
+        bool open = true;
+        if (!ImGui.BeginPopupModal(popup, ref open, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            if (!open) CancelProbe();
+            return;
+        }
+        bool start = false;
+        try
+        {
+            string? codec = codecProbe?.IsCompletedSuccessfully == true ? codecProbe.Result : null;
+            bool hardware = codec is "h264_nvenc" or "h264_amf" or "h264_qsv";
+            int recommended = hardware || Environment.ProcessorCount >= 8 ? 1 : 0;
+            if (!selectedProfile) profile = recommended;
+            string detected = codec ?? L(codecProbe?.IsCompleted == true ? "export-probe-unavailable" : "export-probe-running");
+            ImGui.TextUnformatted(Lang.Get("vsdirector:export-device", Environment.ProcessorCount, detected));
+            string[] keys = ["export-profile-low", "export-profile-medium", "export-profile-high", "export-profile-fast"];
+            for (int i = 0; i < keys.Length; i++)
+            {
+                string label = codec != null && i == recommended ? Lang.Get("vsdirector:export-recommended", L(keys[i])) : L(keys[i]);
+                if (ImGui.RadioButton(label + "###export-profile-" + i, profile == i)) { profile = i; selectedProfile = true; }
+            }
+            if (ImGui.Button(L("export-use-current"))) start = true;
+            ImGui.SameLine();
+            if (ImGui.Button(L("export-use-profile")))
+            {
+                int maxHeight = profile switch { 0 => 720, 2 => 2160, 3 => 540, _ => 1080 };
+                var game = ClientApi.World as Vintagestory.Client.NoObf.ClientMain;
+                int h = Math.Max(16, game?.Height ?? 1080), w = Math.Max(16, game?.Width ?? 1920);
+                double ratio = Math.Min(1d, maxHeight / (double)h);
+                heightText = N(Math.Clamp((int)(ratio * h) & ~1, 16, 8192));
+                widthText = N(Math.Clamp((int)(ratio * w) & ~1, 16, 8192));
+                fpsText = profile == 2 ? "60" : profile == 3 ? "24" : "30";
+                qualityText = profile switch { 0 => "24", 2 => "17", 3 => "28", _ => "20" };
+                bitrateText = "0";
+                preset = profile == 3 ? "ultrafast" : profile == 2 ? "medium" : "veryfast";
+                encoder = DirectorOffscreenEncoder.Auto;
+                start = true;
+            }
+            if (start || ImGui.Button(L("cancel"))) { CancelProbe(); ImGui.CloseCurrentPopup(); }
+        }
+        finally { ImGui.EndPopup(); }
+        if (start) StartExport();
     }
 
     private static void Input(string label, string id, ref string value, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)

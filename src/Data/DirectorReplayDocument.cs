@@ -18,6 +18,10 @@ public sealed class DirectorReplayDocument
     public const string ClientWorldCaptureScope = "loaded-client-world-region";
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    public string RecordedGameVersion { get; set; } = string.Empty;
+    // Zero identifies a recording made before the native payload layout was tagged.
+    public int NativePayloadVersion { get; set; }
+    public const int CurrentNativePayloadVersion = 1;
 
     public Guid Id { get; set; }
 
@@ -77,6 +81,8 @@ public sealed class DirectorReplayDocument
         return new DirectorReplayDocument
         {
             SchemaVersion = SchemaVersion,
+            RecordedGameVersion = RecordedGameVersion,
+            NativePayloadVersion = NativePayloadVersion,
             Id = Id,
             Name = Name,
             WorldId = WorldId,

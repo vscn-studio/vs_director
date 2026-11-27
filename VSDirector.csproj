@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>VSDirector</AssemblyName>
     <RootNamespace>VSDirector</RootNamespace>
-    <Version>1.0.4-pre.6</Version>
+    <Version>1.0.4-pre.7</Version>
     <Authors>HansJack;HanosThePlacid</Authors>
     <Copyright>Copyright (c) 2026 HansJack, HanosThePlacid</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -23,6 +23,7 @@
     <Reference Include="Newtonsoft.Json" HintPath="$(VintageStoryPath)\Lib\Newtonsoft.Json.dll" Private="false" />
     <Reference Include="OpenTK.Mathematics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Mathematics.dll" Private="false" />
     <Reference Include="OpenTK.Graphics" HintPath="$(VintageStoryPath)\Lib\OpenTK.Graphics.dll" Private="false" />
+    <Reference Include="OpenTK.Audio.OpenAL" HintPath="$(VintageStoryPath)\Lib\OpenTK.Audio.OpenAL.dll" Private="false" />
     <Reference Include="VSImGui" HintPath="$(VSImGuiPath)\VSImGui.dll" Private="false" />
     <Reference Include="ImGui.NET" HintPath="$(VSImGuiPath)\ImGui.NET.dll" Private="false" />
     <Reference Include="ImGuizmo.NET" HintPath="$(VSImGuiPath)\ImGuizmo.NET.dll" Private="false" />
@@ -58,7 +59,13 @@
     <PackageReference Include="Markdig" Version="1.4.1" />
     <EmbeddedResource Include="README.md;README.en.md" LogicalName="VSDirector.About.%(Filename)%(Extension)" WithCulture="false" />
     <EmbeddedResource Include="about/videos.json" LogicalName="VSDirector.About.videos.json" />
+    <EmbeddedResource Include="about/sponsors.json" LogicalName="VSDirector.About.sponsors.json" />
+    <EmbeddedResource Include="about/contributors.json" LogicalName="VSDirector.About.contributors.json" />
     <EmbeddedResource Include="COPYRIGHT.txt;LICENSE" LogicalName="VSDirector.About.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="native\runtimes\win-x64\rnnoise.dll" LogicalName="VSDirector.Native.win-x64.rnnoise.dll" />
+    <EmbeddedResource Include="native\runtimes\win-x86\rnnoise.dll" LogicalName="VSDirector.Native.win-x86.rnnoise.dll" />
+    <EmbeddedResource Include="native\runtimes\linux-x64\librnnoise.so" LogicalName="VSDirector.Native.linux-x64.librnnoise.so" />
+    <EmbeddedResource Include="native\runtimes\linux-arm64\librnnoise.so" LogicalName="VSDirector.Native.linux-arm64.librnnoise.so" />
     <Content Include="modinfo.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="modicon.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="LICENSE" CopyToOutputDirectory="PreserveNewest" />

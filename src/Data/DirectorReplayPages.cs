@@ -8,6 +8,11 @@ namespace VSDirector.Data;
 public sealed class DirectorReplayPages
 {
     public const string Suffix = ".pages";
+    public const string PrimaryExtension = ".vsdreplay";
+    private const uint PrimaryMagic = 0x52445356;
+    private const int PrimaryVersion = 1;
+    private const int PrimaryPrefixBytes = 32;
+    internal static bool IsPrimary(string path) => path.EndsWith(PrimaryExtension, StringComparison.OrdinalIgnoreCase);
     private const int PageSize = 256;
     private const uint Magic = 0x50445356;
     private const long CacheLimit = 16 * 1024 * 1024;
@@ -36,6 +41,9 @@ public sealed class DirectorReplayPages
         public DirectorReplayDocument Document { get; set; } = new();
         public Dictionary<string, int> Counts { get; set; } = new();
         public Dictionary<string, int> PageSizes { get; set; } = new();
+        public Dictionary<string, List<int>> SegmentStarts { get; set; } = new();
+        [System.Text.Json.Serialization.JsonIgnore]
+        public Guid Generation { get; set; }
         public Dictionary<string, Page> Entries { get; set; } = new();
         public List<BlockIndex> Blocks { get; set; } = new();
     }
@@ -63,21 +71,44 @@ public sealed class DirectorReplayPages
 
     public static DirectorReplayDocument? TryOpen(string sourcePath)
     {
-        string path = sourcePath + Suffix;
-        if (!File.Exists(path)) return null;
+        bool primary = IsPrimary(sourcePath);
+        string path = primary ? sourcePath : sourcePath + Suffix;
+        if (!primary && !File.Exists(path)) return null;
         using var file = File.OpenRead(path);
         using var binary = new BinaryReader(file);
-        if (binary.ReadUInt32() != Magic) return null;
+        uint magic = binary.ReadUInt32();
+        if (primary && magic != PrimaryMagic) throw new InvalidDataException("Invalid indexed replay signature.");
+        if (!primary && magic != Magic) return null;
         long offset = binary.ReadInt64();
-        if (offset < 12 || offset >= file.Length) throw new InvalidDataException("Invalid replay page header offset.");
+        Guid generation = Guid.Empty;
+        if (primary)
+        {
+            int version = binary.ReadInt32();
+            if (version != PrimaryVersion) throw new NotSupportedException($"Unsupported replay container version {version}.");
+            generation = new Guid(binary.ReadBytes(16));
+            if (generation == Guid.Empty) throw new InvalidDataException("Missing replay generation.");
+        }
+        int prefix = primary ? PrimaryPrefixBytes : 12;
+        if (offset < prefix || offset >= file.Length) throw new InvalidDataException("Invalid replay page header offset.");
         file.Position = offset;
-        using var stream = new GZipStream(file, CompressionMode.Decompress, true);
+        using Stream stream = primary ? new BrotliStream(file, CompressionMode.Decompress, true)
+            : new GZipStream(file, CompressionMode.Decompress, true);
         Header h = JsonSerializer.Deserialize<Header>(stream, Options) ?? throw new InvalidDataException("Empty replay page header.");
         var source = new FileInfo(sourcePath);
-        if (h.Version != CurrentVersion
+        if (primary)
+        {
+            if (h.Document.SchemaVersion is < 23 or > DirectorReplayDocument.CurrentSchemaVersion
+                || h.Document.NativePayloadVersion is < 0 or > DirectorReplayDocument.CurrentNativePayloadVersion)
+                throw new NotSupportedException($"Unsupported indexed replay schema {h.Document.SchemaVersion} or native payload version {h.Document.NativePayloadVersion}.");
+            h.Generation = generation;
+            foreach (Page entry in h.Entries.Values)
+                if (entry.Offset < prefix || entry.Bytes <= 0 || entry.Offset > offset - entry.Bytes || entry.DecodedBytes < 0)
+                    throw new InvalidDataException("Invalid indexed replay payload bounds.");
+        }
+        else if (h.Version != CurrentVersion
             || h.Document.SchemaVersion > DirectorReplayDocument.CurrentSchemaVersion
             || h.SourceBytes != source.Length || h.SourceTicks != source.LastWriteTimeUtc.Ticks) return null;
-        if (h.CompanionStamp.Length > 0 && h.Document.ServerReplay is { } link)
+        if (!primary && h.CompanionStamp.Length > 0 && h.Document.ServerReplay is { } link)
         {
             string? manifest = DirectorServerReplayCompanion.FindManifest(Path.GetDirectoryName(Path.GetFullPath(sourcePath))!, link);
             if (manifest is not null && Stamp(manifest) != h.CompanionStamp) return null;
@@ -115,22 +146,46 @@ public sealed class DirectorReplayPages
         int size = header.PageSizes.GetValueOrDefault(key, PageSize);
         int count = header.Counts.GetValueOrDefault(key);
         if (count == 0 || header.Entries[key + "/0"].Times is null) return new(count, index => Read<T>(key, index));
+        header.SegmentStarts.TryGetValue(key, out var starts);
+        int PageOf(int index)
+        {
+            if (starts is null) return index / size;
+            int pos = starts.BinarySearch(index);
+            return pos >= 0 ? pos : ~pos - 1;
+        }
         // Timestamp arrays are small compared with poses/PCM/state payloads.
         // Searching and visibility queries must never decompress distant pages.
-        double[][] times = Enumerable.Range(0, (count + size - 1) / size)
+        double[][] times = Enumerable.Range(0, starts?.Count ?? (count + size - 1) / size)
             .Select(page => header.Entries[key + "/" + page].Times!).ToArray();
+        if (starts is not null)
+        {
+            int length = 0;
+            for (int i = 0; i < starts.Count; i++)
+            {
+                if (starts[i] != length || times[i].Length == 0 || times[i].Length > size)
+                    throw new InvalidDataException("Invalid replay segment index.");
+                length = checked(length + times[i].Length);
+            }
+            if (length != count) throw new InvalidDataException("Incomplete replay segment index.");
+        }
+        int Local(int index, int page) => index - (starts is null ? page * size : starts[page]);
         int Search(double time, bool inclusive)
         {
             int low = 0, high = count;
             while (low < high)
             {
                 int mid = low + (high - low) / 2;
-                double at = times[mid / size][mid % size];
+                int page = PageOf(mid);
+                double at = times[page][Local(mid, page)];
                 if (inclusive ? at <= time : at < time) low = mid + 1; else high = mid;
             }
             return low;
         }
-        return new(count, index => Read<T>(key, index), Search);
+        return new(count, index =>
+        {
+            int page = PageOf(index);
+            return ReadPageItem<T>(key, page, Local(index, page), times[page].Length);
+        }, Search);
     }
 
     private static string Stamp(string path)
@@ -145,10 +200,14 @@ public sealed class DirectorReplayPages
     private T Read<T>(string key, int index)
     {
         int size = header.PageSizes.GetValueOrDefault(key, PageSize);
-        int page = index / size;
+        return ReadPageItem<T>(key, index / size, index % size, size);
+    }
+
+    private T ReadPageItem<T>(string key, int page, int local, int size)
+    {
         T[] values = GetPage<T>(key + "/" + page);
-        if (PrefetchEnabled && index % size >= size / 2) Prefetch<T>(key + "/" + (page + 1));
-        return values[index % size];
+        if (PrefetchEnabled && local >= size / 2) Prefetch<T>(key + "/" + (page + 1));
+        return values[local];
     }
 
     private void Prefetch<T>(string entryName)
@@ -189,12 +248,22 @@ public sealed class DirectorReplayPages
     {
         if (!header.Entries.TryGetValue(entryName, out var entry)) throw new InvalidDataException("Replay page missing: " + entryName);
         using var file = File.OpenRead(path);
+        if (header.Generation != Guid.Empty)
+        {
+            file.Position = 16;
+            Span<byte> generation = stackalloc byte[16];
+            file.ReadExactly(generation);
+            if (new Guid(generation) != header.Generation) throw new IOException("Replay was replaced during playback.");
+        }
         if (entry.Offset < 12 || entry.Bytes < 0 || entry.Offset > file.Length - entry.Bytes) throw new InvalidDataException("Invalid replay page offset.");
         file.Position = entry.Offset;
         byte[] compressed = new byte[entry.Bytes]; file.ReadExactly(compressed);
         using var memory = new MemoryStream(compressed, false);
-        using var stream = new GZipStream(memory, CompressionMode.Decompress);
-        T[] values = JsonSerializer.Deserialize<T[]>(stream, Options) ?? throw new InvalidDataException("Empty replay page.");
+        using Stream stream = header.Generation != Guid.Empty ? new BrotliStream(memory, CompressionMode.Decompress)
+            : new GZipStream(memory, CompressionMode.Decompress);
+        T[] values = header.Generation != Guid.Empty && typeof(T) == typeof(DirectorReplayActorSample)
+            ? (T[])(object)DirectorReplaySampleCodec.Read(stream, entry.Times!)
+            : JsonSerializer.Deserialize<T[]>(stream, Options) ?? throw new InvalidDataException("Empty replay page.");
         lock (gate)
         {
             PagesRead++;
@@ -214,11 +283,13 @@ public sealed class DirectorReplayPages
         return values;
     }
 
-    public static void Write(string sourcePath, DirectorReplayDocument document, string companionStamp = "", CancellationToken token = default)
+    public static void Write(string sourcePath, DirectorReplayDocument document, string companionStamp = "", CancellationToken token = default,
+        CompressionLevel compression = CompressionLevel.Fastest)
     {
-        string path = sourcePath + Suffix, temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        bool primary = IsPrimary(sourcePath);
+        string path = primary ? sourcePath : sourcePath + Suffix, temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var source = new FileInfo(sourcePath);
-        Header h = new() { SourceBytes = source.Length, SourceTicks = source.LastWriteTimeUtc.Ticks, CompanionStamp = companionStamp };
+        Header h = primary ? new() : new() { SourceBytes = source.Length, SourceTicks = source.LastWriteTimeUtc.Ticks, CompanionStamp = companionStamp };
         if (document.ServerReplay is { Materialized: true } link)
         {
             string? manifest = DirectorServerReplayCompanion.FindManifest(Path.GetDirectoryName(Path.GetFullPath(sourcePath))!, link);
@@ -228,6 +299,7 @@ public sealed class DirectorReplayPages
         h.Document = new DirectorReplayDocument
         {
             SchemaVersion = document.SchemaVersion, Id = document.Id, Name = document.Name, WorldId = document.WorldId,
+            RecordedGameVersion = document.RecordedGameVersion, NativePayloadVersion = document.NativePayloadVersion,
             CreatedUtc = document.CreatedUtc, SampleRate = document.SampleRate, DurationSeconds = document.DurationSeconds,
             CaptureScope = document.CaptureScope, ServerRecording = document.ServerRecording, ServerReplay = document.ServerReplay,
             SessionMerge = document.SessionMerge, IncludesWorldSnapshot = document.IncludesWorldSnapshot,
@@ -243,24 +315,58 @@ public sealed class DirectorReplayPages
             using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
             {
                 using var binary = new BinaryWriter(file, System.Text.Encoding.UTF8, true);
-                binary.Write(Magic); binary.Write(0L);
+                binary.Write(primary ? PrimaryMagic : Magic); binary.Write(0L);
+                if (primary) { binary.Write(PrimaryVersion); binary.Write(Guid.NewGuid().ToByteArray()); }
+                int equipmentSlots = 0, backpackSlots = 0;
                 void WriteList<T>(string key, IReadOnlyList<T> items)
                 {
                     h.Counts[key] = items.Count;
-                    int size = typeof(T) == typeof(DirectorReplayActorSample) ? 16
+                    bool delta = primary && typeof(T) == typeof(DirectorReplayActorSample);
+                    int size = delta ? 64 : typeof(T) == typeof(DirectorReplayActorSample) ? 16
                         : typeof(T) == typeof(DirectorReplayActorState) ? 8
                         : typeof(T) == typeof(DirectorReplayVoiceFrame) ? 16 : PageSize;
                     h.PageSizes[key] = size;
-                    for (int i = 0; i < items.Count; i += size)
+                    if (delta) h.SegmentStarts[key] = new();
+                    for (int i = 0, segment = 0; i < items.Count; segment++)
                     {
                         token.ThrowIfCancellationRequested();
-                        var page = new T[Math.Min(size, items.Count - i)];
+                        int length = Math.Min(size, items.Count - i);
+                        if (delta)
+                        {
+                            h.SegmentStarts[key].Add(i);
+                            double end = Timestamp(items[i])!.Value + 4d;
+                            int j = 1;
+                            while (j < length && Timestamp(items[i + j])!.Value < end) j++;
+                            length = j;
+                        }
+                        var page = new T[length];
                         for (int j = 0; j < page.Length; j++) page[j] = items[i + j];
-                        byte[] data = JsonSerializer.SerializeToUtf8Bytes(page, Options);
+                        if (page is DirectorReplayActorSample[] poses)
+                            foreach (var pose in poses)
+                            {
+                                equipmentSlots = Math.Max(equipmentSlots, pose.EquipmentItems.Count);
+                                backpackSlots = Math.Max(backpackSlots, pose.BackpackItems.Count);
+                            }
                         long offset = file.Position;
-                        using (var output = new GZipStream(file, CompressionLevel.Fastest, true)) output.Write(data);
-                        h.Entries[key + "/" + i / size] = new Page { Offset = offset, Bytes = checked((int)(file.Position - offset)), DecodedBytes = data.Length,
+                        long decodedBytes;
+                        using (Stream output = primary ? new BrotliStream(file, compression, true) : new GZipStream(file, compression, true))
+                        {
+                            if (delta)
+                            {
+                                using var buffer = new MemoryStream();
+                                decodedBytes = DirectorReplaySampleCodec.Write(buffer, (DirectorReplayActorSample[])(object)page);
+                                output.Write(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)));
+                            }
+                            else
+                            {
+                                byte[] data = JsonSerializer.SerializeToUtf8Bytes(page, Options);
+                                output.Write(data);
+                                decodedBytes = data.Length;
+                            }
+                        }
+                        h.Entries[key + "/" + segment] = new Page { Offset = offset, Bytes = checked((int)(file.Position - offset)), DecodedBytes = decodedBytes,
                             Times = Timestamp(page[0]) is null ? null : page.Select(item => Timestamp(item)!.Value).ToArray() };
+                        i += length;
                     }
                 }
                 WriteList("blocks", document.BlockEvents); WriteList("particles", document.ParticleEvents);
@@ -270,12 +376,12 @@ public sealed class DirectorReplayPages
                 for (int i = 0; i < document.Actors.Count; i++)
                 {
                     var actor = document.Actors[i];
+                    equipmentSlots = backpackSlots = 0;
                     WriteList<byte[]>($"actor/{i}/initial", new[] { actor.InitialState });
                     WriteList($"actor/{i}/samples", actor.Samples); WriteList($"actor/{i}/states", actor.States);
                     h.Document.Actors.Add(new() { ActorKey = actor.ActorKey, EntityId = actor.EntityId, PlayerUid = actor.PlayerUid,
                         ForceGhost = actor.ForceGhost, EntityCode = actor.EntityCode, DisplayName = actor.DisplayName,
-                        EquipmentSlotCapacity = actor.Samples.Select(s => s.EquipmentItems.Count).DefaultIfEmpty().Max(),
-                        BackpackSlotCapacity = actor.Samples.Select(s => s.BackpackItems.Count).DefaultIfEmpty().Max(),
+                        EquipmentSlotCapacity = equipmentSlots, BackpackSlotCapacity = backpackSlots,
                         ReplayEntityId = actor.ReplayEntityId, SimulationRange = actor.SimulationRange, Lifetimes = actor.Lifetimes });
                 }
                 for (int i = 0; i < document.WorldSnapshot.BlockEntities.Count; i++)
@@ -292,7 +398,8 @@ public sealed class DirectorReplayPages
                         ChunkHash = chunk.ChunkHash, ChunkVersion = chunk.ChunkVersion, CapturedAtSeconds = chunk.CapturedAtSeconds });
                 }
                 long headerOffset = file.Position;
-                using (var output = new GZipStream(file, CompressionLevel.Fastest, true)) JsonSerializer.Serialize(output, h, Options);
+                using (Stream output = primary ? new BrotliStream(file, compression, true) : new GZipStream(file, compression, true))
+                    JsonSerializer.Serialize(output, h, Options);
                 file.Position = 4; binary.Write(headerOffset); binary.Flush(); file.Flush(true);
             }
             token.ThrowIfCancellationRequested(); File.Move(temp, path, true);

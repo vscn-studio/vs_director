@@ -6,6 +6,9 @@ using VSDirector.Networking;
 using VSDirector.Recording;
 using VSDirector.Rendering;
 
+if (args is ["--measure-replay", var replay]) return ReplayStorageMeasurement.Measure(replay);
+if (args is ["--measure-legacy-json", var gzip]) return ReplayStorageMeasurement.Measure(gzip, eager: true);
+if (args is ["--benchmark-replay-copy", var source, var directory]) return ReplayStorageMeasurement.WriteCopy(source, directory);
 return await SmokeTests.RunAsync();
 
 internal static class SmokeTests
@@ -55,6 +58,7 @@ internal static class SmokeTests
         ("timeline row geometry and indexed voice waveforms preserve clipping, amplitude and cancellation", RunSync(TimelineMediaChecks.Run)),
         ("paged playback opens metadata only, seeks both ways and evicts payloads", RunSync(ReplayPagingChecks.Run)),
         ("continuous voice preserves packets at low FPS and handles pause, seek and silence", RunSync(ReplayVoiceStreamChecks.Run)),
+        ("voice audio keyframes load PCM WAV, downmix stereo and resample to timestamped replay frames", RunSync(ReplayAudioFileChecks.Run)),
         ("server indexes seek checkpoints and resolve cross-segment shared chunks losslessly", RunSync(ServerIndexChecks.Run)),
         ("legacy coordinated replay metadata remains readable", RunSync(ServerRecordingChecks.Run)),
         ("server companion observations merge into client replay witnesses", RunSync(ServerReplayCompanionChecks.Run)),
@@ -7917,6 +7921,7 @@ internal static class SmokeTests
             track.TrackType == DirectorReplayElementTrackType.VoiceAudio);
         Check.Equal("speaker-1", voiceTrack.SpeakerId);
         Check.Equal("Speaker One", voiceTrack.Name);
+        Check.Equal(Guid.Empty, voiceTrack.ParentGroupId);
         normalized.ViewportTimeline.ElementKeyframes.Add(new DirectorReplayElementKeyframe
         {
             TrackId = voiceTrack.Id,
@@ -7937,15 +7942,17 @@ internal static class SmokeTests
             1d,
             out float keyedVoiceGain));
         Check.Equal(0.5f, keyedVoiceGain);
-        Check.False(DirectorReplayViewportTimeline.RemoveTrack(
-            normalized.ViewportTimeline,
-            voiceTrack.Id));
         voiceTrack.Enabled = false;
         Check.False(DirectorReplayVoiceTrackPolicy.TryResolveGain(
             normalized.ViewportTimeline,
             normalized.VoiceFrames[0],
             1d,
             out _));
+        Check.True(DirectorReplayViewportTimeline.RemoveTrack(
+            normalized.ViewportTimeline,
+            voiceTrack.Id));
+        Check.False(normalized.ViewportTimeline.Tracks.Any(track => track.Id == voiceTrack.Id));
+        Check.False(normalized.ViewportTimeline.ElementKeyframes.Any(keyframe => keyframe.TrackId == voiceTrack.Id));
         DirectorReplayDocument clone = normalized.DeepClone();
         clone.VoiceFrames[0].Pcm16[0] = 99;
         Check.True(normalized.VoiceFrames[0].Pcm16[0] != 99);

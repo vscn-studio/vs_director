@@ -19,6 +19,7 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
     private int batchId;
     private readonly HashSet<DirectorReplayPreloadColumn> completed = new();
     private readonly HashSet<DirectorReplayPreloadColumn> requested = new();
+    private readonly HashSet<DirectorReplayPreloadColumn> residentOnPlanChange = new();
     private IReadOnlyList<DirectorReplayPreloadColumn> batch = Array.Empty<DirectorReplayPreloadColumn>();
     private long lastSentMs;
     private long firstMissingAfterDispatchMs;
@@ -81,9 +82,24 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
                 }
             }
         }
-        retryDelivery = missingAfterDelivery.Count > 0;
-        IReadOnlyList<DirectorReplayPreloadColumn> columns = retryDelivery
-            ? missingAfterDelivery.Take(MaxRequestColumns).ToArray() : RequestColumns(plan);
+        var map = (capi.World as ClientMain)?.WorldMap;
+        if (planChanged)
+        {
+            residentOnPlanChange.Clear();
+            if (map is not null)
+                residentOnPlanChange.UnionWith(plan.ExpandedColumns.Where(c => DirectorReplayManager.IsTerrainColumnReceived(map, c)));
+        }
+        var urgent = plan.ObservationColumns.Where(c => map is not null
+            && !DirectorReplayManager.IsTerrainColumnReceived(map, c)).ToArray();
+        foreach (var c in urgent)
+            if (completed.Remove(c)) missingAfterDelivery.Add(c);
+        IReadOnlyList<DirectorReplayPreloadColumn> columns;
+        if (urgent.Any(c => !batch.Contains(c)))
+            columns = urgent.Take(MaxRequestColumns).ToArray();
+        else if (missingAfterDelivery.Count > 0)
+            columns = urgent.Concat(missingAfterDelivery).Distinct().Take(MaxRequestColumns).ToArray();
+        else columns = RequestColumns(plan);
+        retryDelivery = columns.Any(missingAfterDelivery.Contains);
         bool changed = reset || retryDelivery || !batch.SequenceEqual(columns);
         if (planChanged)
         {
@@ -112,12 +128,15 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
             firstMissingAfterDispatchMs = 0;
             ++batchId;
             request.Columns = columns.Select(PacketColumn).ToList();
+            if (map is not null)
+                request.ResidentColumns = columns.Where(c => DirectorReplayManager.IsTerrainColumnReceived(map, c))
+                    .Select(PacketColumn).ToList();
             requested.UnionWith(columns);
             capi.Logger.Debug(
-                "VS Director: preloading target {0}: {1} observation columns selected from {2}.",
+                "VS Director: preload {0}: {1} columns from {2}, {3} retention only.",
                 replayCode,
                 columns.Count,
-                plan.ExpandedColumns.Count);
+                plan.ExpandedColumns.Count, request.ResidentColumns.Count);
             lastReportedSent = -1;
         }
 
@@ -129,6 +148,10 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
 
     private static DirectorChunkPreloadColumn PacketColumn(DirectorReplayPreloadColumn column)
         => new() { X = column.X, Z = column.Z, Dimension = column.Dimension };
+
+    internal bool NeedsRegistration(Guid id, DirectorReplayPreloadPlan plan)
+        => channel.Connected && (activeReplayId != id.ToString("D") || activePlan is null
+            || !activePlan.SetEquals(plan.ExpandedColumnSet) || completed.Count < plan.ExpandedColumns.Count);
 
     public void Stop()
     {
@@ -220,7 +243,9 @@ internal sealed class DirectorChunkPreloadClient : IDisposable
         }
         if (completed.Count == plan.ExpandedColumnSet.Count)
             return keepBatch ? batch : plan.ExpandedColumns.Take(MaxRequestColumns).ToArray();
-        var pending = plan.ExpandedColumns.Where(c => !completed.Contains(c)).Take(MaxRequestColumns).ToArray();
+        var pending = plan.ExpandedColumns.Where(c => !completed.Contains(c) && !residentOnPlanChange.Contains(c))
+            .Concat(plan.ExpandedColumns.Where(c => !completed.Contains(c) && residentOnPlanChange.Contains(c)))
+            .Take(MaxRequestColumns).ToArray();
         return pending.Length > 0 ? pending : batch;
     }
 }

@@ -98,7 +98,7 @@ internal static class DirectorReplayRenderChecks
             ClientSize=new(size, size), APIVersion=new Version(3, 3) });
         window.MakeCurrent();
         string video = Path.Combine(Path.GetTempPath(), $"vsdirector-render-{Guid.NewGuid():N}.mp4");
-        var track = new DirectorRecordingTrack { Id=Guid.NewGuid(), Name="probe" };
+        var track = new DirectorRecordingTrack { Id=Guid.NewGuid(), Name="probe", SourceType=DirectorRecordingSourceType.StaticCamera };
         try
         {
             using var sink = new DirectorOffscreenFfmpegSink(api, new() { ViewId=track.Id, OutputPath=video,
@@ -110,18 +110,24 @@ internal static class DirectorReplayRenderChecks
             tracks.Add(Activator.CreateInstance(trackType, track, sink, timecodes, video, 0d, 1d, 30L,
                 new DirectorReplayElementExportClock(new(), 0, 1, 1, 30)));
             var field = AccessTools.Field(exportType, "session");
+            double cameraTime = 0;
             var exporter = (IRenderer)Activator.CreateInstance(exportType, api, null, null,
-                (Func<double,bool>)(_ => true), (Func<bool>)(() => true), null)!;
+                (Func<double,bool>)(_ => true), (Func<bool>)(() => true),
+                (Func<DirectorRecordingTrack,double,(bool,string)>)((_, t) => { cameraTime = t; return (true, ""); }))!;
             field.SetValue(exporter, Activator.CreateInstance(field.FieldType, "probe", tracks, DateTimeOffset.UtcNow,
                 Path.GetTempPath(), 0d, 1d, 1d, 30, size, size, 30L, 1, false, null, null, "", null, "ffmpeg", 128));
-            GL.ClearColor(0, 0, 1, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
-            exporter.OnRenderFrame(0, EnumRenderStage.Ortho);
-            // Cover the captured scene at the main GUI stage, as a progress bar would.
-            GL.ClearColor(1, 1, 0, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
-            exporter.OnRenderFrame(0, EnumRenderStage.Done);
-            GL.Finish();
+            for (int i = 0; i < 3; i++)
+            {
+                if (Math.Abs(cameraTime - i / 30d) > .00001) throw new Exception("Camera was not prepared before render");
+                GL.ClearColor(i == 2 ? 1 : 0, i == 1 ? 1 : 0, i == 0 ? 1 : 0, 1);
+                GL.Clear(ClearBufferMask.ColorBufferBit);
+                exporter.OnRenderFrame(0, EnumRenderStage.Ortho);
+                GL.ClearColor(1, 1, 0, 1); GL.Clear(ClearBufferMask.ColorBufferBit);
+                exporter.OnRenderFrame(0, EnumRenderStage.Done);
+                GL.Finish();
+            }
             var result = sink.Stop();
-            if (!result.Success || result.Statistics.EncodedFrames != 1) throw new Exception($"Test export: {result}");
+            if (!result.Success || result.Statistics.EncodedFrames != 3) throw new Exception($"Test export: {result}");
             var decode = new ProcessStartInfo("ffmpeg") { UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true };
             foreach (string arg in new[] { "-v","error","-i",video,"-f","rawvideo","-pix_fmt","rgb24","pipe:1" })
                 decode.ArgumentList.Add(arg);
@@ -130,10 +136,12 @@ internal static class DirectorReplayRenderChecks
             process.StandardOutput.BaseStream.CopyTo(pixels);
             process.WaitForExit();
             byte[] rgb = pixels.ToArray();
-            if (process.ExitCode != 0 || rgb.Length != size*size*3) throw new Exception("Unexpected decoded frame count or dimensions");
+            if (process.ExitCode != 0 || rgb.Length != 3*size*size*3) throw new Exception("Unexpected decoded frame count or dimensions");
             for (int i=0; i<rgb.Length; i+=3)
-                if (rgb[i]>10 || rgb[i+1]>10 || rgb[i+2]<240) throw new Exception("Main GUI leaked into encoded pixels");
-            Console.WriteLine("PASS real GL readback and FFmpeg encode/decode: all 4096 pixels retained the pre-GUI scene");
+                for (int channel = 0; channel < 3; channel++)
+                    if (Math.Abs(rgb[i+channel] - (channel == 2 - i/(size*size*3) ? 255 : 0)) > 10)
+                        throw new Exception("Wrong camera frame or main GUI leaked into encoded pixels");
+            Console.WriteLine("PASS consecutive blue, green, red frames prepared before render, encoded in order without GUI pixels");
         }
         finally { File.Delete(video); }
     }

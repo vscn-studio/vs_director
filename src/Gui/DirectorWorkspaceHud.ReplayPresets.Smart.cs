@@ -58,7 +58,7 @@ internal sealed partial class DirectorWorkspaceHud
                 List<SmartEvent> hits = HurtEvents(c, c.Start, SmartEnd(c, 120d));
                 if (hits.Count == 0)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-combat"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-combat"));
                     return null;
                 }
                 var shake = new List<ShakeStep>();
@@ -83,7 +83,7 @@ internal sealed partial class DirectorWorkspaceHud
             {
                 if (NearestOtherActor(c, true) is not { } enemy)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-creature"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-creature"));
                     return null;
                 }
                 return TripodPreset(c, "smart-combat-frame", 20d, k =>
@@ -98,7 +98,7 @@ internal sealed partial class DirectorWorkspaceHud
                 List<SmartEvent> deaths = Deaths(c, c.Start, c.Duration);
                 if (deaths.Count == 0 || SourceByKey(c, deaths[0].ActorKey) is not DirectorReplayActorPathSource victim)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-death"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-death"));
                     return null;
                 }
                 double at = deaths[0].Time - c.Start;
@@ -122,14 +122,14 @@ internal sealed partial class DirectorWorkspaceHud
                 List<SmartEvent> events = Highlights(c, 0d, c.Duration, minGap: 4d);
                 if (events.Count == 0)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-highlights"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-highlights"));
                     return null;
                 }
                 foreach (SmartEvent item in events.Take(60))
                 {
                     c.AddedMarkers.Add(new DirectorReplayMarker { Label = HighlightLabel(c, item), TimeSeconds = item.Time });
                 }
-                c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-highlights-added") + " " + Math.Min(60, events.Count));
+                c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-highlights-added") + " " + Math.Min(60, events.Count));
                 return null;
             });
         add("smart-montage", PresetSmartGroup, c =>
@@ -156,7 +156,7 @@ internal sealed partial class DirectorWorkspaceHud
                 Close(end);
                 if (steps.Count == 0)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-nothing-boring"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-nothing-boring"));
                     return null;
                 }
                 return SpeedPreset(c, steps.ToArray());
@@ -167,7 +167,7 @@ internal sealed partial class DirectorWorkspaceHud
                     .OrderByDescending(item => item.Score).Take(8).OrderBy(item => item.Time).ToList();
                 if (top.Count == 0)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-highlights"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-highlights"));
                     return null;
                 }
                 Action<DirectorReplayElementKeyframe>[] rigs = TrailerRigs(c);
@@ -208,7 +208,7 @@ internal sealed partial class DirectorWorkspaceHud
                 IReadOnlyList<DirectorReplayActorPathSource> players = c.Hud.ReplayPlayerSources().Where(item => item.IsPlayer).ToList();
                 if (players.Count == 0 || c.Document is null)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-player"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-player"));
                     return null;
                 }
                 var shots = new List<SmartShot>();
@@ -244,7 +244,7 @@ internal sealed partial class DirectorWorkspaceHud
                 List<DirectorReplayBlockEvent> edits = BlockEdits(c, c.Start, end);
                 if (edits.Count < 4)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-building"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-building"));
                     return null;
                 }
                 int dimension = edits.GroupBy(item => item.Dimension).OrderByDescending(group => group.Count()).First().Key;
@@ -332,7 +332,7 @@ internal sealed partial class DirectorWorkspaceHud
         shots = shots.Where(shot => shot.Length > 0.2d).OrderBy(shot => shot.Start).ToList();
         if (shots.Count == 0)
         {
-            c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:" + emptyKey));
+            c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:" + emptyKey));
             return null;
         }
         DirectorReplayElementTrack a = PresetNewTrack(c, DirectorReplayElementTrackType.FollowEntity, id, "A");

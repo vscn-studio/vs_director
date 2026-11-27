@@ -2,6 +2,7 @@ using System.Numerics;
 using ImGuiNET;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using VSDirector.Data;
 using VSImGui.API;
 
 namespace VSDirector.Gui;
@@ -15,7 +16,12 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     private abstract record Command(double X, double Y, double Width, double Height);
     private sealed record ShapeCommand(string Id, string Classes, string Text, string Icon, string Title,
         double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
-    private sealed record WaveformCommand(string Id, string Markup,
+    private sealed record WaveformCommand(string Id, float[] Magnitudes,
+        double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
+    private sealed record AudioTrimCommand(string Id, double Start, double SourceDuration, double TrimStart,
+        double TrimEnd, double PixelsPerSecond, Action<double, double, double> Commit,
+        Action Select, bool Selected, double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
+    private sealed record AudioGainLineCommand(string Id, double GainDecibels, Action<double> Commit,
         double X, double Y, double Width, double Height) : Command(X, Y, Width, Height);
     private sealed record ButtonCommand(string Id, string Text, string Icon, Action Click, bool Enabled, string Tone,
         double X, double Y, double Width, double Height, string Title) : Command(X, Y, Width, Height);
@@ -48,6 +54,18 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     private bool playheadVisible;
     private string cursorLabel = "";
     private double cursorDragX = double.NaN, cursorOriginalX = double.NaN;
+    private string audioTrimDragId = "";
+    private string audioGainDragId = "";
+    private double audioGainDragStartDecibels, audioGainDragDecibels;
+    private float audioGainGrabOffset;
+    private string hoveredGainId = "";
+    private int hoveredGainFrame = -1;
+    private bool gainDragMoved;
+    private bool audioGainLineHoveredThisFrame;
+    private bool audioTrimDraggingStart;
+    private bool audioClipDragging;
+    private double audioTrimDragMouseX, audioTrimBaseStart, audioTrimBaseTrimStart, audioTrimBaseTrimEnd;
+    private double audioTrimDragStart, audioTrimDragTrimStart, audioTrimDragTrimEnd;
     private bool disposed;
 
     private readonly record struct Rect(float X, float Y, float Width, float Height)
@@ -125,8 +143,19 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         string text = "", string icon = "", string title = "")
         => commands.Add(new ShapeCommand(id, classes, text, icon, title, x, y, w, h));
 
-    internal void Waveform(string id, double x, double y, double w, double h, string markup)
-        => commands.Add(new WaveformCommand(id, markup, x, y, w, h));
+    internal void Waveform(string id, double x, double y, double w, double h,
+        float[] magnitudes)
+        => commands.Add(new WaveformCommand(id, magnitudes, x, y, w, h));
+
+    internal void AudioTrimClip(string id, double start, double sourceDuration, double trimStart,
+        double trimEnd, double pixelsPerSecond, double x, double y, double width, double height,
+        Action<double, double, double> commit, Action select, bool selected)
+        => commands.Add(new AudioTrimCommand(id, start, sourceDuration, trimStart, trimEnd,
+            pixelsPerSecond, commit, select, selected, x, y, width, height));
+
+    internal void AudioGainLine(string id, double gainDecibels, Action<double> commit,
+        double x, double y, double width, double height)
+        => commands.Add(new AudioGainLineCommand(id, gainDecibels, commit, x, y, width, height));
 
     internal void Button(string id, double x, double y, double w, string text, string icon,
         Action click, bool enabled = true, string tone = "")
@@ -189,6 +218,7 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         var draw = ImGui.GetWindowDrawList();
         draw.AddRectFilled(origin, origin + canvas, DirectorImGuiTheme.Background);
         interactive.Clear();
+        audioGainLineHoveredThisFrame = false;
 
         foreach (var command in commands.ToArray())
         {
@@ -207,6 +237,12 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
                     break;
                 case WaveformCommand waveform:
                     DrawWaveform(draw, origin, waveform);
+                    break;
+                case AudioTrimCommand audioTrim:
+                    DrawAudioTrim(draw, origin, audioTrim);
+                    break;
+                case AudioGainLineCommand gainLine:
+                    DrawAudioGainLine(draw, origin, gainLine);
                     break;
                 case ButtonCommand button:
                     DrawButton(origin, button);
@@ -240,7 +276,7 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
         bool inside = mouse.X >= origin.X && mouse.Y >= origin.Y
             && mouse.X <= origin.X + canvas.X && mouse.Y <= origin.Y + canvas.Y
             && ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows);
-        if (!inside && !dragging) return;
+        if (!inside && !dragging && audioTrimDragId.Length == 0) return;
 
         int globalX = (int)Math.Round(mouse.X);
         int globalY = (int)Math.Round(mouse.Y);
@@ -282,6 +318,70 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
             else if (ImGui.IsKeyPressed(ImGuiKey.Y, false))
                 key(new KeyEvent { KeyCode = (int)GlKeys.Y, CtrlPressed = true });
         }
+    }
+
+    private void DrawAudioGainLine(ImDrawListPtr draw, Vector2 origin, AudioGainLineCommand line)
+    {
+        const float MinimumGainDb = -60f;
+        float maximumGainDb = 20f * MathF.Log10(DirectorReplayVoiceTrackPolicy.MaximumVolume);
+        float scale = Scale;
+        float top = (float)line.Y;
+        float height = (float)line.Height;
+        float level = audioGainDragId == line.Id ? (float)audioGainDragDecibels
+            : (float)Math.Clamp(line.GainDecibels, MinimumGainDb, maximumGainDb);
+        float middle = top + height * .5f;
+        float localY = level >= 0
+            ? middle - level / maximumGainDb * height * .5f
+            : middle + -level / -MinimumGainDb * height * .5f;
+        float x1 = (float)line.X * scale + origin.X;
+        float x2 = (float)(line.X + line.Width) * scale + origin.X;
+        float y = origin.Y + localY * scale;
+
+        interactive.Add(new Rect((float)line.X, top, (float)line.Width, height));
+        Vector2 mouse = ImGui.GetMousePos();
+        float localMouseY = (mouse.Y - origin.Y) / scale;
+        bool inside = inputEnabled && !dragging && audioTrimDragId.Length == 0 && ImGui.IsWindowHovered()
+            && ImGui.IsMouseHoveringRect(new Vector2(x1 + 7 * scale, y - 2.5f * scale), new Vector2(x2 - 7 * scale, y + 2.5f * scale))
+            && localMouseY >= top && localMouseY <= top + height;
+        bool highlighted = inside || audioGainDragId == line.Id;
+        draw.AddLine(new Vector2(x1, y), new Vector2(x2, y),
+            highlighted ? Color(255, 255, 255) : Color(170, 170, 170, 130), 1.5f * scale);
+        int frame = ImGui.GetFrameCount();
+        bool armed = inside && hoveredGainId == line.Id && hoveredGainFrame == frame - 1;
+        if (inside && !ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            hoveredGainId = line.Id;
+            hoveredGainFrame = frame;
+        }
+        if (highlighted)
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeNS);
+            DirectorImGuiTooltip.Show($"{level:+0.0;-0.0;0.0} dB");
+        }
+        audioGainLineHoveredThisFrame |= armed;
+        if (audioGainDragId.Length == 0 && armed && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            audioGainDragId = line.Id;
+            audioGainGrabOffset = localY - localMouseY;
+            gainDragMoved = false;
+            audioGainDragStartDecibels = level;
+            audioGainDragDecibels = level;
+        }
+        if (audioGainDragId != line.Id) return;
+        if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            if (gainDragMoved && Math.Abs(audioGainDragStartDecibels - audioGainDragDecibels) > .001)
+                line.Commit(audioGainDragDecibels);
+            audioGainDragId = "";
+            return;
+        }
+        gainDragMoved |= Math.Abs(ImGui.GetMouseDragDelta(ImGuiMouseButton.Left, 0).Y) >= 3 * scale;
+        if (!gainDragMoved) return;
+        float normalizedY = Math.Clamp((localMouseY + audioGainGrabOffset - top) / Math.Max(1, height), 0, 1);
+        audioGainDragDecibels = normalizedY < .5f
+            ? (0.5f - normalizedY) * 2 * maximumGainDb
+            : -(normalizedY - .5f) * 2 * -MinimumGainDb;
+        ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeNS);
     }
 
     private void DrawShape(ImDrawListPtr draw, Vector2 origin, ShapeCommand shape)
@@ -338,11 +438,127 @@ internal sealed class DirectorTimelineWindow : DirectorImGuiDialog
     {
         Vector2 min = origin + new Vector2((float)waveform.X, (float)waveform.Y) * Scale;
         Vector2 max = min + new Vector2((float)waveform.Width, (float)waveform.Height) * Scale;
-        draw.AddRectFilled(min, max, Color(38, 54, 66));
-        draw.AddRect(min, max, Color(72, 106, 126));
-        draw.AddText(min + new Vector2(6, MathF.Max(1, (float)(waveform.Height - 16) * .5f)) * Scale,
-            Color(142, 177, 196), waveform.Markup.Contains("loading", StringComparison.OrdinalIgnoreCase)
-                ? "…" : "♪");
+        draw.AddRectFilled(min, max, Color(26, 34, 41), 5 * Scale, ImDrawFlags.RoundCornersAll);
+        if (waveform.Magnitudes.Length == 0) return;
+        float inset = Math.Min(3 * Scale, Math.Min(max.X - min.X, max.Y - min.Y) * .2f);
+        Vector2 start = min + new Vector2(inset);
+        Vector2 end = max - new Vector2(inset);
+        float step = (end.X - start.X) / waveform.Magnitudes.Length;
+        for (int i = 0; i < waveform.Magnitudes.Length; i++)
+        {
+            float level = Math.Clamp(waveform.Magnitudes[i], 0f, 1f);
+            if (level <= 0) continue;
+            float y = end.Y - level * (end.Y - start.Y);
+            draw.AddRectFilled(new Vector2(start.X + i * step, y),
+                new Vector2(start.X + (i + 1) * step, end.Y), Color(119, 125, 227));
+        }
+    }
+
+    private void DrawAudioTrim(ImDrawListPtr draw, Vector2 origin, AudioTrimCommand clip)
+    {
+        float scale = Scale;
+        float minimumDuration = .02f;
+        double sourceDuration = Math.Max(minimumDuration, clip.SourceDuration);
+        double initialTrimStart = Math.Clamp(clip.TrimStart, 0, sourceDuration - minimumDuration);
+        double initialTrimEnd = clip.TrimEnd > 0
+            ? Math.Clamp(clip.TrimEnd, initialTrimStart + minimumDuration, sourceDuration)
+            : sourceDuration;
+        double start = clip.Start;
+        double trimStart = initialTrimStart;
+        double trimEnd = initialTrimEnd;
+        bool activeDrag = audioTrimDragId == clip.Id;
+        if (activeDrag)
+        {
+            float mouseX = ImGui.GetMousePos().X;
+            double delta = (mouseX - audioTrimDragMouseX) / Math.Max(.001, clip.PixelsPerSecond * scale);
+            if (audioClipDragging)
+            {
+                start = Math.Max(0, audioTrimBaseStart + delta);
+                trimStart = audioTrimBaseTrimStart;
+                trimEnd = audioTrimBaseTrimEnd;
+            }
+            else if (audioTrimDraggingStart)
+            {
+                double maximum = audioTrimBaseTrimEnd - minimumDuration;
+                trimStart = Math.Clamp(audioTrimBaseTrimStart + delta, 0, maximum);
+                start = Math.Max(0, audioTrimBaseStart + trimStart - audioTrimBaseTrimStart);
+                trimEnd = audioTrimBaseTrimEnd;
+            }
+            else
+            {
+                start = audioTrimBaseStart;
+                trimStart = audioTrimBaseTrimStart;
+                trimEnd = Math.Clamp(audioTrimBaseTrimEnd + delta, trimStart + minimumDuration, sourceDuration);
+            }
+            audioTrimDragStart = start;
+            audioTrimDragTrimStart = trimStart;
+            audioTrimDragTrimEnd = trimEnd;
+        }
+
+        double duration = Math.Max(minimumDuration, sourceDuration - trimStart - (sourceDuration - trimEnd));
+        float left = (float)(clip.X + (start - clip.Start) * clip.PixelsPerSecond);
+        float right = left + (float)(duration * clip.PixelsPerSecond);
+        float rowTop = (float)clip.Y;
+        float rowBottom = (float)(clip.Y + clip.Height);
+        float fullLeft = (float)clip.X;
+        float fullRight = fullLeft + (float)(sourceDuration * clip.PixelsPerSecond);
+        Vector2 fullMin = origin + new Vector2(fullLeft, rowTop) * scale;
+        Vector2 fullMax = origin + new Vector2(fullRight, rowBottom) * scale;
+        Vector2 clipMin = origin + new Vector2(left, rowTop) * scale;
+        Vector2 bottom = origin + new Vector2(right, rowBottom) * scale;
+        if (left > fullLeft)
+            draw.AddRectFilled(fullMin, origin + new Vector2(left, rowBottom) * scale, Color(17, 22, 27, 190));
+        if (right < fullRight)
+            draw.AddRectFilled(origin + new Vector2(right, rowTop) * scale, fullMax, Color(17, 22, 27, 190));
+        if (clip.Selected)
+            draw.AddRect(clipMin, bottom, Color(255, 255, 255), 5 * scale, ImDrawFlags.RoundCornersAll, 1.25f * scale);
+
+        var startBounds = new Rect(left - 7, rowTop, 14, rowBottom - rowTop);
+        var endBounds = new Rect(right - 7, rowTop, 14, rowBottom - rowTop);
+        var bodyBounds = new Rect(left, rowTop, Math.Max(1, right - left), rowBottom - rowTop);
+        interactive.Add(bodyBounds);
+        interactive.Add(startBounds);
+        interactive.Add(endBounds);
+        Vector2 mouse = ImGui.GetMousePos();
+        float localX = (mouse.X - origin.X) / scale;
+        float localY = (mouse.Y - origin.Y) / scale;
+        bool onStartHandle = Math.Abs(localX - left) <= 7 && localY >= rowTop && localY <= rowBottom;
+        bool onEndHandle = Math.Abs(localX - right) <= 7 && localY >= rowTop && localY <= rowBottom;
+        bool onClipBody = localX >= left && localX <= right && localY >= rowTop && localY <= rowBottom;
+        if ((onStartHandle || onEndHandle) && ImGui.IsWindowHovered())
+            DirectorImGuiTooltip.Show(Vintagestory.API.Config.Lang.Get("vsdirector:voice-trim-hint"));
+        if (!activeDrag && inputEnabled && !dragging && ImGui.IsWindowHovered() && audioTrimDragId.Length == 0
+            && audioGainDragId.Length == 0 && !audioGainLineHoveredThisFrame
+            && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
+            && (startBounds.Contains(new Vector2(localX, localY)) || endBounds.Contains(new Vector2(localX, localY)) || onClipBody))
+        {
+            clip.Select();
+            audioTrimDragId = clip.Id;
+            audioTrimDraggingStart = onStartHandle && (!onEndHandle || Math.Abs(localX - left) <= Math.Abs(localX - right));
+            audioClipDragging = !onStartHandle && !onEndHandle && onClipBody;
+            audioTrimDragMouseX = mouse.X;
+            audioTrimBaseStart = clip.Start;
+            audioTrimBaseTrimStart = initialTrimStart;
+            audioTrimBaseTrimEnd = initialTrimEnd;
+            audioTrimDragStart = clip.Start;
+            audioTrimDragTrimStart = initialTrimStart;
+            audioTrimDragTrimEnd = initialTrimEnd;
+            if (audioClipDragging)
+                ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeAll);
+            return;
+        }
+
+        if (activeDrag && !MouseButtonDown(EnumMouseButton.Left))
+        {
+            double savedTrimEnd = Math.Abs(audioTrimDragTrimEnd - sourceDuration) < .0001 ? 0 : audioTrimDragTrimEnd;
+            clip.Commit(audioTrimDragStart, audioTrimDragTrimStart, savedTrimEnd);
+            audioTrimDragId = "";
+            audioClipDragging = false;
+        }
+        else if (activeDrag)
+        {
+            ImGui.SetMouseCursor(audioClipDragging ? ImGuiMouseCursor.ResizeAll : ImGuiMouseCursor.ResizeEW);
+        }
     }
 
     private void DrawButton(Vector2 origin, ButtonCommand button)

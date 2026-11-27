@@ -18,6 +18,7 @@ using VSDirector.Rendering;
 using VSDirector.Replay;
 using VSDirector.Runtime;
 using VSDirector.Storage;
+using VSDirector.Voice;
 using DirectorKeyframe = VSDirector.Data.CameraKeyframe;
 
 namespace VSDirector;
@@ -89,6 +90,11 @@ public sealed partial class VSDirectorModSystem : ModSystem
     private Guid replayElementRuntimeReplayId;
     private double replayElementPreviousTime = -1d;
     private bool replayElementFovWasApplied;
+    // Last observer pose captured while no replay camera effect owned the view.
+    // Edits can be committed while paused, before the runtime captures a new
+    // return pose for the next frame.
+    private CameraPreset? replayElementCleanPose;
+    private Guid replayElementCleanPoseReplayId;
     private readonly Dictionary<string, Guid> replayElementAppliedBlocks = new(StringComparer.Ordinal);
     private DirectorOffscreenMultiViewRenderer? offscreenRenderer;
     private DirectorLiveOffscreenSession? liveOffscreenSession;
@@ -160,6 +166,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
     internal bool IsShuttingDown => disposed || leavingWorld;
     private readonly DirectorVoiceBridge voiceBridge = new();
     private readonly DirectorVoiceApi voiceApi;
+    private DirectorMicrophoneRecorder? microphoneRecorder;
 
     public VSDirectorModSystem()
     {
@@ -1205,6 +1212,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
     /// <summary>Client-side bridge for decoded PCM submitted by voice mods.</summary>
     public DirectorVoiceApi VoiceApi => voiceApi;
 
+    internal DirectorMicrophoneRecorder? MicrophoneRecorder => microphoneRecorder;
+
     /// <summary>Whether replay recording currently accepts voice frames.</summary>
     public bool IsReplayVoiceCaptureActive
         => voiceApi.IsCaptureEnabled
@@ -1441,6 +1450,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
     public override void StartClientSide(ICoreClientAPI api)
     {
         capi = api;
+        microphoneRecorder = new DirectorMicrophoneRecorder(api);
+        microphoneRecorder.FrameCaptured = samples => DirectorReplayRuntime.Manager?.CaptureLocalMicrophoneFrame(samples);
         string ffmpegDirectory = Path.Combine(
             api.GetOrCreateDataPath("ModData"),
             "VSDirector",
@@ -1482,6 +1493,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
             ConsumeVoiceFrame,
             () => DirectorReplayRuntime.Manager?.IsVoiceRecording == true);
         replay.ActionDecoratorsActive = HasActiveReplayActionDecoration;
+        controller.CanPresentReplayFollowPose = replay.CanPresentCameraPose;
         replay.RequiresFullActorSampling = RequiresFullReplayActorSampling;
         replay.RequiresActorPoseSampling = RequiresReplayCameraActorPoseSampling;
         replay.ActionFrameDecorator = UpdateActionWorkflowEnvironment;
@@ -1567,6 +1579,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
         }
 
         disposed = true;
+        microphoneRecorder?.Dispose();
+        microphoneRecorder = null;
         headRecordingFrame = Guid.Empty;
         headRecordingSamples.Clear();
         headTrackingWindow?.Dispose(); headTrackingWindow = null;
@@ -11908,6 +11922,9 @@ public sealed partial class VSDirectorModSystem : ModSystem
     private void RegisterHotkeys(ICoreClientAPI api)
     {
         api.Input.RegisterHotKey(PanelHotkey, Lang.Get("vsdirector:hotkey-panel"), GlKeys.F9, HotkeyType.GUIOrOtherControls);
+        api.Input.RegisterHotKey("vsdirector-stop-export", Lang.Get("vsdirector:replay-export-stop"), GlKeys.F10,
+            HotkeyType.GUIOrOtherControls, ctrlPressed: true);
+        api.Input.SetHotKeyHandler("vsdirector-stop-export", hotkey => IsReplayExporting && TryStopReplayExport(out _));
         api.Input.SetHotKeyHandler(PanelHotkey, _ => { TogglePanel(); return true; });
         api.Input.RegisterHotKey(WorkspaceModeHotkey, Lang.Get("vsdirector:hotkey-workspace-mode"),
             GlKeys.F8, HotkeyType.GUIOrOtherControls);
@@ -12814,6 +12831,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
 
     private void OnLeaveWorld()
     {
+        microphoneRecorder?.Stop();
         replayProgressOverlay?.Reset();
         replayEditHistory.Select(Guid.Empty);
         creation?.Dispose();
@@ -12864,6 +12882,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
 
     private void OnLeftWorld()
     {
+        microphoneRecorder?.Stop();
         BeginWorldShutdown();
         vsmc2FileWatcher?.Stop();
         pendingVsmc2Shapes.Clear();
@@ -14152,6 +14171,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         UpdateHeadMotionRecording();
         if (IsWorldReady) permissionClient?.Tick();
         voiceBridge.Drain();
+        microphoneRecorder?.Update();
         MonitorLiveOffscreenRecording();
         MonitorOffscreenCapture();
         UpdateVanillaActionLibrary();
@@ -14208,7 +14228,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
             {
                 var combined = replayPlan.ExpandedColumns.Concat(preview.ExpandedColumns)
                     .Distinct().Take(DirectorReplayPreloadPlanner.MaxExpandedColumns).ToArray();
-                plan = new DirectorReplayPreloadPlan(combined, combined, combined, 0, false);
+                plan = new DirectorReplayPreloadPlan(combined, combined, combined, 0, false)
+                    { ObservationColumns = replayPlan.ObservationColumns };
             }
             else plan = replayPlan;
         }
@@ -14219,7 +14240,8 @@ public sealed partial class VSDirectorModSystem : ModSystem
             plan = DirectorReplayPreloadPlanner.Build(activePath);
         }
 
-        bool remoteWarmup = remoteFollow is not null || remoteOffscreen is not null;
+        bool remoteWarmup = remoteFollow is not null || remoteOffscreen is not null
+            || (plan is not null && chunkPreloadClient?.NeedsRegistration(preloadId, plan) == true);
         if (sceneReplay?.CanStreamReplayTerrain(plan, remoteWarmup) == false)
         {
             // The integrated server cannot drain heartbeats while suspended.
@@ -14371,6 +14393,11 @@ public sealed partial class VSDirectorModSystem : ModSystem
         // Camera elements may run on the logical clock while a time effect remaps content.
         double cameraTime = replay.PreparedCameraTimeSeconds;
         DirectorReplayViewportTimeline viewportTimeline = replay.ViewportTimeline;
+        if (replayElementCleanPoseReplayId != replay.ActiveReplayId)
+        {
+            replayElementCleanPose = null;
+            replayElementCleanPoseReplayId = replay.ActiveReplayId;
+        }
         DirectorReplayCameraVisuals visualCamera = viewportTimeline.Visuals.Camera;
         controller.SetReplayElementClearView(false);
         replay.SetHiddenTrackedReplayEntity(0L);
@@ -14545,6 +14572,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
                             out CameraPreset followedPose,
                             out _, applyToMainCamera: !editingFree))
                     {
+                        if (replay.IsSeekPending) return;
                         continue;
                     }
 
@@ -14580,7 +14608,20 @@ public sealed partial class VSDirectorModSystem : ModSystem
         bool hasCameraEffects = hasShake || hasFov || DirectorHeadMotion.TrySample(viewportTimeline, cameraTime, out _) || visualCamera.CameraShake
             || visualCamera.OverrideRoll || visualCamera.OverrideFov;
         bool ownsCamera = appliedCameraTypes.Count > 0 || hasCameraEffects;
-        if (!editingFree && ownsCamera) replayElementReturnPose ??= frameBasePose;
+        if (!editingFree && !ownsCamera && frameBasePose is not null)
+        {
+            replayElementCleanPose = (replayElementReturnPose ?? frameBasePose).DeepClone();
+            replayElementCleanPoseReplayId = replay.ActiveReplayId;
+        }
+        if (!editingFree && ownsCamera)
+        {
+            if (replayElementReturnPose is null && frameBasePose is not null)
+            {
+                replayElementCleanPose = frameBasePose.DeepClone();
+                replayElementCleanPoseReplayId = replay.ActiveReplayId;
+            }
+            replayElementReturnPose ??= frameBasePose;
+        }
         if (cameraPose is not null) replayShootingBasePose = cameraPose.DeepClone();
         else if (hasCameraEffects)
         {
@@ -14601,6 +14642,7 @@ public sealed partial class VSDirectorModSystem : ModSystem
         if (cameraPose is not null)
         {
             cameraPose = ApplyReplayShootingCameraVisuals(cameraPose, viewportTimeline, cameraTime);
+            if (!editingFree && !replay.CanPresentCameraPose(cameraPose)) return;
             replayShootingPose = cameraPose.DeepClone();
             replayShootingSourceId = activeCameraId;
             if (editingFree)
@@ -15153,11 +15195,22 @@ public sealed partial class VSDirectorModSystem : ModSystem
         IReadOnlyList<DirectorReplayMarker>? addedMarkers = null)
     {
         var before = CaptureReplayEdit();
+        CameraPreset? cleanPose = replayElementCleanPoseReplayId == replay?.ActiveReplayId
+            ? replayElementCleanPose?.DeepClone() : null;
         string error = "replay-not-active";
         if (!IsReplayExporting && replay?.ReplaceViewportTimeline(timeline, out error, notify, addedMarkers) == true)
         {
             if (before is not null && CaptureReplayEdit() is { } after) replayEditHistory.Record(before, after);
             ResetEditedReplayCamera();
+            // A paused edit can be committed before the element runtime has
+            // captured replayElementReturnPose.  The edit snapshot already
+            // contains the clean observer pose from immediately before the
+            // change, so use it as the final authority for releasing a
+            // deleted preset.  This also covers styles whose camera row does
+            // not have an explicit FOV track.
+            CameraPreset? restorePose = cleanPose ?? before?.Camera;
+            if (restorePose is not null && controller is not null)
+                RestoreReplayObserverPose(restorePose);
             if (!notify)
             {
                 pathPreview?.Refresh();
@@ -15469,7 +15522,14 @@ public sealed partial class VSDirectorModSystem : ModSystem
     {
         if (!string.IsNullOrWhiteSpace(message))
         {
-            capi?.ShowChatMessage(message);
+            if (workspace?.IsOpened() == true)
+            {
+                workspace.ShowWorkspaceNotification(message);
+            }
+            else
+            {
+                capi?.ShowChatMessage(message);
+            }
         }
     }
 

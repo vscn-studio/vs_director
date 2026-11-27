@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -381,7 +382,10 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
                 audioPlan,
                 options.FfmpegPath,
                 options.AudioBitrateKbps);
-            if (!seekReplay(created.Tracks[0].StartSeconds))
+            created.Boundaries = exportTimeline.Clips.SelectMany(c => new[] { c.TimelineStartSeconds, c.TimelineStartSeconds + c.DurationSeconds })
+                .Concat(exportTimeline.ElementKeyframes.Select(k => k.TimeSeconds)).Distinct().Order().ToArray();
+            created.HasRemappedContent = exportTimeline.ElementKeyframes.Any(k => k.TrackType == DirectorReplayElementTrackType.Freeze);
+            if (!SeekTimed(created, created.Tracks[0].StartSeconds))
             {
                 CloseTracks(created.Tracks);
                 RestoreCameraAfterExport(created);
@@ -428,7 +432,7 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
         {
             active.Cancellation.Dispose();
         }
-        RestoreCameraAfterExport(active);
+        if (!active.Finalizing) RestoreCameraAfterExport(active);
         SetStatus("stopped", string.Empty, active.OutputDirectory);
         WriteManifest(active, "stopped");
     }
@@ -456,7 +460,11 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
 
         try
         {
-            DirectorReplayExportFrameAction frameAction = active.FrameGate.Next(replayReady());
+            bool ready = replayReady();
+            long now = Stopwatch.GetTimestamp();
+            if (active.WaitStarted != 0) active.WaitTicks += now - active.WaitStarted;
+            active.WaitStarted = ready ? 0 : now;
+            DirectorReplayExportFrameAction frameAction = active.FrameGate.Next(ready);
             if (frameAction is DirectorReplayExportFrameAction.WaitForReplay
                 or DirectorReplayExportFrameAction.Settle)
             {
@@ -518,6 +526,14 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
             }
 
             active.CompletedOutputFrames++;
+            if (active.CompletedOutputFrames % (active.FramesPerSecond * 10) == 0)
+            {
+                var stats = track.Sink.Statistics;
+                capi.Logger.Debug("VS Director export: {0}/{1} frames, {2} continuous, replay {3:0} ms, terrain/history {4:0} ms, GPU/writer backpressure {5}/{6}.",
+                    active.CompletedOutputFrames, active.TotalOutputFrames, active.ContinuousFrames,
+                    active.SeekTicks * 1000d / Stopwatch.Frequency, active.WaitTicks * 1000d / Stopwatch.Frequency,
+                    stats.GpuBackpressureEvents, stats.WriterBackpressureEvents);
+            }
             UpdateTrackStatus(active);
             // A client has one final framebuffer. Finish one complete camera
             // pass before selecting the next path so the window does not
@@ -534,7 +550,7 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
                 active.TrackIndex = nextTrack;
                 active.CurrentReplaySeconds = active.Tracks[nextTrack].StartSeconds;
                 UpdateTrackStatus(active);
-                if (!seekReplay(active.CurrentReplaySeconds))
+                if (!SeekTimed(active, active.CurrentReplaySeconds))
                 {
                     Fail(active, "replay-seek-failed");
                     return;
@@ -544,11 +560,26 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
                 return;
             }
 
+            double previous = active.CurrentReplaySeconds;
             active.CurrentReplaySeconds = track.Clock.Advance();
-            if (!seekReplay(active.CurrentReplaySeconds))
+            if (!SeekTimed(active, active.CurrentReplaySeconds))
             {
                 Fail(active, "replay-seek-failed");
                 return;
+            }
+            // This framebuffer has already been submitted. Prepare the next pose before
+            // the engine updates its camera matrices and renders the following world frame.
+            double step = active.CurrentReplaySeconds - previous;
+            int nextBoundary = Array.BinarySearch(active.Boundaries, previous);
+            nextBoundary = nextBoundary >= 0 ? nextBoundary + 1 : ~nextBoundary;
+            bool continuous = step > 0 && step <= 1 && !active.HasRemappedContent
+                && (nextBoundary >= active.Boundaries.Length || active.Boundaries[nextBoundary] > active.CurrentReplaySeconds)
+                && track.Track.SourceType is DirectorRecordingSourceType.ReplayScene or DirectorRecordingSourceType.StaticCamera or DirectorRecordingSourceType.Path
+                && replayReady();
+            if (continuous)
+            {
+                if (!SelectTrack(active, active.TrackIndex, out string prepareError)) { Fail(active, prepareError); return; }
+                if (replayReady()) { active.ContinuousFrames++; return; }
             }
             active.FrameGate.BeginSeek();
         }
@@ -556,6 +587,13 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
         {
             Fail(active, exception.Message);
         }
+    }
+
+    private bool SeekTimed(ExportSession active, double seconds)
+    {
+        long start = Stopwatch.GetTimestamp();
+        try { return seekReplay(seconds); }
+        finally { active.SeekTicks += Stopwatch.GetTimestamp() - start; }
     }
 
     private bool SelectTrack(
@@ -630,9 +668,12 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
             {
                 audioError = exception.GetBaseException().Message;
             }
-            active.Cancellation.Dispose();
             capi.Event.EnqueueMainThreadTask(
-                () => CompleteAudioFinalization(active, audioError),
+                () =>
+                {
+                    active.Cancellation.Dispose();
+                    CompleteAudioFinalization(active, audioError);
+                },
                 "vsdirector-replay-audio-finalized");
         });
     }
@@ -783,6 +824,13 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
                 phase,
                 error,
                 replay = active.ReplayName,
+                performance = new
+                {
+                    elapsedMs = (DateTimeOffset.UtcNow - active.StartedUtc).TotalMilliseconds,
+                    replayUpdateMs = active.SeekTicks * 1000d / Stopwatch.Frequency,
+                    terrainAndHistoryWaitMs = active.WaitTicks * 1000d / Stopwatch.Frequency,
+                    continuousFramesPrepared = active.ContinuousFrames
+                },
                 capture = new
                 {
                     scope = "single-client-full-framebuffer-multipass",
@@ -880,7 +928,9 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
                     audioError = track.AudioError,
                     outputPath = track.OutputPath,
                     encoder = track.Sink.SelectedEncoder.ToString(),
-                    codec = track.Sink.SelectedCodec
+                    codec = track.Sink.SelectedCodec,
+                    readbackAndEncoding = track.Sink.Timing,
+                    frames = track.Sink.Statistics
                 })
             };
             File.WriteAllText(
@@ -1034,6 +1084,9 @@ internal sealed class DirectorReplayMultiTrackExporter : IRenderer, IDisposable
         public double EndSeconds { get; }
 
         public double CurrentReplaySeconds { get; set; }
+        public double[] Boundaries { get; set; } = [];
+        public bool HasRemappedContent { get; set; }
+        public long WaitStarted, WaitTicks, SeekTicks, ContinuousFrames;
 
         public double TimeScale { get; }
 

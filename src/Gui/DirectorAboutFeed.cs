@@ -20,18 +20,61 @@ internal static class DirectorAboutFeed
         internal byte[] AuthorBytes { get; } = Encoding.UTF8.GetBytes(Author);
     }
 
+    internal sealed record Sponsor(string Name, string NameEn, string Url);
+
+    internal static Sponsor[] BundledSponsors()
+    {
+        using var stream = typeof(DirectorAboutFeed).Assembly.GetManifestResourceStream("VSDirector.About.sponsors.json")!;
+        using var json = JsonDocument.Parse(stream);
+        return ParseSponsors(json.RootElement);
+    }
+
+    internal static async Task<Sponsor[]> FetchSponsors(CancellationToken token)
+    {
+        using var json = JsonDocument.Parse(await Http.GetByteArrayAsync(
+            "https://raw.githubusercontent.com/vscn-studio/vs_director/main/about/sponsors.json", token).ConfigureAwait(false));
+        return ParseSponsors(json.RootElement);
+    }
+
+    private static Sponsor[] ParseSponsors(JsonElement list)
+    {
+        var sponsors = new List<Sponsor>();
+        foreach (var entry in list.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object) continue;
+            string name = Field(entry, "name");
+            if (name.Length == 0 || !Uri.TryCreate(Field(entry, "url"), UriKind.Absolute, out var url)
+                || url.Scheme != Uri.UriSchemeHttps) continue;
+            string nameEn = Field(entry, "nameEn");
+            sponsors.Add(new(name, nameEn.Length == 0 ? name : nameEn, url.AbsoluteUri));
+        }
+        if (sponsors.Count == 0 && list.GetArrayLength() != 0) throw new InvalidDataException("Invalid About sponsor list");
+        return sponsors.ToArray();
+    }
+
+    private static string Field(JsonElement entry, string key) =>
+        entry.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString()!.Trim() : "";
+
+    internal static string[] BundledContributors()
+    {
+        using var stream = typeof(DirectorAboutFeed).Assembly.GetManifestResourceStream("VSDirector.About.contributors.json")!;
+        using var json = JsonDocument.Parse(stream);
+        return ParseContributors(json.RootElement);
+    }
+
     internal static async Task<string[]> FetchContributors(CancellationToken token)
     {
-        var names = new List<string>();
-        for (int page = 1; ; page++)
-        {
-            using var json = JsonDocument.Parse(await Http.GetByteArrayAsync(
-                $"https://api.github.com/repos/vscn-studio/vs_director/contributors?per_page=100&page={page}", token).ConfigureAwait(false));
-            foreach (var account in json.RootElement.EnumerateArray())
-                if (account.TryGetProperty("login", out var login) && login.GetString() is { Length: > 0 } name)
-                    names.Add(name);
-            if (json.RootElement.GetArrayLength() < 100) return names.ToArray();
-        }
+        using var json = JsonDocument.Parse(await Http.GetByteArrayAsync(
+            "https://cdn.jsdelivr.net/gh/vscn-studio/vs_director@main/about/contributors.json", token).ConfigureAwait(false));
+        return ParseContributors(json.RootElement);
+    }
+
+    private static string[] ParseContributors(JsonElement list)
+    {
+        var names = list.EnumerateArray().Select(entry => entry.GetString()?.Trim())
+            .OfType<string>().Where(name => name.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (names.Length == 0) throw new InvalidDataException("Empty About contributor list");
+        return names;
     }
 
     internal static Video[] BundledVideos()
@@ -55,10 +98,8 @@ internal static class DirectorAboutFeed
         foreach (var entry in list.EnumerateArray())
         {
             if (entry.ValueKind != JsonValueKind.Object) continue;
-            string Field(string key) => entry.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
-                ? v.GetString()!.Trim() : "";
-            string title = Field("title");
-            if (title.Length == 0 || !Uri.TryCreate(Field("url"), UriKind.Absolute, out var url)
+            string title = Field(entry, "title");
+            if (title.Length == 0 || !Uri.TryCreate(Field(entry, "url"), UriKind.Absolute, out var url)
                 || url.Scheme != "https") continue;
             string path = url.AbsolutePath.Trim('/');
             bool bili = url.Host is "www.bilibili.com" or "bilibili.com";
@@ -67,7 +108,7 @@ internal static class DirectorAboutFeed
                 : url.Host is "www.youtube.com" or "youtube.com" && path == "watch"
                     ? System.Web.HttpUtility.ParseQueryString(url.Query)["v"] ?? "" : "";
             if (!Regex.IsMatch(id, bili ? @"^BV[a-zA-Z0-9]{10}$" : @"^[a-zA-Z0-9_-]{11}$") || !seen.Add((bili, id))) continue;
-            videos.Add(new(title, Field("author"), bili ? "https://www.bilibili.com/video/" + id : "https://youtu.be/" + id, id, bili));
+            videos.Add(new(title, Field(entry, "author"), bili ? "https://www.bilibili.com/video/" + id : "https://youtu.be/" + id, id, bili));
         }
         if (videos.Count == 0 && list.GetArrayLength() != 0) throw new InvalidDataException("Invalid About video list");
         return videos.ToArray();

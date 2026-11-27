@@ -31,6 +31,12 @@ Installing VS Director on the server enables server-managed permissions, remote 
 
 The package is universal and declares `requiredOnServer: false`. Servers that install VS Director require connecting clients to install it as well. Server installations retain the declared VSImGui dependency.
 
+### Replay files
+
+Starting with 1.0.4-pre.7, new recordings use a single time-indexed `.vsdreplay` file. Each actor segment contains a full starting pose followed by field changes. Seeking reads the target segment directly. Chunk baselines, block events and audio also load on demand. Existing `.vsdreplay.gz` recordings remain readable with their timeline edits attached to the original file.
+
+New recordings identify the game version and native payload layout. Director stores actor positions, poses and animations in its own format. Items, entities and block entities can contain data written by the game or another mod. Playback across versions depends on those readers and the world's resources.
+
 ## Features
 
 - **Camera composition:** saved camera positions, free cameras, and player or entity follow cameras, with personal camera libraries and optional remote chunk loading.

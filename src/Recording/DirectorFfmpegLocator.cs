@@ -19,6 +19,8 @@ internal readonly record struct DirectorFfmpegDownloadInfo(
 
 internal static class DirectorFfmpegLocator
 {
+    // Some hardware encoders reject tiny input surfaces even when normal exports work.
+    internal const string EncoderProbeInput = "color=c=black:s=1280x720:r=30";
     private const string DefaultExecutable = "ffmpeg";
     internal const string RecommendedVersion = "8.0.x";
     internal const string OfficialDownloadUrl = "https://ffmpeg.org/download.html";
@@ -287,7 +289,7 @@ internal static class DirectorFfmpegLocator
         foreach (string argument in new[]
         {
             "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1:d=0.1",
+            "-f", "lavfi", "-i", EncoderProbeInput,
             "-frames:v", "1", "-an", "-c:v", codec,
             "-f", "null", "-"
         })

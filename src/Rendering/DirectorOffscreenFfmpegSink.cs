@@ -111,6 +111,13 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
     private long firstWorldMilliseconds = -1L;
     private long scheduledFrames;
     private long submissionSequence;
+    private long fenceTicks, queueTicks, pipeTicks;
+    internal object Timing => new
+    {
+        submissionToFenceObservedMs = Interlocked.Read(ref fenceTicks) * 1000d / Stopwatch.Frequency,
+        mappedToWriterDequeueMs = Interlocked.Read(ref queueTicks) * 1000d / Stopwatch.Frequency,
+        ffmpegPipeWriteMs = Interlocked.Read(ref pipeTicks) * 1000d / Stopwatch.Frequency
+    };
     private long lastWorldMilliseconds = -1L;
     private long finalFrameTarget;
     private int gpuThreadId;
@@ -553,6 +560,7 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
         slot.Sequence = ++submissionSequence;
         slot.RepeatCount = repeats;
         slot.BackpressureReported = false;
+        slot.SubmittedAt = Stopwatch.GetTimestamp();
         slot.Fence = gl!.SubmitRead(slot.BufferId, options.Width, options.Height);
         slot.SetState(SlotState.PendingGpu);
     }
@@ -598,6 +606,8 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
                     continue;
                 }
                 slot.MappedPointer = pointer;
+                slot.MappedAt = Stopwatch.GetTimestamp();
+                Interlocked.Add(ref fenceTicks, slot.MappedAt - slot.SubmittedAt);
                 slot.SetState(SlotState.MappedAwaitingQueue);
             }
 
@@ -622,11 +632,12 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
         }
 
         ReadbackPacket packet = new(slot, slot.MappedPointer, slot.ByteCount, slot.RepeatCount);
+        slot.SetState(SlotState.CopyInProgress);
         if (!activeChannel.Writer.TryWrite(packet))
         {
+            slot.SetState(SlotState.MappedAwaitingQueue);
             return false;
         }
-        slot.SetState(SlotState.CopyInProgress);
         return true;
     }
 
@@ -637,14 +648,17 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
         {
             await foreach (ReadbackPacket packet in reader.ReadAllAsync().ConfigureAwait(false))
             {
+                Interlocked.Add(ref queueTicks, Stopwatch.GetTimestamp() - packet.Slot.MappedAt);
                 byte[]? bytes = ArrayPool<byte>.Shared.Rent(packet.ByteCount);
                 try
                 {
-                    Marshal.Copy(packet.Pointer, bytes, 0, packet.ByteCount);
-                    packet.Slot.SetState(SlotState.CopyComplete);
+                    try { Marshal.Copy(packet.Pointer, bytes, 0, packet.ByteCount); }
+                    finally { packet.Slot.SetState(SlotState.CopyComplete); }
                     for (int repeat = 0; repeat < packet.RepeatCount; repeat++)
                     {
+                        long writeStart = Stopwatch.GetTimestamp();
                         await stdin.WriteAsync(bytes.AsMemory(0, packet.ByteCount)).ConfigureAwait(false);
+                        Interlocked.Add(ref pipeTicks, Stopwatch.GetTimestamp() - writeStart);
                         Interlocked.Increment(ref counters.EncodedFrames);
                     }
 
@@ -657,7 +671,6 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
                 }
                 finally
                 {
-                    packet.Slot.SetState(SlotState.CopyComplete);
                     if (bytes is not null)
                     {
                         ArrayPool<byte>.Shared.Return(bytes);
@@ -954,6 +967,10 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
                 : "medium";
     }
 
+    internal static string DetectCodec(string path, CancellationToken token)
+        => SelectEncoder(DirectorFfmpegLocator.ResolveRequired(path),
+            new DirectorOffscreenFfmpegOptions { ViewId = Guid.Empty, OutputPath = string.Empty }, token).Codec;
+
     private static (DirectorOffscreenVideoEncoder Encoder, string Codec) SelectEncoder(
         string executable,
         DirectorOffscreenFfmpegOptions options,
@@ -1018,7 +1035,7 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
         };
         AddArguments(startInfo,
             "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1:d=0.1",
+            "-f", "lavfi", "-i", DirectorFfmpegLocator.EncoderProbeInput,
             "-frames:v", "1", "-an", "-c:v", codec,
             "-f", "null", "-");
         using Process probe = new() { StartInfo = startInfo };
@@ -1181,6 +1198,7 @@ public sealed class DirectorOffscreenFfmpegSink : IDirectorOffscreenFrameSink, I
         internal IntPtr Fence { get; set; }
         internal IntPtr MappedPointer { get; set; }
         internal long Sequence { get; set; }
+        internal long SubmittedAt, MappedAt;
         internal int RepeatCount { get; set; }
         internal bool BackpressureReported { get; set; }
         internal SlotState State => (SlotState)Volatile.Read(ref state);

@@ -31,7 +31,11 @@ internal static class DirectorReplayWorldCaptureChecks
         void Init(string name) { var f = AccessTools.Field(type, name); f.SetValue(manager, Activator.CreateInstance(f.FieldType)); }
         object? Call(string name, params object?[] args) => AccessTools.Method(type, name).Invoke(manager, args);
         var player = new EntityPlayer(); player.Pos.SetPos(511974.6, 113, 511778.8);
-        var clientPlayer = ProbeDispatchProxy.Create<IClientPlayer>((m, _) => m.Name == "get_Entity" ? player : ProbeDispatchProxy.DefaultValue(m.ReturnType));
+        var clientPlayer = (ClientPlayer)RuntimeHelpers.GetUninitializedObject(typeof(ClientPlayer));
+        var playerDataField = AccessTools.Field(typeof(ClientPlayer), "worlddata");
+        var playerData = RuntimeHelpers.GetUninitializedObject(playerDataField.FieldType);
+        AccessTools.Property(playerDataField.FieldType, "EntityPlayer").SetValue(playerData, player);
+        playerDataField.SetValue(clientPlayer, playerData);
         var live = new Dictionary<(int X, int Y, int Z), int[]>();
         var liveEntities = new Dictionary<BlockPos, BlockEntity>();
         Block[] blocks = [new() { BlockId = 0 }, new() { BlockId = 1 }, new() { BlockId = 2 }];
@@ -80,7 +84,7 @@ internal static class DirectorReplayWorldCaptureChecks
                 "GetBlockIdUnsafe" => cells[(int)a![0]!], "GetFluid" => 0,
                 _ => ProbeDispatchProxy.DefaultValue(m.ReturnType)
             });
-            var entities = new Dictionary<BlockPos, BlockEntity>();
+            var entities = Activator.CreateInstance(typeof(IWorldChunk).GetProperty("BlockEntities")!.PropertyType);
             chunks[(x,y,z)] = ProbeDispatchProxy.Create<IWorldChunk>((m, _) => m.Name switch
             {
                 "get_Data" => data, "Unpack_ReadOnly" => true, "get_BlockEntities" => entities,
@@ -120,10 +124,10 @@ internal static class DirectorReplayWorldCaptureChecks
             Set("recordingPaused", true); player.Pos.Z -= 32; NewChunk(15999,3,15991);
             Call("CaptureBlockBeforeChange", new BlockPos(trunkPos.X,trunkPos.Y,trunkPos.Z-32,0));
             if (doc.WorldSnapshot.Chunks.Count != 2) throw new Exception("Paused recording captured new terrain");
-            string path = Path.Combine(Path.GetTempPath(), "director-moving-capture-"+Guid.NewGuid().ToString("N")+".vsdreplay.gz");
+            string path = Path.Combine(Path.GetTempPath(), "director-moving-capture-"+Guid.NewGuid().ToString("N")+".vsdreplay");
             try
             {
-                DirectorReplayIO.Save(path, doc); DirectorReplayPages.Write(path, doc);
+                DirectorReplayIO.Save(path, doc);
                 var loaded = DirectorReplayPages.TryOpen(path)!;
                 if (!loaded.HasHistoricalBaselines || loaded.WorldSnapshot.Chunks.Count != 2 || loaded.BlockEvents.Count != 2)
                     throw new Exception("Moving baselines or partial felling were lost in paged replay persistence");

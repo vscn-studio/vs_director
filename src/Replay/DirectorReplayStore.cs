@@ -109,7 +109,7 @@ internal sealed class DirectorReplayStore : IDisposable
         string name = DirectorRecordingFiles.SanitizeFilePart(snapshot.Name, "Replay");
         string targetDirectory = snapshot.ServerRecording is { } link
             ? Path.Combine(directory, "session-" + link.SessionId.ToString("N")) : directory;
-        string path = Path.Combine(targetDirectory, $"{name}-{snapshot.Id:N}.vsdreplay.gz");
+        string path = Path.Combine(targetDirectory, $"{name}-{snapshot.Id:N}{DirectorReplayPages.PrimaryExtension}");
         DirectorReplayIO.SaveNormalized(path, snapshot, compression, cancellationToken);
         DirectorReplayInfo info = ToInfo(path, snapshot);
         try { File.Delete(TimelinePath(path)); WriteMetadata(path, info); }
@@ -128,7 +128,7 @@ internal sealed class DirectorReplayStore : IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(replay);
-        return Task.Run(() => Save(replay, compression), cancellationToken);
+        return Task.Run(() => SaveCore(replay, compression, cancellationToken, normalized: false), cancellationToken);
     }
 
     public IReadOnlyList<DirectorReplayInfo> List()
@@ -345,8 +345,8 @@ internal sealed class DirectorReplayStore : IDisposable
     {
         try
         {
-            string[] files = Directory.EnumerateFiles(directory, "*.vsdreplay.gz", SearchOption.AllDirectories)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            string[] files = Directory.EnumerateFiles(directory, "*.vsdreplay*", SearchOption.AllDirectories)
+                .Where(path => DirectorReplayPages.IsPrimary(path) || path.EndsWith(".vsdreplay.gz", StringComparison.OrdinalIgnoreCase)).ToArray();
             lock (indexGate)
             {
                 token.ThrowIfCancellationRequested();
@@ -361,7 +361,8 @@ internal sealed class DirectorReplayStore : IDisposable
                     DirectorReplayInfo? info = TryReadMetadata(path);
                     if (info is null)
                     {
-                        DirectorReplayDocument replay = DirectorReplayIO.Load(path);
+                        DirectorReplayDocument replay = DirectorReplayPages.IsPrimary(path)
+                            ? DirectorReplayPages.TryOpen(path)! : DirectorReplayIO.Load(path, token);
                         if (!string.Equals(replay.WorldId, worldId, StringComparison.Ordinal))
                         {
                             continue;

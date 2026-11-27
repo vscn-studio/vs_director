@@ -1,3 +1,4 @@
+using System.Buffers;
 using VSDirector.Compatibility;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -61,22 +62,32 @@ internal static class DirectorReplayWorldCapture
         if (chunk is null || chunk.Disposed || (!chunk.Unpack_ReadOnly() && chunk.Data is null)) return false;
         IChunkBlocks? data = chunk.Data;
         if (data is null) return false;
-        int[] solid = new int[ChunkBlockCount], fluid = new int[ChunkBlockCount];
-        data.TakeBulkReadLock();
+        int[] solid = ArrayPool<int>.Shared.Rent(ChunkBlockCount);
+        int[] fluid = ArrayPool<int>.Shared.Rent(ChunkBlockCount);
         try
         {
-            for (int index = 0; index < ChunkBlockCount; index++)
+            data.TakeBulkReadLock();
+            try
             {
-                solid[index] = data.GetBlockIdUnsafe(index);
-                fluid[index] = data.GetFluid(index);
+                for (int index = 0; index < ChunkBlockCount; index++)
+                {
+                    solid[index] = data.GetBlockIdUnsafe(index);
+                    fluid[index] = data.GetFluid(index);
+                }
             }
+            finally { data.ReleaseBulkReadLock(); }
+            snapshot.Chunks.Add(new DirectorReplayChunkSnapshot
+            {
+                ChunkX = chunkX, ChunkY = chunkY, ChunkZ = chunkZ, CapturedAtSeconds = time,
+                SolidRuns = DirectorReplayChunkCodec.Encode(solid.AsSpan(0, ChunkBlockCount)),
+                FluidRuns = DirectorReplayChunkCodec.Encode(fluid.AsSpan(0, ChunkBlockCount))
+            });
         }
-        finally { data.ReleaseBulkReadLock(); }
-        snapshot.Chunks.Add(new DirectorReplayChunkSnapshot
+        finally
         {
-            ChunkX = chunkX, ChunkY = chunkY, ChunkZ = chunkZ, CapturedAtSeconds = time,
-            SolidRuns = DirectorReplayChunkCodec.Encode(solid), FluidRuns = DirectorReplayChunkCodec.Encode(fluid)
-        });
+            ArrayPool<int>.Shared.Return(solid);
+            ArrayPool<int>.Shared.Return(fluid);
+        }
         foreach (BlockEntity blockEntity in DirectorGameCompatibility.BlockEntities(chunk))
         {
             BlockPos position = blockEntity.Pos.Copy();

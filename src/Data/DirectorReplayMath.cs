@@ -29,6 +29,8 @@ public static class DirectorReplayMath
         DirectorReplayDocument result = new()
         {
             SchemaVersion = DirectorReplayDocument.CurrentSchemaVersion,
+            RecordedGameVersion = source?.RecordedGameVersion ?? string.Empty,
+            NativePayloadVersion = source?.NativePayloadVersion ?? 0,
             Id = source?.Id is { } id && id != Guid.Empty ? id : Guid.NewGuid(),
             Name = string.IsNullOrWhiteSpace(source?.Name) ? "Replay" : source.Name.Trim(),
             WorldId = source?.WorldId?.Trim() ?? string.Empty,

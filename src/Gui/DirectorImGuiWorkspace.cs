@@ -40,6 +40,7 @@ internal sealed partial class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGui
     private Vector2 previousPreviewDockSize;
     internal event Action<string, Vector2, Vector2>? BoundsChanged;
     internal event Action? PanelsDrawn;
+    internal Action? NotificationOverlay { get; set; }
     internal void Add(Action draw) => panels.Add(draw);
     internal void Remove(Action draw) => panels.Remove(draw);
     internal void ResetLayout() { if (CreationMode) resetCreationLayout = true; else resetLayout = true; }
@@ -135,6 +136,7 @@ internal sealed partial class DirectorImGuiWorkspace(ICoreClientAPI api) : ImGui
                 // Inactive windows retain their open state without consuming input.
                 foreach (var panel in panels.ToArray()) panel();
                 PanelsDrawn?.Invoke();
+                NotificationOverlay?.Invoke();
             }
         }
         finally { ImGui.End(); }

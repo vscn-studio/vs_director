@@ -15,6 +15,35 @@ using OpenTK.Windowing.Desktop;
 /// <summary>Exercises real ImGui frames and a hidden GL renderer without a game.</summary>
 internal static partial class DirectorImGuiProbe
 {
+    internal static void CheckKometShader()
+    {
+        using var window = new NativeWindow(new NativeWindowSettings { StartVisible = false, APIVersion = new Version(3, 3) });
+        window.MakeCurrent();
+        var shader = typeof(ImGuiController_OpenTK.ImGuiController).Assembly.GetType("ImGuiController_OpenTK.ImGuiShader", true)!;
+        var runtime = typeof(VSDirectorModSystem).Assembly.GetType("VSDirector.Gui.DirectorImGuiRuntime", true)!;
+        var harmony = new Harmony("vsdirector.probe.komet-shader");
+        try
+        {
+            AccessTools.Method(runtime, "InstallKometShaderPatch").Invoke(null, [harmony]);
+            var (program, _, _) = ((int, int, int))AccessTools.Method(shader, "Create").Invoke(null, null)!;
+            int[] stages = new int[2];
+            try
+            {
+                GL.GetAttachedShaders(program, stages.Length, out int count, stages);
+                if (count != 2) throw new Exception($"Expected two attached ImGui shader stages, found {count}.");
+                foreach (int stage in stages)
+                {
+                    GL.GetShaderSource(stage, 4096, out _, out string source);
+                    if (!source.Contains("void main")) throw new Exception("Missing ImGui shader source.");
+                }
+            }
+            finally { GL.DeleteProgram(program); }
+            if (stages.Any(GL.IsShader)) throw new Exception("ImGui shader stages outlived their program.");
+            Console.WriteLine("PASS VSImGui keeps both GLSL stages readable and frees them with the program.");
+        }
+        finally { harmony.UnpatchAll(harmony.Id); }
+    }
+
     internal static unsafe void Run()
     {
         var assembly = typeof(VSDirectorModSystem).Assembly;

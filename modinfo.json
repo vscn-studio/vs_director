@@ -8,7 +8,7 @@
     "HansJack",
     "HanosThePlacid"
   ],
-  "version": "1.0.4-pre.6",
+  "version": "1.0.4-pre.7",
   "side": "universal",
   "requiredOnServer": false,
   "dependencies": {

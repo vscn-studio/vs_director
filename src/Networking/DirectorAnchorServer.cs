@@ -343,6 +343,16 @@ internal sealed class DirectorAnchorServer : IDisposable
             }
         }
 
+        var resident = new HashSet<PreloadColumn>();
+        if (request.ResidentColumns is { Count: > 0 } hints)
+        {
+            if (hints.Count > HardMaxPreloadExpandedColumns) invalid = true;
+            else foreach (var hint in hints)
+            {
+                if (hint is null || !expanded.Contains(new(hint.X, hint.Z, hint.Dimension))) { invalid = true; break; }
+                resident.Add(new(hint.X, hint.Z, hint.Dimension));
+            }
+        }
         if (invalid || expanded.Count == 0)
         {
             RemovePreload(player.PlayerUID);
@@ -379,6 +389,7 @@ internal sealed class DirectorAnchorServer : IDisposable
         }
         next.PlanColumns.UnionWith(expanded);
         next.BatchId = request.BatchId;
+        next.ResidentColumns = resident;
         next.RetryDelivery = request.RetryDelivery;
         RetainPreload(next);
         preloads[player.PlayerUID] = next;
@@ -659,7 +670,8 @@ internal sealed class DirectorAnchorServer : IDisposable
             var retained = new AnchorColumn(column.X, column.Z);
             bool needsRetention = column.Dimension == 0 && !state.RetainedColumns.Contains(retained);
             bool forceDispatch = state.RetryDelivery && !state.LastDispatchColumns.ContainsKey(column);
-            bool sent = !forceDispatch && HasCompleteColumn(player, column.X, column.Z, column.Dimension);
+            bool sent = state.ResidentColumns.Contains(column)
+                || (!forceDispatch && HasCompleteColumn(player, column.X, column.Z, column.Dimension));
             // Check the entire batch for delivery, but only start work on one column per tick.
             if (needsRetention)
             {
@@ -1135,6 +1147,7 @@ internal sealed class DirectorAnchorServer : IDisposable
 
         public int BatchId { get; set; }
         public bool RetryDelivery { get; set; }
+        public HashSet<PreloadColumn> ResidentColumns { get; set; } = new();
 
         public string ReplayId { get; }
 

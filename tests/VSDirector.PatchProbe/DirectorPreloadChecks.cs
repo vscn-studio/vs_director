@@ -39,7 +39,9 @@ internal static class DirectorPreloadChecks
         var route = DirectorReplayPreloadPlanner.Build(document, "Probe", false);
         var startupPlan = (DirectorReplayPreloadPlan)Call(manager, "BuildPlaybackPreloadWindow", document, 0d, route)!;
         var columns = startupPlan.ExpandedColumns;
-        if (columns[0] != new DirectorReplayPreloadColumn(900, 901, 0) || columns.Contains(new(100, 100, 0))
+        if (!columns.Contains(new(900, 901, 0)) || columns.Contains(new(100, 100, 0))
+            || !columns.Take(startupPlan.ObservationColumns.Count).SequenceEqual(startupPlan.ObservationColumns)
+            || startupPlan.ObservationColumns.Contains(new(140, 100, 0))
             || !columns.Contains(new(101, 100, 0)) || !columns.Contains(new(140, 100, 0)))
             throw new Exception("Playback preload ignores manual inclusion/exclusion or automatic neighbors");
         if (replayPath is not null)
@@ -51,13 +53,13 @@ internal static class DirectorPreloadChecks
             var atStart = (DirectorReplayPreloadPlan)Call(manager, "BuildPlaybackPreloadWindow", recorded, 0d, recordedRoute)!;
             if (!recordedRoute.ExpandedColumnSet.IsSubsetOf(atStart.ExpandedColumnSet))
                 throw new Exception("The recorded route lost planned terrain when opened at time zero");
-            Console.WriteLine($"PASS {recorded.Name}: {recorded.IncludedPreloadColumns.Count} manual columns, {recordedRoute.SourceColumns.Count} route centers, {atStart.ExpandedColumns.Count} total columns requested at t=0");
+            Console.WriteLine($"PASS {recorded.Name}: {atStart.ObservationColumns.Count} startup columns, {atStart.ExpandedColumns.Count} retained in full plan");
         }
 
         var worldType = T("Replay.DirectorReplayWorldPlayback");
         var replayWorld = RuntimeHelpers.GetUninitializedObject(worldType);
         Set(replayWorld, "document", document); Set(replayWorld, "started", true); Set(replayWorld, "requestedTime", 10d);
-        foreach (string fieldName in new[] { "historyRefreshQueue", "historyRefreshSet", "baselineChunks" })
+        foreach (string fieldName in new[] { "historyRefreshQueue", "historyRefreshSet", "deferredBaseline", "baselineChunks" })
         {
             var field = AccessTools.Field(worldType, fieldName);
             field.SetValue(replayWorld, Activator.CreateInstance(field.FieldType));
@@ -69,6 +71,12 @@ internal static class DirectorPreloadChecks
         Call(replayWorld, "ObserveServerRecordingChunkLoad", 10, 2, 10);
         if ((int)AccessTools.Property(AccessTools.Field(worldType, "historyRefreshQueue").FieldType, "Count").GetValue(AccessTools.Field(worldType, "historyRefreshQueue").GetValue(replayWorld))! != 1)
             throw new Exception("Arriving preload chunks do not queue replay-state restoration for ordinary recordings");
+        Call(replayWorld, "SetObservationColumns", startupPlan.ObservationColumnSet);
+        if ((bool)AccessTools.Property(worldType, "IsSynchronizing").GetValue(replayWorld)!)
+            throw new Exception("Distant terrain restoration blocked the first frame");
+        Call(replayWorld, "SetObservationColumns", new HashSet<DirectorReplayPreloadColumn> { new(10, 10, 0) });
+        if (!(bool)AccessTools.Property(worldType, "IsSynchronizing").GetValue(replayWorld)!)
+            throw new Exception("The destination became presentable with historical restoration still pending");
 
         int loadCalls = 0, dispatchCalls = 0;
         bool delivered = false;
@@ -152,8 +160,17 @@ internal static class DirectorPreloadChecks
                 Columns = [new DirectorChunkPreloadColumn { X = 100 + i, Z = 100 }] });
         }
         if (!Protected(100) || !Protected(101)) throw new Exception("New batch released earlier remote columns");
+        delivered = false;
+        int beforeDelivery = dispatchCalls;
         Call(server, "OnPreloadRequest", player, new DirectorChunkPreloadRequest { Active = true,
-            ReplayId = replayCode, BatchId = 2, RemovedColumns = [new() { X = 100, Z = 100 }] });
+            ReplayId = replayCode, BatchId = 3, KeepPreviousBatches = true, Columns = [new() { X = 102, Z = 100 }],
+            ResidentColumns = [new() { X = 102, Z = 100 }] });
+        var states = (System.Collections.IDictionary)AccessTools.Field(serverType, "preloads").GetValue(server)!;
+        Call(server, "EnsurePreloadChunks", player, states["Probe"], 7000L);
+        if (!Protected(102) || dispatchCalls != beforeDelivery || statuses[^1].SentColumns != 1)
+            throw new Exception("A retention-only column triggered delivery or lost protection");
+        Call(server, "OnPreloadRequest", player, new DirectorChunkPreloadRequest { Active = true,
+            ReplayId = replayCode, BatchId = 3, RemovedColumns = [new() { X = 100, Z = 100 }] });
         if (Protected(100) || !Protected(101)) throw new Exception("Selection edit released the wrong remote columns");
         Call(server, "OnPreloadRequest", player, new DirectorChunkPreloadRequest { Active = false });
         if (Protected(100) || Protected(101)) throw new Exception("Stopped preload leaked protected columns");
@@ -177,17 +194,18 @@ internal static class DirectorPreloadChecks
             throw new Exception("Fixture must start with the local observation area ready");
         long farChunk = map.ChunkIndex3D(140, 1, 100);
         chunks.Remove(farChunk);
-        Call(manager, "ProcessPendingPlaybackStart");
-        if ((bool)AccessTools.Property(start.GetType(), "ChunksReady").GetValue(start)!
-            || (int)AccessTools.Property(start.GetType(), "PreloadReadyColumns").GetValue(start)! != columns.Count - 1)
-            throw new Exception("Replay started with an incomplete distant route column");
-        chunks[farChunk] = loaded;
         if (Call(manager, "UpdatePreloadReadiness", start) is not true)
-            throw new Exception("Full route was still blocked after the remote column arrived");
+            throw new Exception("Distant route column blocked the first frame");
+        var seekPlan = (DirectorReplayPreloadPlan)Call(manager, "BuildPlaybackPreloadWindow", document, 20d, route)!;
+        AccessTools.Property(start.GetType(), "StartupPlan").SetValue(start, seekPlan);
+        if (seekPlan.ObservationColumns[0] != new DirectorReplayPreloadColumn(140, 100, 0)
+            || Call(manager, "UpdatePreloadReadiness", start) is not false)
+            throw new Exception("Seeking did not prioritize and wait for the destination");
+        chunks[farChunk] = loaded;
         chunks.Clear();
         Set(manager, "pendingPlaybackStart", null);
         Set(map, "mapsize", new Vec3i(32, 32, 32));
-        Console.WriteLine("PASS stationary t=0 replay requests a destination 40 columns ahead and waits for its last vertical chunk");
+        Console.WriteLine("PASS startup skips missing background terrain; a seek promotes the target column");
         game.BlocksReceivedAndLoaded = true;
         game.Platform = (ClientPlatformAbstract)RuntimeHelpers.GetUninitializedObject(
             typeof(ClientMain).Assembly.GetType("Vintagestory.Client.NoObf.ClientPlatformWindows", true)!);

@@ -238,7 +238,7 @@ internal sealed partial class DirectorWorkspaceHud
             {
                 if (c.Player is not DirectorReplayActorPathSource player || NearestOtherActor(c, false) is not { } other)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-second-actor"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-second-actor"));
                     return null;
                 }
                 DirectorReplayElementTrack track = PresetNewTrack(c, DirectorReplayElementTrackType.TrackEntity, "track-switch-subject");
@@ -262,7 +262,7 @@ internal sealed partial class DirectorWorkspaceHud
             {
                 if (NearestOtherActor(c, false) is not { } other)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-second-actor"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-second-actor"));
                     return null;
                 }
                 return TripodPreset(c, "track-two-shot", 8d, k =>
@@ -279,7 +279,7 @@ internal sealed partial class DirectorWorkspaceHud
             {
                 if (c.Player is not DirectorReplayActorPathSource player || NearestOtherActor(c, false) is not { } other)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-second-actor"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-second-actor"));
                     return null;
                 }
                 DirectorReplayElementTrack track = PresetNewTrack(c, DirectorReplayElementTrackType.TrackEntity, "track-over-shoulder");
@@ -584,7 +584,7 @@ internal sealed partial class DirectorWorkspaceHud
             {
                 if (NearestOtherActor(c, true) is not { } boss)
                 {
-                    c.Hud.capi.ShowChatMessage(PresetLang("vsdirector:replay-preset-no-creature"));
+                    c.Hud.ShowWorkspaceNotification(PresetLang("vsdirector:replay-preset-no-creature"));
                     return null;
                 }
                 DirectorReplayElementTrack track = PresetNewTrack(c, DirectorReplayElementTrackType.TrackEntity, "cine-boss-intro", PlayerLabel(boss));

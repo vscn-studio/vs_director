@@ -29,6 +29,13 @@ public sealed class DirectorReplayPreloadPlan
     public IReadOnlyList<DirectorReplayPreloadColumn> ExpandedColumns { get; }
 
     public IReadOnlySet<DirectorReplayPreloadColumn> ExpandedColumnSet { get; }
+    private IReadOnlyList<DirectorReplayPreloadColumn> observationColumns = [];
+    public IReadOnlyList<DirectorReplayPreloadColumn> ObservationColumns
+    {
+        get => observationColumns;
+        init { observationColumns = value; ObservationColumnSet = value.ToHashSet(); }
+    }
+    public IReadOnlySet<DirectorReplayPreloadColumn> ObservationColumnSet { get; private set; } = new HashSet<DirectorReplayPreloadColumn>();
 
     public int RadiusChunks { get; }
 

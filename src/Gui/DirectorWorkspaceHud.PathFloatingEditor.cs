@@ -713,7 +713,7 @@ internal sealed partial class DirectorWorkspaceHud
             || endSpeed < CameraPathTiming.MinSegmentSpeed
             || endSpeed > CameraPathTiming.MaxSegmentSpeed)
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:auto-save-invalid-input"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:auto-save-invalid-input"));
             return true;
         }
         CameraPath before = pathEdit.DeepClone();
@@ -791,7 +791,7 @@ internal sealed partial class DirectorWorkspaceHud
             || !TryPathFloatingNumber(composer, "elementTime", out double time)
             || time < 0d || time > Math.Max(pathEdit.DurationSeconds, 0d))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-element-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-element-invalid"));
             return true;
         }
         CameraPath before = pathEdit.DeepClone();
@@ -807,7 +807,7 @@ internal sealed partial class DirectorWorkspaceHud
         bool valid = ApplyPathElementValues(composer, frame);
         if (!valid)
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-element-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-element-invalid"));
             return true;
         }
         int tick = DirectorPathElementTimeline.TickAt(frame.TimeSeconds);

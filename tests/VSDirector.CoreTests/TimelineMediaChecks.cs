@@ -23,8 +23,23 @@ internal static class TimelineMediaChecks
         var wave = DirectorVoiceWaveform.Read(frames, new HashSet<string> { "a", "b" }, 10, 12, 4);
         Check(wave["a"].SequenceEqual(new float[] { .5f, .25f, 0, 0 })
             && wave["b"].SequenceEqual(new float[] { .25f, .125f, 0, 0 }), "Waveform lost speaker separation, amplitude or silence.");
+        var envelope = DirectorVoiceWaveform.ReadEnvelope(frames, new HashSet<string> { "a" }, 10, 12, 4)["a"];
+        Check(Math.Abs(envelope.Minimum[0] + .5f) < .0001f && Math.Abs(envelope.Maximum[0] + .5f) < .0001f
+            && Math.Abs(envelope.Minimum[1] - .25f) < .0001f && Math.Abs(envelope.Maximum[1] - .25f) < .0001f
+            && envelope.Minimum[2] == 0 && envelope.Maximum[2] == 0,
+            "Waveform envelope did not preserve signed audio samples and silence.");
+        var visibleEnvelope = DirectorVoiceWaveform.Slice(envelope, 10, 12, 10.5, 11.5);
+        Check(visibleEnvelope.Minimum.SequenceEqual(new[] { .25f, 0f })
+            && visibleEnvelope.Maximum.SequenceEqual(new[] { .25f, 0f }),
+            "Waveform slicing did not map the visible timeline interval to its envelope bins.");
         var clip = DirectorVoiceWaveform.Read(frames, new HashSet<string> { "a" }, 10.5, 11, 1);
         Check(clip["a"][0] == .25f, "Visible-window clipping includes samples before the window.");
+        float reference = DirectorVoiceWaveform.AmplitudeReference([frames[0]], CancellationToken.None);
+        var averages = DirectorVoiceWaveform.ReadAveraged(frames, new HashSet<string> { "a", "b" },
+            10, 12, 2, CancellationToken.None, reference);
+        Check(reference == 16384 && averages["a"].SequenceEqual(new[] { .75f, 0f })
+            && averages["b"].SequenceEqual(new[] { .375f, 0f }),
+            "Display columns must average rectified samples, retain gain and leave silence empty.");
         int reads = 0;
         var paged = new DirectorReplayList<DirectorReplayVoiceFrame>(100000, i =>
         {

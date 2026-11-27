@@ -43,7 +43,7 @@ internal static partial class DirectorImGuiProbe
         return false;
     }
 
-    internal static unsafe void RunBrowserChecks()
+    internal static unsafe void RunBrowserChecks(bool voiceOnly = false, bool aboutOnly = false)
     {
         var assembly = typeof(VSDirectorModSystem).Assembly;
         Type T(string name) => assembly.GetType("VSDirector.Gui." + name, true)!;
@@ -105,6 +105,13 @@ internal static partial class DirectorImGuiProbe
             native.MakeCurrent();
             var rendererType = typeof(ImGuiController_OpenTK.ImGuiController).Assembly.GetType("ImGuiController_OpenTK.ImGuiRenderer", true)!;
             using var renderer = (IDisposable)Activator.CreateInstance(rendererType, ImGui.GetMainViewport(), native)!;
+            if (voiceOnly)
+            {
+                CheckVoiceRecorderWindow(assembly, api, harmony);
+                return;
+            }
+            if (!aboutOnly)
+            {
             foreach (string language in new[] { "zh-cn", "en" })
             foreach (float scale in new[] { 1f, 1.5f, 2f })
             foreach (bool browser in new[] { false, true })
@@ -193,10 +200,11 @@ internal static partial class DirectorImGuiProbe
                 CheckCreationPreferences(creation, session);
             }
 
+            }
             RuntimeEnv.GUIScale = 1; io.DisplaySize = new(960, 640);
             LoadCreationProbeLanguage("zh-cn");
             aboutBrowserTargets = links;
-            foreach (string method in new[] { "DrawAbout", "DrawContributors", "DrawCopyright" })
+            foreach (string method in new[] { "DrawAbout", "DrawContributors", "DrawSponsors", "DrawCopyright" })
                 harmony.Patch(AccessTools.Method(T("DirectorAboutDialog"), method),
                     prefix: new HarmonyMethod(typeof(DirectorImGuiProbe), nameof(CaptureAboutPage)));
             harmony.Patch(AccessTools.Method(T("DirectorAboutDialog"), "CoverTexture"),
@@ -262,13 +270,13 @@ internal static partial class DirectorImGuiProbe
             links.Clear();
             AboutFrame(); AboutFrame();
             // The capture above uses the 960x640 Chinese layout at 100% scale.
-            foreach (var (x, expected) in new[] { (370, "DrawContributors"), (460, "DrawCopyright"), (295, "DrawAbout") })
+            foreach (var (x, expected) in new[] { (370, "DrawContributors"), (450, "DrawSponsors"), (530, "DrawCopyright"), (295, "DrawAbout") })
             {
                 ClickAbout(new Vector2(x, aboutClose.Y)); AboutFrame();
                 if (aboutPage != expected) throw new Exception("About tab failed to select " + expected);
             }
-            if (AboutDocks.Count != 3 || AboutDocks.Values.Contains(0u) || AboutDocks.Values.Distinct().Count() != 1)
-                throw new Exception("The three About windows must share one native dock node");
+            if (AboutDocks.Count != 4 || AboutDocks.Values.Contains(0u) || AboutDocks.Values.Distinct().Count() != 1)
+                throw new Exception("The four About windows must share one native dock node");
             foreach (string label in new[] { "GitHub", "Discord", "Issues", "ModDB" }) ClickAbout(AboutIcons[label]);
             if (!links.SequenceEqual(new[] { "https://github.com/vscn-studio/vs_director",
                 "https://discord.com/channels/302152934249070593/1529965521435361420",
@@ -284,7 +292,7 @@ internal static partial class DirectorImGuiProbe
                 using var reader = new StreamReader(assembly.GetManifestResourceStream("VSDirector.About." + file)!);
                 if (reader.ReadToEnd() != File.ReadAllText(Path.Combine(project, file))) throw new Exception("Stale embedded " + file);
             }
-            ClickAbout(new Vector2(460, aboutClose.Y)); AboutFrame();
+            ClickAbout(new Vector2(530, aboutClose.Y)); AboutFrame();
             if (aboutPage != "DrawCopyright") throw new Exception("Expected the Copyright window before closing");
             ClickAbout(aboutClose); AboutFrame();
             ImGui.NewFrame();
@@ -298,6 +306,7 @@ internal static partial class DirectorImGuiProbe
             ClickAbout(aboutClose); AboutFrame();
             ((IDisposable)about).Dispose();
             Console.WriteLine("PASS native About window tabs, shared dock node, close and reopen, responsive video shelves, localized Markdown and eight external links");
+            if (aboutOnly) return;
             CheckPreloadWindow(assembly, api, Capture);
             CheckReplayKeyframeWindow(assembly, api, _ => { });
             CheckHeadTrackingSettings(assembly, api, Capture);

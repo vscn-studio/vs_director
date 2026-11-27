@@ -5,6 +5,7 @@ using VSDirector.Networking;
 using VSDirector.Recording;
 using ImGuiNET;
 using VSImGui.API;
+using System.Numerics;
 
 namespace VSDirector.Gui;
 
@@ -17,6 +18,7 @@ internal sealed partial class DirectorSettingsDialog : DirectorImGuiDialog
     private string status = string.Empty;
     private bool ffmpegTestRunning;
     private bool disposed;
+    private bool openPopup;
     private string[] outlineEntityValues = [];
     private string[] outlineEntityNames = [];
     private DirectorPermissionMemberDto? permissionMember;
@@ -41,6 +43,48 @@ internal sealed partial class DirectorSettingsDialog : DirectorImGuiDialog
         NormalizePage();
         Open();
     }
+
+    protected override bool OnOpen()
+    {
+        openPopup = true;
+        return true;
+    }
+
+    protected override CallbackGUIStatus Draw(float deltaSeconds)
+    {
+        const string popupId = "###vsdirector-settings-modal";
+        if (!Opened && !ImGui.IsPopupOpen(popupId)) return DrawStatus();
+
+        using var font = DirectorImGuiRuntime.UseFont();
+        if (Opened && openPopup)
+        {
+            ImGui.OpenPopup(popupId);
+            openPopup = false;
+        }
+
+        PrepareWindow();
+        ImGui.PushStyleColor(ImGuiCol.ModalWindowDimBg, new Vector4(0.94f, 0.95f, 0.97f, 0.82f));
+        bool opened = Opened;
+        bool visible = ImGui.BeginPopupModal(WindowTitle + popupId, ref opened, Flags);
+        try
+        {
+            if (visible)
+            {
+                opened = opened && OnDraw();
+                if (!Opened) opened = false;
+                if (!opened) ImGui.CloseCurrentPopup();
+            }
+        }
+        finally
+        {
+            if (visible) ImGui.EndPopup();
+            ImGui.PopStyleColor();
+        }
+
+        if (!opened && Opened) Close();
+        return DrawStatus();
+    }
+
     public bool IsOpened() => Opened;
     public bool TryClose() { Close(); return true; }
 

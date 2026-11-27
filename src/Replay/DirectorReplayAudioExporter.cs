@@ -241,12 +241,17 @@ internal static class DirectorReplayAudioExporter
             }
         }
 
+        IReadOnlyList<DirectorReplayVoiceFrame> voiceFrames = (document.Pages?.OpenVoiceView() ?? document.VoiceFrames)
+            .Concat(DirectorReplayAudioFileFrames.Create(document.ViewportTimeline))
+            .OrderBy(frame => frame.TimeSeconds)
+            .ThenBy(frame => frame.SourceId, StringComparer.Ordinal)
+            .ToArray();
         return new DirectorReplayAudioExportPlan(
             events,
             assets,
             missingAssets,
             audio,
-            document.Pages?.OpenVoiceView() ?? document.VoiceFrames ?? new List<DirectorReplayVoiceFrame>(),
+            voiceFrames,
             document.ViewportTimeline.DeepClone());
     }
 

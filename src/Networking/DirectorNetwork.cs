@@ -230,6 +230,10 @@ public sealed class DirectorChunkPreloadRequest
 
     [ProtoMember(8)]
     public List<DirectorChunkPreloadColumn> RemovedColumns = new();
+
+    // Columns in this batch that need retention only. Older peers ignore this hint.
+    [ProtoMember(9)]
+    public List<DirectorChunkPreloadColumn> ResidentColumns = new();
 }
 
 [ProtoContract]

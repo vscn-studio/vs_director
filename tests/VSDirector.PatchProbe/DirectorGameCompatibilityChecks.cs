@@ -6,6 +6,7 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using VSDirector;
+using VSDirector.Data;
 
 internal static class DirectorGameCompatibilityChecks
 {
@@ -24,7 +25,7 @@ internal static class DirectorGameCompatibilityChecks
         return manager;
     }
 
-    internal static void Run()
+    internal static void Run(string? storageFixture = null)
     {
         var tree = new TreeAttribute();
         tree.SetString("name", "回放"); tree.SetLong("entity", 9876543210);
@@ -59,6 +60,29 @@ internal static class DirectorGameCompatibilityChecks
         AccessTools.Method(Adapter, "EntityState").Invoke(null, [entityCopy, entityStream.ToArray(), true]);
         Check(entityCopy.EntityId == 123 && entityCopy.WatchedAttributes.GetString("probe") == "kept"
             && entityCopy.Pos.X == -32, "Native entity state did not round trip");
+        if (storageFixture is not null)
+        {
+            if (!File.Exists(storageFixture))
+            {
+                var recording = new DirectorReplayDocument { RecordedGameVersion = Vintagestory.API.Config.GameVersion.LongGameVersion,
+                    NativePayloadVersion = DirectorReplayDocument.CurrentNativePayloadVersion };
+                var actor = new DirectorReplayActorTrack { ActorKey = "probe", InitialState = entityStream.ToArray() };
+                actor.Samples.Add(new() { X = -32, RightHandItem = stack.ToBytes() });
+                actor.Samples.Add(new() { TimeSeconds = 5, X = 64, RightHandItem = stack.ToBytes() });
+                recording.Actors.Add(actor);
+                recording.WorldSnapshot.BlockEntities.Add(new() { ClassName = "probe", Data = tree.ToBytes() });
+                DirectorReplayIO.Save(storageFixture, recording);
+            }
+            var opened = DirectorReplayIO.LoadPagedAsync(storageFixture).GetAwaiter().GetResult();
+            var recordedActor = opened.Actors.Single();
+            var native = new TestEntity();
+            AccessTools.Method(Adapter, "EntityState").Invoke(null, [native, recordedActor.InitialState, true]);
+            var recordedStack = (ItemStack)AccessTools.Method(Adapter, "Item").Invoke(null, [recordedActor.Samples[1].RightHandItem, world])!;
+            Check(native.WatchedAttributes.GetString("probe") == "kept" && recordedStack.Attributes.GetString("quality") == "preserved"
+                && recordedActor.Samples[0].X == -32 && ReadTree(opened.WorldSnapshot.BlockEntities[0].Data).GetString("name") == "回放",
+                "Reading a native payload from the indexed recording failed");
+            Console.WriteLine($"PASS indexed fixture {opened.RecordedGameVersion} on {Vintagestory.API.Config.GameVersion.LongGameVersion}");
+        }
 
         var entitiesType = typeof(IWorldChunk).GetProperty("BlockEntities")!.PropertyType;
         var entities = (IDictionary)Activator.CreateInstance(entitiesType)!;

@@ -46,6 +46,7 @@ internal sealed partial class DirectorImGuiWorkspace
             ImGui.PopStyleVar(2);
             try {if(overlay)AppearanceOverlay?.Invoke();}
             finally {ImGui.End();}
+            NotificationOverlay?.Invoke();
             return CallbackGUIStatus.DontGrabMouse;
         }
         if (VSDirector.Runtime.DirectorCreationRuntime.Current is { ControllingActor: true } recording)
@@ -58,6 +59,7 @@ internal sealed partial class DirectorImGuiWorkspace
             ImGui.TextUnformatted(recording.Status);
             ImGui.TextUnformatted(DirectorCreationText.L("creation-recording-escape"));
             ImGui.End();
+            NotificationOverlay?.Invoke();
             return CallbackGUIStatus.DontGrabMouse;
         }
         ImGui.SetNextWindowPos(Vector2.Zero); ImGui.SetNextWindowSize(frame);
@@ -140,6 +142,7 @@ internal sealed partial class DirectorImGuiWorkspace
                 SetWindowHitTestHole(GetCurrentWindow(), previewPosition, previewSize);
             }
             foreach (var panel in creationPanels.ToArray()) panel();
+            NotificationOverlay?.Invoke();
         }
         finally { ImGui.End(); }
         return DrawStatus();

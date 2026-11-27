@@ -35,7 +35,24 @@ internal static class DirectorImGuiRuntime
         initialization = new Harmony("vscn.vsdirector.imgui-initialization");
         InstallFontPatches(initialization);
         InstallBackendPatches(initialization);
+        if (api.ModLoader.IsModEnabled("komet")) InstallKometShaderPatch(initialization);
     }
+
+    internal static void InstallKometShaderPatch(Harmony harmony)
+    {
+        var shader = typeof(ImGuiController_OpenTK.ImGuiController).Assembly.GetType("ImGuiController_OpenTK.ImGuiShader", true);
+        harmony.Patch(AccessTools.Method(shader, "CreateProgram"),
+            transpiler: new HarmonyMethod(typeof(DirectorImGuiRuntime), nameof(KeepShaderSources)));
+    }
+
+    private static IEnumerable<CodeInstruction> KeepShaderSources(IEnumerable<CodeInstruction> instructions)
+        => instructions.MethodReplacer(
+            AccessTools.Method(typeof(OpenTK.Graphics.OpenGL4.GL), "DetachShader", [typeof(int), typeof(int)]),
+            AccessTools.Method(typeof(DirectorImGuiRuntime), nameof(KeepShaderAttached)));
+
+    // Komet reads both attached stages on the first Vulkan draw. VSImGui's
+    // DeleteShader still flags them for release when it deletes the program.
+    private static void KeepShaderAttached(int program, int shader) { }
 
     internal static void InstallFontPatches(Harmony harmony)
     {

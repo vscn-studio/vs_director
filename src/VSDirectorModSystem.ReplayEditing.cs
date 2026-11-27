@@ -18,7 +18,8 @@ public sealed partial class VSDirectorModSystem
         replayEditHistory.Select(ActiveReplayId);
         return ActiveReplayDocument is { } document
             ? new(DirectorReplayTimelineEditIO.Create(document),
-                (replayElementReturnPose ?? replayShootingBasePose ?? controller?.CurrentPose)?.DeepClone()) : null;
+                ((replayElementCleanPoseReplayId == replay?.ActiveReplayId ? replayElementCleanPose : null)
+                    ?? replayElementReturnPose ?? replayShootingBasePose ?? controller?.CurrentPose)?.DeepClone()) : null;
     }
 
     internal bool CanUndoReplayEdit { get { replayEditHistory.Select(ActiveReplayId); return !IsReplayExporting && replayEditHistory.CanUndo; } }
@@ -26,13 +27,29 @@ public sealed partial class VSDirectorModSystem
 
     private void ResetEditedReplayCamera()
     {
+        // Capture the pose before clearing the element runtime.  A preset can
+        // own the complete camera without using an explicit FOV track (the
+        // nature documentary style is one example).  Releasing only the FOV
+        // flag in that case leaves the last tracked pose active after the
+        // group is deleted, so the next frame treats that already-modified
+        // pose as its clean baseline.
         var restore = replayElementReturnPose?.DeepClone();
+        var fovRestore = (replayElementReturnPose ?? replayShootingBasePose)?.DeepClone();
+        bool restoreCamera = restore is not null;
+        bool restoreFov = replayElementFovWasApplied;
         ResetReplayElementRuntime();
-        if (restore is not null && replayViewportCameraAuthority == DirectorReplayCameraAuthority.Timeline && controller is not null)
+        if (controller is null) return;
+
+        if (restoreCamera)
         {
-            // Restore before readiness checks: a deleted preset camera must not
-            // keep playback waiting for chunks at its previous position.
-            RestoreReplayObserverPose(restore);
+            RestoreReplayObserverPose(restore!);
+        }
+        else if (restoreFov && fovRestore is not null)
+        {
+            // Manual camera editing owns position and orientation, while a
+            // removed timeline FOV effect still must release its projection
+            // override.
+            controller.TrySetReplayFov(fovRestore.Fov, out _);
         }
     }
 

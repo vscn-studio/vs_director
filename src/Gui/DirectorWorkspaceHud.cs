@@ -90,7 +90,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         "followOrbitAngle", "followOrbitSpeed", "followSmooth", "followDelay", "followFov",
         "frequencyX", "amplitudeX", "frequencyY", "amplitudeY", "timelapseTick",
         "timelapseDuration", "timeOfDay", "speed", "freezeDelay", "blockX", "blockY", "blockZ",
-        "volume", "audioPitch", "targetBlend", "frameSize", "trackSmooth", "effectSeconds", "effectRate",
+        "volume", "audioTrimStart", "audioTrimEnd", "audioPitch", "targetBlend", "frameSize", "trackSmooth", "effectSeconds", "effectRate",
         "gradeSepia", "gradeContrast", "gradeVignette", "gradeBloom", "gradeGlitch", "gradeFade", "titleDuration"
     };
     private const double PreviewBorderThickness = 0d;
@@ -452,7 +452,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         previewReplayTime = owner.ReplayTimeSeconds;
         SynchronizeReplaySelectionWithActivePlayback(force: true);
         imGuiWorkspace.Add(DrawReplayCameraTools);
+        imGuiWorkspace.Add(DrawVoiceRecorderWindow);
         imGuiWorkspace.PanelsDrawn += DrawReplayHistoryShortcuts;
+        imGuiWorkspace.NotificationOverlay = DrawWorkspaceNotification;
         imGuiWorkspace.AddCreation(creationWorkspace.Draw);
         creationWorkspace.LeaveRequested = LeaveCreationWorkspace;
         ComposeAll();
@@ -2243,7 +2245,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         CloseReplayCameraPreview();
         CloseReplayCameraObservation();
         imGuiWorkspace.Remove(DrawReplayCameraTools);
+        imGuiWorkspace.Remove(DrawVoiceRecorderWindow);
         imGuiWorkspace.PanelsDrawn -= DrawReplayHistoryShortcuts;
+        imGuiWorkspace.NotificationOverlay = null;
         imGuiWorkspace.RemoveCreation(creationWorkspace.Draw);
         creationWorkspace.Suspend();
         DisposeTimelineMedia();
@@ -2879,19 +2883,6 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             .FirstOrDefault(item => item.Id == replayFloatingTrackId);
         if (track is null)
         {
-            return;
-        }
-        if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio)
-        {
-            composer.AddDirectorSingleLineText(
-                Ellipsize(track.Name, 40),
-                small,
-                ElementBounds.Fixed(10d, y + 6d, ReplayPropertyPopupWidth - 20d, 22d));
-            y += 34;
-            composer.AddDirectorButton(Lang.Get("vsdirector:replay-element-track-clear"),
-                ClearReplayTrackKeyframes,
-                ElementBounds.Fixed(10d, y, 150d, 30d), EnumButtonStyle.Small,
-                "replayVoiceTrackClear");
             return;
         }
         AddReplayPropertyInput(composer, small, Lang.Get("vsdirector:name"),
@@ -9641,7 +9632,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 out _,
                 out _))
             {
-                capi.ShowChatMessage(Lang.Get("vsdirector:invalid-segment-speed"));
+                ShowWorkspaceNotification(Lang.Get("vsdirector:invalid-segment-speed"));
                 return false;
             }
         }
@@ -10066,14 +10057,14 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             || index < 0
             || index >= pathEdit.Keyframes.Count)
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:path-segment-delete-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:path-segment-delete-invalid"));
             return true;
         }
 
         CameraPath before = pathEdit.DeepClone();
         if (!CameraPathTiming.TryDeleteSegment(pathEdit, index))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:path-segment-delete-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:path-segment-delete-invalid"));
             return true;
         }
 
@@ -10282,14 +10273,14 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
                 out double value)
             || !double.IsFinite(value))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:path-batch-invalid-value"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:path-batch-invalid-value"));
             return true;
         }
 
         List<int> targets = PathBatchTargetIndices();
         if (targets.Count == 0 || !ValidatePathBatchValue(targets, value))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:path-batch-invalid-value"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:path-batch-invalid-value"));
             return true;
         }
 
@@ -10837,7 +10828,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             && duration <= CameraSequenceSampler.MaxShotDurationSeconds;
 
     private void ShowInvalidSequenceDuration()
-        => capi.ShowChatMessage(Lang.Get(
+        => ShowWorkspaceNotification(Lang.Get(
             "vsdirector:invalid-shot-duration",
             CameraSequenceSampler.MinShotDurationSeconds,
             CameraSequenceSampler.MaxShotDurationSeconds));
@@ -11206,7 +11197,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             out double fadeOut,
             out double rate))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:workflow-audio-range-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:workflow-audio-range-invalid"));
             return true;
         }
 
@@ -11344,7 +11335,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     }
 
     private void ShowWorkflowAudioError(string error)
-        => capi.ShowChatMessage(Lang.Get(error == "workflow-audio-path"
+        => ShowWorkspaceNotification(Lang.Get(error == "workflow-audio-path"
             ? "vsdirector:workflow-audio-path-invalid"
             : "vsdirector:workflow-audio-range-invalid"));
 
@@ -11945,7 +11936,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (!double.TryParse(replayMarkerTimeText, NumberStyles.Float,
             CultureInfo.InvariantCulture, out double time))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-marker-invalid-time"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-marker-invalid-time"));
             return true;
         }
         if (owner.TryUpdateReplayMarker(
@@ -11968,7 +11959,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (!double.TryParse(replayBaseSpeedText, NumberStyles.Float,
             CultureInfo.InvariantCulture, out double speed))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-invalid-speed"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-invalid-speed"));
             return true;
         }
         if (owner.TrySetReplaySpeed(speed, out _))
@@ -12012,7 +12003,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             || !double.TryParse(replaySpeedValueText, NumberStyles.Float,
                 CultureInfo.InvariantCulture, out double speed))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-invalid-speed"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-invalid-speed"));
             return true;
         }
         if (owner.TryUpdateReplaySpeedKeyframe(
@@ -14269,6 +14260,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             case DirectorReplayElementTrackType.VoiceAudio:
                 AddReplayElementNumber(composer, small, Lang.Get("vsdirector:replay-element-volume"),
                     "volume", ref y);
+                AddReplayElementNumber(composer, small, Lang.Get("vsdirector:voice-trim-start"),
+                    "audioTrimStart", ref y);
+                AddReplayElementNumber(composer, small, Lang.Get("vsdirector:voice-trim-end"),
+                    "audioTrimEnd", ref y);
                 break;
         }
 
@@ -14657,8 +14652,10 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         Number("blockZ", blockDisplayZ);
         replayElementFieldValues["blockCode"] = keyframe.BlockCode;
         replayElementFieldValues["audioAsset"] = keyframe.AudioAsset;
+        Number("audioTrimStart", keyframe.AudioTrimStartSeconds);
+        Number("audioTrimEnd", keyframe.AudioTrimEndSeconds);
         Number("volume", keyframe.TrackType == DirectorReplayElementTrackType.VoiceAudio
-            ? keyframe.Volume * 100f
+            ? (string.IsNullOrWhiteSpace(keyframe.AudioAsset) ? keyframe.Volume : keyframe.AudioClipGain) * 100f
             : keyframe.Volume);
         Number("audioPitch", keyframe.AudioPitch);
         replayElementFieldValues["trackMode"] = keyframe.TrackMode switch
@@ -14726,7 +14723,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             item.Id == selectedReplayElementKeyframeId);
         if (keyframe is null)
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-element-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-element-invalid"));
             return true;
         }
 
@@ -14734,7 +14731,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         {
             if (!TryReplayElementDouble("time", out double time))
             {
-                capi.ShowChatMessage(Lang.Get("vsdirector:replay-element-invalid"));
+                ShowWorkspaceNotification(Lang.Get("vsdirector:replay-element-invalid"));
                 return true;
             }
             keyframe.TimeSeconds = ReplayTimelineTickAt(time) / ReplayTimelineTicksPerSecond;
@@ -14771,7 +14768,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         };
         if (!valid)
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-element-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-element-invalid"));
             return true;
         }
 
@@ -15129,11 +15126,19 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
     private bool TryApplyReplayVoiceAudioFields(DirectorReplayElementKeyframe keyframe)
     {
         if (!TryReplayElementFloat("volume", out float volumePercent)
-            || volumePercent is < 0f or > 200f)
+            || volumePercent is < 0f or > 200f
+            || !TryReplayElementDouble("audioTrimStart", out double trimStart)
+            || trimStart < 0d
+            || !TryReplayElementDouble("audioTrimEnd", out double trimEnd)
+            || trimEnd < 0d
+            || trimEnd > 0d && trimEnd <= trimStart)
         {
             return false;
         }
-        keyframe.Volume = volumePercent / 100f;
+        if (string.IsNullOrWhiteSpace(keyframe.AudioAsset)) keyframe.Volume = volumePercent / 100f;
+        else keyframe.AudioClipGain = volumePercent / 100f;
+        keyframe.AudioTrimStartSeconds = trimStart;
+        keyframe.AudioTrimEndSeconds = trimEnd;
         keyframe.InterpolationToNext = DirectorReplayElementInterpolation.Hold;
         return true;
     }
@@ -15321,7 +15326,9 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             new ReplayViewportSourceOption("element-sky", Lang.Get("vsdirector:replay-element-sky")),
             new ReplayViewportSourceOption("element-composition", Lang.Get("vsdirector:replay-element-composition")),
             new ReplayViewportSourceOption("element-title",
-                Lang.Get("vsdirector:replay-element-title"))
+                Lang.Get("vsdirector:replay-element-title")),
+            new ReplayViewportSourceOption("element-voice-audio",
+                Lang.Get("vsdirector:replay-element-voice-audio"))
         };
 
     private IReadOnlyList<DirectorReplayElementTrack> ActiveReplayTimelineElementTracks()
@@ -15536,10 +15543,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             CloseReplayFloatingEditor();
             return true;
         }
-        if (track.TrackType != DirectorReplayElementTrackType.VoiceAudio)
-        {
-            track.Name = replayFloatingTrackName.Trim();
-        }
+        track.Name = replayFloatingTrackName.Trim();
         if (CommitReplayViewportTimeline(timeline))
         {
             ComposeTimeline();
@@ -15661,7 +15665,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         DirectorReplayViewportTimeline timeline = owner.ReplayViewportTimeline;
         if (!timeline.RemoveScene(timeline.ActiveSceneId))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-scene-last-delete"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-scene-last-delete"));
             ComposeTimeline();
             return true;
         }
@@ -15753,6 +15757,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             "element-freeze" => DirectorReplayElementTrackType.Freeze,
             "element-color-grade" => DirectorReplayElementTrackType.ColorGrade,
             "element-title" => DirectorReplayElementTrackType.Title,
+            "element-voice-audio" => DirectorReplayElementTrackType.VoiceAudio,
             "element-composition" => DirectorReplayElementTrackType.Composition,
             "element-sky" => DirectorReplayElementTrackType.Sky,
             "element-weather" => DirectorReplayElementTrackType.Weather,
@@ -15761,6 +15766,34 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         DirectorReplayViewportTimeline timeline = owner.ReplayViewportTimeline;
         if (type == DirectorReplayElementTrackType.HeadMotion) return AddReplayHeadMotionGroup(timeline);
         DirectorReplayElementTrack track = new() { TrackType = type };
+        if (type == DirectorReplayElementTrackType.VoiceAudio)
+        {
+            string speakerId = "vsdirector:local-microphone:" + Guid.NewGuid().ToString("N");
+            DirectorReplayElementTrack group = new()
+            {
+                TrackType = DirectorReplayElementTrackType.PresetGroup,
+                Name = Lang.Get("vsdirector:voice-audio-group")
+            };
+            track.SpeakerId = speakerId;
+            track.Name = Lang.Get("vsdirector:voice-audio-track");
+            track.ParentGroupId = group.Id;
+            DirectorReplayElementTrack volumeTrack = new()
+            {
+                TrackType = DirectorReplayElementTrackType.VoiceAudio,
+                SpeakerId = speakerId + ":volume",
+                Name = Lang.Get("vsdirector:voice-volume-track"),
+                ParentGroupId = group.Id
+            };
+            timeline.Tracks.Add(group);
+            timeline.Tracks.Add(track);
+            timeline.Tracks.Add(volumeTrack);
+            expandedReplayPresetGroups.Add(group.Id);
+            if (!CommitReplayViewportTimeline(timeline)) return true;
+            AddReplayElementKeyframeAtHead(volumeTrack);
+            AddReplayElementKeyframeAtHead(track);
+            OpenVoiceRecorder();
+            return true;
+        }
         timeline.Tracks.Add(track);
         if (!CommitReplayViewportTimeline(timeline))
         {
@@ -15775,6 +15808,12 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             return AddFollowEntitySegment(track);
         }
         if (type == DirectorReplayElementTrackType.HeadMotion) return AddReplayElementKeyframeAtHead(track);
+        if (type == DirectorReplayElementTrackType.VoiceAudio)
+        {
+            AddReplayElementKeyframeAtHead(track);
+            OpenVoiceRecorder();
+            return true;
+        }
         return SelectReplayTimelineElementTrack(track.Id);
     }
 
@@ -15789,6 +15828,12 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
         if (track.TrackType == DirectorReplayElementTrackType.PresetGroup) return ToggleReplayPresetGroup(track.Id);
         selectedReplayElementTrackId = track.Id;
         selectedReplayTimelineElementTrack = ReplayTimelineElementKindFor(track.TrackType);
+        if (track.TrackType == DirectorReplayElementTrackType.VoiceAudio)
+        {
+            bool added = AddReplayElementKeyframeAtHead(track);
+            if (added && !track.SpeakerId.EndsWith(":volume", StringComparison.Ordinal)) OpenVoiceRecorder();
+            return added;
+        }
         return track.TrackType == DirectorReplayElementTrackType.Camera
             ? CaptureReplayViewport()
             : track.TrackType == DirectorReplayElementTrackType.Timelapse
@@ -16262,7 +16307,7 @@ internal sealed partial class DirectorWorkspaceHud : GuiDialog
             || !double.IsFinite(start)
             || !TryParseReplayCameraPose(clip, out CameraPreset pose))
         {
-            capi.ShowChatMessage(Lang.Get("vsdirector:replay-viewport-invalid"));
+            ShowWorkspaceNotification(Lang.Get("vsdirector:replay-viewport-invalid"));
             return true;
         }
 

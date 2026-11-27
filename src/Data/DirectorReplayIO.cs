@@ -30,6 +30,19 @@ public static class DirectorReplayIO
         => Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (DirectorReplayPages.IsPrimary(path))
+            {
+                var indexed = DirectorReplayPages.TryOpen(path)!;
+                if (indexed.ServerReplay is { Available: true, Materialized: false })
+                {
+                    indexed = DirectorReplayMath.Normalize(indexed, cancellationToken);
+                    if (!DirectorServerReplayCompanion.TryMergeAdjacent(indexed, path, cancellationToken))
+                        throw new FileNotFoundException("This replay requires its matching server companion.");
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Report(1);
+                return indexed;
+            }
             DirectorReplayDocument? cached = null;
             try { cached = DirectorReplayPages.TryOpen(path); }
             catch (Exception e) when (e is InvalidDataException or JsonException or EndOfStreamException or IOException or UnauthorizedAccessException) { /* Rebuild a damaged or inaccessible optional cache from the native file. */ }
@@ -66,6 +79,8 @@ public static class DirectorReplayIO
     public static DirectorReplayDocument Load(string path, CancellationToken cancellationToken)
     {
         string fullPath = ValidatePath(path);
+        if (DirectorReplayPages.IsPrimary(fullPath))
+            return DirectorReplayMath.Normalize(DirectorReplayPages.TryOpen(fullPath), cancellationToken);
         using FileStream file = new(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         using GZipStream gzip = new(file, CompressionMode.Decompress, leaveOpen: false);
         using var cancellable = new DirectorCancellationStream(gzip, cancellationToken);
@@ -81,6 +96,12 @@ public static class DirectorReplayIO
         CancellationToken cancellationToken = default)
     {
         string fullPath = ValidatePath(path);
+        if (DirectorReplayPages.IsPrimary(fullPath))
+        {
+            var result = await Task.Run(() => Load(fullPath, cancellationToken), cancellationToken).ConfigureAwait(false);
+            progress?.Report(1);
+            return result;
+        }
         await using FileStream file = new(
             fullPath,
             FileMode.Open,
@@ -125,6 +146,11 @@ public static class DirectorReplayIO
             $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         DirectorReplayDocument snapshot = normalize ? DirectorReplayMath.Normalize(document, cancellationToken) : document;
+        if (DirectorReplayPages.IsPrimary(fullPath))
+        {
+            DirectorReplayPages.Write(fullPath, snapshot, token: cancellationToken, compression: ResolveCompressionLevel(compression));
+            return;
+        }
 
         try
         {

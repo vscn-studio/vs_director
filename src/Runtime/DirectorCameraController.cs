@@ -443,6 +443,7 @@ internal sealed class DirectorCameraController : IDisposable
     }
 
     internal void ResetReplayPreviewFollowState() => replayFollowPreviewState = null;
+    internal System.Func<CameraPreset, bool>? CanPresentReplayFollowPose { get; set; }
 
     /// <summary>Evaluates replay follow with history for smooth and delayed modes.</summary>
     public bool TrySetReplayFollowPose(CameraFollowRig rig, Entity target, double timeSeconds, out string error)
@@ -489,6 +490,8 @@ internal sealed class DirectorCameraController : IDisposable
             };
         }
 
+        if (applyToMainCamera && CanPresentReplayFollowPose?.Invoke(output.ToPreset(rig.Id, rig.Name)) == false)
+            return false;
         if (applyToMainCamera && !TryActivatePose(output.ToPreset(rig.Id, rig.Name), out error))
         {
             return false;

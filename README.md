@@ -31,6 +31,12 @@ VS Director 可以仅安装在客户端。个人摄影机、摄影机路径、�
 
 安装包为通用包，并声明 `requiredOnServer: false`。安装了 VS Director 的服务端会要求连接的客户端也安装本模组。服务端安装仍保留声明的 VSImGui 依赖。
 
+### 回放文件
+
+从 1.0.4-pre.7 开始，新录制保存为单个带时间索引的 `.vsdreplay` 文件。每个演员段保存一个完整起始姿态和后续字段变化。跳转时可直接读取目标段。区块基线、方块事件和音频也可按需读取。旧的 `.vsdreplay.gz` 仍可打开，已有时间轴编辑继续关联原文件。
+
+新录制记录游戏版本和原生数据布局版本。演员的坐标、姿态和动画使用 Director 的数据格式。物品、实体和方块实体仍包含游戏或其他模组写入的数据，跨版本播放取决于对应的数据读取器和世界资源。
+
 ## 功能
 
 - **摄影机构图：** 保存摄影机位置、自由摄影机，以及跟随玩家或实体的摄影机；支持个人摄影机库和可选的远程区块加载。
@@ -104,6 +110,7 @@ dotnet build VSDirector.csproj -c Release -p:VintageStoryPath="path/to/1.22.3" -
 ```powershell
 dotnet run --project tests/VSDirector.CoreTests/VSDirector.CoreTests.csproj -c Release
 ```
+
 
 使用两个游戏安装目录运行兼容性检查：
 

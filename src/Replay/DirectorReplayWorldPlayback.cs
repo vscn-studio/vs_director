@@ -18,6 +18,48 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
     private ReplayChunkKey? historyRefreshChunk;
     private int historyRefreshIndex;
     private int[]? historySolid, historyFluid;
+    private IReadOnlySet<DirectorReplayPreloadColumn>? observation;
+    private readonly HashSet<ReplayChunkKey> deferredBaseline = new();
+    private ReplayChunkKey? backgroundRefresh;
+    private bool firstBaseline;
+    private readonly List<int> backgroundIndices = new();
+    private int backgroundComparison;
+    private bool backgroundCompared;
+    private readonly Dictionary<ReplayChunkKey, BlockKey[]> recordedChangesByChunk;
+
+    internal void SetObservationColumns(IReadOnlySet<DirectorReplayPreloadColumn> columns) => observation = columns;
+
+    private bool InObservation(ReplayChunkKey key) => observation is null
+        || observation.Contains(new(key.X, key.Z, document.WorldSnapshot.Dimension));
+
+    internal bool HasPendingColumn(DirectorReplayPreloadColumn column)
+        => column.Dimension == document.WorldSnapshot.Dimension
+            && (deferredBaseline.Any(c => c.X == column.X && c.Z == column.Z)
+                || historyRefreshSet.Any(c => c.X == column.X && c.Z == column.Z)
+                || pendingChunkRedrawSet.Any(c => c.ChunkX == column.X && c.ChunkZ == column.Z));
+
+    private bool Loaded(ReplayChunkKey key) => game.WorldMap.GetChunk(key.X,
+        key.Y + document.WorldSnapshot.Dimension * GlobalConstants.DimensionSizeInChunks, key.Z) is ClientChunk
+        { LoadedFromServer: true, MapChunk: not null };
+
+    private void ScheduleDeferredBaseline()
+    {
+        if (deferredBaseline.Count == 0 || phase != ApplyPhase.None || backgroundRefresh.HasValue) return;
+        ReplayChunkKey? next = null;
+        foreach (var c in deferredBaseline)
+        {
+            if (InObservation(c)) { next = c; break; }
+            next ??= c;
+        }
+        if (next is not { } key || (HasPendingChunkRefresh && !InObservation(key))) return;
+        deferredBaseline.Remove(key);
+        if (!Loaded(key)) return; // The normal chunk arrival hook restores it on delivery.
+        backgroundRefresh = key;
+        backgroundCompared = false;
+        backgroundComparison = 0;
+        backgroundIndices.Clear();
+        if (historyRefreshSet.Add(key)) historyRefreshQueue.Enqueue(key);
+    }
     public void ObserveServerRecordingChunkLoad(int x, int internalY, int z)
     {
         if (!started) return;
@@ -27,6 +69,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             ? !document.HasHistoricalBaselines || chunk.CapturedAtSeconds <= requestedTime
             : sparsePositions.ContainsKey(key))
         {
+            deferredBaseline.Remove(key);
+            if (backgroundRefresh == key) backgroundRefresh = null;
             if (historyRefreshChunk == key) historyRefreshIndex = 0;
             else if (historyRefreshSet.Add(key)) historyRefreshQueue.Enqueue(key);
         }
@@ -157,6 +201,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             .GroupBy(k => new ReplayChunkKey(k.X >> 5, k.Y >> 5, k.Z >> 5))
             .ToDictionary(g => g.Key, g => g.ToArray());
         if (!document.HasHistoricalBaselines) RepairLegacyPlacements();
+        recordedChangesByChunk = blockEventsByPosition.Keys.Where(k => k.Dimension == document.WorldSnapshot.Dimension)
+            .GroupBy(k => new ReplayChunkKey(k.X >> 5, k.Y >> 5, k.Z >> 5)).ToDictionary(g => g.Key, g => g.ToArray());
     }
 
     private void RepairLegacyPlacements()
@@ -218,9 +264,11 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
     // Incoming live chunks replace replay terrain even while paused. Their
     // restoration must keep the manager advancing until the queue is drained.
     public bool IsBusy
-        => phase != ApplyPhase.None || HasPendingChunkRefresh || pendingChunkRedraws.Count > 0;
+        => phase != ApplyPhase.None || HasPendingChunkRefresh || deferredBaseline.Count > 0 || pendingChunkRedraws.Count > 0;
 
-    public bool IsSynchronizing => synchronizing || HasPendingChunkRefresh;
+    public bool IsSynchronizing => synchronizing
+        || (HasPendingChunkRefresh && (observation is null || historyRefreshSet.Any(InObservation)))
+        || (observation is not null && deferredBaseline.Any(InObservation));
 
     internal bool IsReplayBlockEntity(BlockEntity blockEntity)
         => started
@@ -273,6 +321,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         try
         {
             BeginBaseline(0d);
+            firstBaseline = true;
         }
         finally
         {
@@ -338,7 +387,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         {
             // Read incoming live blocks before baseline/event work can overwrite
             // them; those values must survive in originalBlocks for replay exit.
-            if (HasPendingChunkRefresh)
+            ScheduleDeferredBaseline();
+            if (HasPendingChunkRefresh && (IsSynchronizing || phase == ApplyPhase.None))
             {
                 AdvanceHistoryRefresh(remaining, stopwatch);
                 return;
@@ -370,6 +420,9 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
     private void BeginBaseline(double targetTime)
     {
         indexedSeek?.Dispose(); indexedSeek = null; nextIndexedChange = null;
+        deferredBaseline.Clear();
+        firstBaseline = false;
+        backgroundRefresh = null;
         historyRefreshQueue.Clear(); historyRefreshSet.Clear(); historyRefreshChunk = null; historySolid = historyFluid = null;
         requestedTime = Math.Clamp(targetTime, 0d, document.DurationSeconds);
         baselineTime = requestedTime;
@@ -438,6 +491,17 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             && baselineChunkIndex < document.WorldSnapshot.Chunks.Count)
         {
             DirectorReplayChunkSnapshot chunk = document.WorldSnapshot.Chunks[baselineChunkIndex];
+            var chunkKey = new ReplayChunkKey(chunk.ChunkX, chunk.ChunkY, chunk.ChunkZ);
+            // Before the first frame these columns still contain live terrain. Restore them
+            // from the recorded baseline and position history as the camera approaches.
+            if (firstBaseline && observation is not null && !InObservation(chunkKey)
+                && !baselineChunkPrepared && chunk.CapturedAtSeconds == 0)
+            {
+                deferredBaseline.Add(chunkKey);
+                baselineProcessedBlocks += ChunkBlockCount;
+                CompleteBaselineChunk();
+                continue;
+            }
             if (document.HasHistoricalBaselines && chunk.CapturedAtSeconds > baselineTime)
             {
                 // Preserve the live background where this clip has no historical baseline yet.
@@ -642,6 +706,7 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         {
             DirectorReplayBlockEntitySnapshot snapshot =
                 document.WorldSnapshot.BlockEntities[baselineBlockEntityIndex++];
+            if (deferredBaseline.Contains(new(snapshot.X >> 5, snapshot.Y >> 5, snapshot.Z >> 5))) continue;
             if (IsFutureChunk(new(snapshot.X, snapshot.Y, snapshot.Z, snapshot.Dimension), baselineTime))
             {
                 budget -= BlockEntityScanCost;
@@ -667,6 +732,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
         {
             DirectorReplayChunkSnapshot chunkSnapshot =
                 document.WorldSnapshot.Chunks[baselineExtraChunkIndex];
+            if (deferredBaseline.Contains(new(chunkSnapshot.ChunkX, chunkSnapshot.ChunkY, chunkSnapshot.ChunkZ)))
+            { baselineExtraChunkIndex++; continue; }
             if (document.HasHistoricalBaselines && chunkSnapshot.CapturedAtSeconds > baselineTime)
             { baselineExtraChunkIndex++; continue; }
             int internalChunkY = chunkSnapshot.ChunkY
@@ -837,6 +904,8 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             else nextBlockEvent++;
             budget--;
             appliedTime = Math.Max(appliedTime, change.TimeSeconds);
+            if (change.Dimension == document.WorldSnapshot.Dimension &&
+                deferredBaseline.Contains(new(change.X >> 5, change.Y >> 5, change.Z >> 5))) continue;
             if (bulk is null)
             {
                 bulk = capi.World.GetBlockAccessorBulkUpdate(synchronize: false, relight: true);
@@ -1096,6 +1165,9 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
             {
                 if (historyRefreshChunk is null)
                 {
+                    int queued = historyRefreshQueue.Count;
+                    while (queued-- > 0 && !InObservation(historyRefreshQueue.Peek()))
+                        historyRefreshQueue.Enqueue(historyRefreshQueue.Dequeue());
                     if (!historyRefreshQueue.TryDequeue(out var next)) break;
                     historyRefreshChunk = next; historyRefreshIndex = 0;
                     if (baselineChunks.TryGetValue(next, out var baseline))
@@ -1105,7 +1177,38 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                         historyFluid = DirectorReplayChunkCodec.Decode(captured ? baseline.FluidRuns : null, ChunkBlockCount);
                     }
                 }
-                var chunk = historyRefreshChunk.Value; int index = historyRefreshIndex++;
+                var chunk = historyRefreshChunk.Value;
+                bool synthetic = backgroundRefresh == chunk;
+                if (synthetic && !backgroundCompared)
+                {
+                    var result = AdvanceChangedBlockComparison(baselineChunks[chunk], historySolid!, historyFluid!,
+                        backgroundIndices, ref backgroundComparison, ref budget, timer);
+                    if (result == ChunkComparisonResult.Pending) break;
+                    if (result == ChunkComparisonResult.Unavailable)
+                    {
+                        // A later packet enqueues a fresh restoration if this column was unloaded.
+                        if (Loaded(chunk)) backgroundIndices.AddRange(Enumerable.Range(0, ChunkBlockCount));
+                    }
+                    if (Loaded(chunk))
+                    {
+                        static int Local(int x, int y, int z) => (y & 31) * 1024 + (z & 31) * 32 + (x & 31);
+                        if (recordedChangesByChunk.TryGetValue(chunk, out var changedPositions))
+                            backgroundIndices.AddRange(changedPositions.Select(k => Local(k.X, k.Y, k.Z)));
+                        if (entitiesByChunk.TryGetValue(chunk, out var entities))
+                            backgroundIndices.AddRange(entities.Select(e => Local(e.X, e.Y, e.Z)));
+                        var live = game.WorldMap.GetChunk(chunk.X, chunk.Y + document.WorldSnapshot.Dimension * GlobalConstants.DimensionSizeInChunks, chunk.Z);
+                        backgroundIndices.AddRange(DirectorGameCompatibility.BlockEntities(live).Select(e => Local(e.Pos.X, e.Pos.Y, e.Pos.Z)));
+                    }
+                    backgroundCompared = true;
+                    if (backgroundIndices.Count == 0 || !Loaded(chunk))
+                    {
+                        historyRefreshSet.Remove(chunk);
+                        historyRefreshChunk = backgroundRefresh = null;
+                        historySolid = historyFluid = null;
+                        continue;
+                    }
+                }
+                int index = synthetic ? backgroundIndices[historyRefreshIndex++] : historyRefreshIndex++;
                 var sparse = historySolid is null ? sparsePositions[chunk] : null;
                 var key = sparse is null
                     ? new BlockKey(chunk.X * 32 + index % 32, chunk.Y * 32 + index / 1024, chunk.Z * 32 + index / 32 % 32, document.WorldSnapshot.Dimension)
@@ -1113,9 +1216,10 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                 var position = key.ToBlockPos();
                 int solid = historySolid?[index] ?? 0, fluid = historyFluid?[index] ?? 0;
                 bool known = sparse is null;
-                if (historyRefreshIndex >= (sparse?.Length ?? ChunkBlockCount))
+                if (historyRefreshIndex >= (synthetic ? backgroundIndices.Count : sparse?.Length ?? ChunkBlockCount))
                 {
                     historyRefreshSet.Remove(chunk); historyRefreshChunk = null; historySolid = historyFluid = null;
+                    if (synthetic) backgroundRefresh = null;
                 }
                 budget--;
                 if (blockEventsByPosition.TryGetValue(key, out var changes))
@@ -1131,10 +1235,11 @@ internal sealed class DirectorReplayWorldPlayback : IDisposable
                 if (!known) continue;
                 int liveSolid = capi.World.BlockAccessor.GetBlock(position, BlockLayersAccess.Solid).Id;
                 int liveFluid = capi.World.BlockAccessor.GetBlock(position, BlockLayersAccess.Fluid).Id;
-                if (liveSolid != solid || liveFluid != fluid || originalBlocks.ContainsKey(key)) originalBlocks[key] = new(liveSolid, liveFluid);
+                if (!synthetic && (liveSolid != solid || liveFluid != fluid || originalBlocks.ContainsKey(key)))
+                    originalBlocks[key] = new(liveSolid, liveFluid);
                 TryGetReplayBlockEntity(position, requestedTime, out var entity);
                 bool restoreEntity = entity is not null || capi.World.BlockAccessor.GetBlockEntity(position) is not null;
-                if (restoreEntity || touchedBlockEntities.Contains(key)) PreserveLatestRealityBlockEntity(position, key);
+                if (!synthetic && (restoreEntity || touchedBlockEntities.Contains(key))) PreserveLatestRealityBlockEntity(position, key);
                 staged += StageBlockPair(bulk, position, solid, fluid);
                 if (restoreEntity)
                 {

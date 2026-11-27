@@ -20,6 +20,16 @@ using VSDirector.Networking;
 using ProtoBuf;
 
 const string harmonyId = "vscn.vsdirector.patch-probe";
+if (args.Contains("--imgui-komet"))
+{
+    DirectorImGuiProbe.CheckKometShader();
+    return 0;
+}
+if (args is ["--replay-storage", var storageFixture])
+{
+    DirectorGameCompatibilityChecks.Run(storageFixture);
+    return 0;
+}
 if (args.Contains("--replay-audio-updates"))
 {
     DirectorReplayAudioUpdateChecks.Run();
@@ -60,6 +70,16 @@ if (args.Contains("--preload"))
 {
     DirectorOptionalServerChecks.Run();
     DirectorPreloadChecks.Run(args.ElementAtOrDefault(Array.IndexOf(args, "--preload") + 1));
+    return 0;
+}
+if (args.Contains("--imgui-voice"))
+{
+    DirectorImGuiProbe.RunBrowserChecks(voiceOnly: true);
+    return 0;
+}
+if (args.Contains("--imgui-about"))
+{
+    DirectorImGuiProbe.RunBrowserChecks(aboutOnly: true);
     return 0;
 }
 if (args.Contains("--imgui-browsers"))
